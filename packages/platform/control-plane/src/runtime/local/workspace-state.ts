@@ -32,6 +32,10 @@ const LocalWorkspacePolicyStateSchema = Schema.Struct({
   updatedAt: TimestampMsSchema,
 });
 
+const LocalWorkspaceCatalogStateSchema = Schema.Struct({
+  semanticSearchSignature: Schema.NullOr(Schema.String),
+});
+
 export const LocalWorkspaceStateSchema = Schema.Struct({
   version: Schema.Literal(1),
   sources: Schema.Record({
@@ -42,6 +46,7 @@ export const LocalWorkspaceStateSchema = Schema.Struct({
     key: Schema.String,
     value: LocalWorkspacePolicyStateSchema,
   }),
+  catalog: Schema.optional(LocalWorkspaceCatalogStateSchema),
 });
 
 export type LocalWorkspaceSourceState = typeof LocalWorkspaceSourceStateSchema.Type;
@@ -62,6 +67,9 @@ const defaultLocalWorkspaceState = (): LocalWorkspaceState => ({
   version: 1,
   sources: {},
   policies: {},
+  catalog: {
+    semanticSearchSignature: null,
+  },
 });
 
 export const localWorkspaceStatePath = (

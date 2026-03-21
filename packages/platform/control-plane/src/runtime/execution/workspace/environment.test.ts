@@ -27,11 +27,12 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
   });
 
   it("reuses the same embedder for repeated identical configs", async () => {
+    const embed = vi.fn(async () => [1, 2, 3]);
     const embedder = {
       provider: "local",
       model: "test-model",
       dimensions: 384,
-      embed: async () => [1, 2, 3],
+      embed,
       embedBatch: async () => [[1, 2, 3]],
     };
     createEmbedderMock.mockResolvedValue(embedder);
@@ -54,6 +55,8 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     expect(first).toBe(embedder);
     expect(second).toBe(embedder);
     expect(createEmbedderMock).toHaveBeenCalledTimes(1);
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(embed).toHaveBeenCalledWith("__executor_dimension_probe__", "document");
   });
 
   it("creates a new embedder when the semantic search config changes", async () => {

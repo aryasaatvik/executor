@@ -79,7 +79,19 @@ const getCachedSemanticSearchEmbedder = (
     return existing
   }
 
-  const pending = createEmbedder(config).then((embedder) => embedder ?? undefined)
+  const pending = createEmbedder(config).then(async (embedder) => {
+    if (!embedder) {
+      return undefined
+    }
+
+    // Prime local embedders once so the actual output dimensions are known
+    // before SQLite provisions the vec table shape.
+    if (config.provider === "local" && config.dimensions == null) {
+      await embedder.embed("__executor_dimension_probe__", "document")
+    }
+
+    return embedder
+  })
   semanticSearchEmbedderCache.set(cacheKey, pending)
   return pending.catch((error) => {
     semanticSearchEmbedderCache.delete(cacheKey)

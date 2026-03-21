@@ -56,7 +56,7 @@ export const toToolToIndex = (
   toolId: tool.path,
   path: tool.path,
   sourceId: tool.source.id,
-  sourceKey: tool.source.namespace ?? tool.source.id,
+  sourceKey: tool.descriptor.sourceKey,
   namespace: tool.searchNamespace,
   title: tool.capability.surface.title ?? undefined,
   description:
@@ -70,6 +70,17 @@ export const toToolToIndex = (
   interaction: tool.descriptor.interaction ?? "auto",
   providerKind: tool.descriptor.providerKind ?? undefined,
 });
+
+const semanticSearchSignature = (
+  embedder?: Embedder,
+): string | null =>
+  embedder
+    ? JSON.stringify({
+      provider: embedder.provider,
+      model: embedder.model,
+      dimensions: embedder.dimensions,
+    })
+    : null;
 
 // ---------------------------------------------------------------------------
 // Existing helper: load tools from JSON artifacts (kept for indexing + invocation)
@@ -162,6 +173,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
   }).pipe(
     Effect.flatMap((tools) => {
       const activeSourceIds = new Set<string>();
+      const nextSemanticSearchSignature = semanticSearchSignature(input.embedder);
 
       // Group tools by source for indexing
       const toolsBySource = new Map<string, {
@@ -176,7 +188,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
         if (!toolsBySource.has(sourceId)) {
           toolsBySource.set(sourceId, {
             sourceId,
-            sourceKey: tool.source.namespace ?? tool.source.id,
+            sourceKey: tool.descriptor.sourceKey,
             tools: [],
           });
         }
@@ -185,6 +197,13 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
 
       return Effect.gen(function* () {
         const db = yield* SqliteDrizzle;
+        const workspaceState = yield* input.workspaceStateStore.load(
+          input.runtimeLocalWorkspace.context,
+        );
+        const previousSemanticSearchSignature =
+          workspaceState.catalog?.semanticSearchSignature ?? null;
+        const shouldRebuildEmbeddings =
+          previousSemanticSearchSignature !== nextSemanticSearchSignature;
         const indexedSources = yield* db
           .selectDistinct({
             sourceId: catalog_tool.source_id,
@@ -211,16 +230,33 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
                 tools: group.tools,
               });
 
-              if (input.embedder && result.changedTools.length > 0) {
+              const toolsToEmbed = shouldRebuildEmbeddings
+                ? group.tools
+                : result.changedTools;
+
+              if (input.embedder && toolsToEmbed.length > 0) {
                 yield* embedSourceTools({
                   embedder: input.embedder,
-                  tools: result.changedTools,
+                  tools: toolsToEmbed,
                   sourceKey: group.sourceKey,
                 });
               }
             }),
           { concurrency: 1 },
         );
+
+        if (previousSemanticSearchSignature !== nextSemanticSearchSignature) {
+          yield* input.workspaceStateStore.write({
+            context: input.runtimeLocalWorkspace.context,
+            state: {
+              ...workspaceState,
+              catalog: {
+                ...(workspaceState.catalog ?? {}),
+                semanticSearchSignature: nextSemanticSearchSignature,
+              },
+            },
+          });
+        }
       });
     }),
     Effect.provide(workspaceStorageLayer),
