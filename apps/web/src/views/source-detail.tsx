@@ -984,17 +984,28 @@ function DiscoveryView(props: {
         <LoadableBlock loadable={props.discovery} loading="Searching\u2026">
           {(result) =>
             result.query.length === 0 ? (
-              <EmptyState
-                title="Search your tools"
-                description="Type a query to find matching tools across this source."
-              />
+              <div>
+                <EmptyState
+                  title="Search your tools"
+                  description="Type a query to find matching tools across this source."
+                />
+                <SemanticSearchCTA />
+              </div>
             ) : result.results.length === 0 ? (
-              <EmptyState
-                title="No results"
-                description="Try different search terms."
-              />
+              <div>
+                <EmptyState
+                  title="No results"
+                  description="Try different search terms."
+                />
+                <SemanticSearchCTA />
+              </div>
             ) : (
               <div className="max-w-3xl space-y-2">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-xs text-muted-foreground">{result.results.length} result{result.results.length === 1 ? "" : "s"}</span>
+                  {/* TODO: searchMode from API response — "FTS" | "Semantic" | "Hybrid" */}
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">FTS</span>
+                </div>
                 {result.results.map((item, index) => (
                   <button
                     key={item.path}
@@ -1011,9 +1022,15 @@ function DiscoveryView(props: {
                           {item.path}
                         </h4>
                       </div>
-                      <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground/50">
-                        {item.score.toFixed(2)}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <div className="w-12 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{ width: `${Math.round(item.score * 100)}%` }}
+                          />
+                        </div>
+                        <span className="text-[11px] text-muted-foreground">{Math.round(item.score * 100)}%</span>
+                      </div>
                     </div>
                     {item.description && (
                       <p className="text-[12px] text-muted-foreground leading-relaxed line-clamp-2">
@@ -1046,11 +1063,29 @@ function DiscoveryView(props: {
                     )}
                   </button>
                 ))}
+                <SemanticSearchCTA />
               </div>
             )
           }
         </LoadableBlock>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SemanticSearchCTA
+// ---------------------------------------------------------------------------
+
+function SemanticSearchCTA() {
+  return (
+    <div className="flex items-center gap-2 mt-4 p-3 rounded-lg border border-dashed border-border">
+      <span className="text-xs text-muted-foreground">
+        Want better results? Enable semantic search in
+      </span>
+      <Link to="/settings" className="text-xs text-primary hover:underline">
+        Settings
+      </Link>
     </div>
   );
 }
