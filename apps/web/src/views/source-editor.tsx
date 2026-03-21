@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
   type CompleteSourceOAuthResult,
@@ -79,6 +79,7 @@ type SourceFormBase = {
   kind: Source["kind"];
   endpoint: string;
   namespace: string;
+  iconUrl: string;
   enabled: boolean;
   specUrl: string;
   service: string;
@@ -386,6 +387,7 @@ const defaultFormState = (template?: SourceTemplate): SourceFormState => ({
         ? googleDiscoveryNamespace(template.service)
         : namespaceFromUrl(template.endpoint ?? "")))
     : "",
+  iconUrl: "",
   enabled: true,
   specUrl: template && "specUrl" in template ? template.specUrl : "",
   service: template && "service" in template ? template.service : "",
@@ -420,6 +422,7 @@ const formStateFromSource = (source: Source): SourceFormState => ({
   kind: source.kind,
   endpoint: source.endpoint,
   namespace: source.namespace ?? "",
+  iconUrl: (source as any).iconUrl ?? "",
   enabled: source.enabled,
   specUrl: readBindingString(source, "specUrl"),
   service: readBindingString(source, "service"),
@@ -594,11 +597,9 @@ const buildSourcePayload = (state: SourceFormState): CreateSourcePayload => {
     status: buildRequestedSourceStatus(state),
     enabled: state.enabled,
     namespace: trimToNull(state.namespace),
+    iconUrl: trimToNull(state.iconUrl),
     auth: isMcpStdio ? { kind: "none" as const } : buildAuthPayload(state),
-  } satisfies Pick<
-    CreateSourcePayload,
-    "name" | "kind" | "endpoint" | "status" | "enabled" | "namespace" | "auth"
-  >;
+  } as any;
 
   if (state.kind === "mcp") {
     if (state.transport === "stdio") {
@@ -1112,6 +1113,14 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                   value={formState.namespace}
                   onChange={(value) => setField("namespace", value)}
                   placeholder="github"
+                />
+              </Field>
+              <Field label="Icon">
+                <IconUrlInput
+                  value={formState.iconUrl}
+                  onChange={(value) => setField("iconUrl", value)}
+                  endpoint={formState.endpoint}
+                  kind={formState.kind}
                 />
               </Field>
               <Field label="Status">
@@ -1711,6 +1720,150 @@ function StatusBanner(props: { state: StatusBannerState; className?: string }) {
       )}
     >
       {props.state.text}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Icon URL Input — drag & drop, file picker, URL input, preview
+// ---------------------------------------------------------------------------
+
+const MAX_ICON_BYTES = 32 * 1024; // 32 KB
+
+function IconUrlInput(props: {
+  value: string;
+  onChange: (value: string) => void;
+  endpoint: string;
+  kind: string;
+}) {
+  const { value, onChange, endpoint, kind } = props;
+  const [dragging, setDragging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const processFile = useCallback(
+    (file: File) => {
+      setError(null);
+      if (!file.type.startsWith("image/")) {
+        setError("File must be an image (PNG, SVG, ICO, etc.)");
+        return;
+      }
+      if (file.size > MAX_ICON_BYTES) {
+        setError(`Image must be under ${MAX_ICON_BYTES / 1024}KB (got ${Math.round(file.size / 1024)}KB)`);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          onChange(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    },
+    [onChange],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const file = e.dataTransfer.files[0];
+      if (file) processFile(file);
+    },
+    [processFile],
+  );
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => setDragging(false), []);
+
+  const handleFileSelect = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) processFile(file);
+      e.target.value = "";
+    },
+    [processFile],
+  );
+
+  const isDataUri = value.startsWith("data:");
+  const hasValue = value.length > 0;
+
+  return (
+    <div className="space-y-2">
+      {/* Preview + current value */}
+      <div className="flex items-center gap-3">
+        <div className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted/30">
+          <SourceFavicon
+            iconUrl={hasValue ? value : undefined}
+            endpoint={endpoint || undefined}
+            kind={kind}
+            className="size-5"
+          />
+        </div>
+
+        {hasValue ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+              {isDataUri ? `data:image/… (${Math.round((value.length * 3) / 4 / 1024)}KB)` : value}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                setError(null);
+              }}
+              className="shrink-0 rounded-md px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:text-destructive"
+            >
+              Clear
+            </button>
+          </div>
+        ) : (
+          <span className="text-[12px] text-muted-foreground/50">Auto-detected from endpoint</span>
+        )}
+      </div>
+
+      {/* Drop zone + URL input */}
+      <div
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        className={cn(
+          "flex items-center gap-2 rounded-lg border border-dashed px-3 py-2 transition-colors",
+          dragging ? "border-primary bg-primary/5" : "border-border",
+        )}
+      >
+        <input
+          value={isDataUri ? "" : value}
+          onChange={(e) => {
+            setError(null);
+            onChange(e.target.value);
+          }}
+          placeholder="Paste URL or drop image…"
+          className="min-w-0 flex-1 bg-transparent font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground/35"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleFileSelect}
+          className="hidden"
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Browse
+        </button>
+      </div>
+
+      {error && (
+        <p className="text-[11px] text-destructive">{error}</p>
+      )}
     </div>
   );
 }

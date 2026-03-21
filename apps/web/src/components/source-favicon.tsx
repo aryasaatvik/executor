@@ -8,21 +8,24 @@ type SourceKind = Source["kind"] | string;
 export function SourceFavicon({
   endpoint,
   kind,
+  iconUrl,
   className,
   size = 16,
 }: {
   endpoint?: string | null;
   kind: SourceKind;
+  iconUrl?: string | null;
   className?: string;
   size?: number;
 }) {
   const faviconUrl = useMemo(() => {
+    if (iconUrl) return iconUrl; // manual override takes priority
     // For google_discovery, prefer the real product icon
     if (kind === "google_discovery") {
       return getGoogleProductIconUrl(endpoint) ?? getSourceFaviconUrl(endpoint);
     }
     return getSourceFaviconUrl(endpoint);
-  }, [endpoint, kind]);
+  }, [iconUrl, endpoint, kind]);
 
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const isFailed = Boolean(faviconUrl && failedUrl === faviconUrl);

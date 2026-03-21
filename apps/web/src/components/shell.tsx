@@ -322,7 +322,7 @@ function SourceItem(props: {
       )}
     >
       <div className="flex size-3 shrink-0 items-center justify-center text-muted-foreground/50">
-        <SourceFavicon endpoint={source.endpoint} kind={source.kind} className="size-3" />
+        <SourceFavicon endpoint={source.endpoint} kind={source.kind} iconUrl={source.iconUrl} className="size-3" />
       </div>
       <span className="flex-1 truncate">{source.name}</span>
       <span
