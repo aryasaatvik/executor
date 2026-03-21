@@ -141,6 +141,7 @@ export const SourceSchema = Schema.Struct({
   status: SourceStatusSchema,
   enabled: Schema.Boolean,
   namespace: Schema.NullOr(Schema.String),
+  iconUrl: Schema.NullOr(Schema.String),
   bindingVersion: SourceBindingVersionSchema,
   binding: JsonObjectSchema,
   importAuthPolicy: SourceImportAuthPolicySchema,

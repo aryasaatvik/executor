@@ -64,6 +64,7 @@ export const LocalConfigSourceConnectionSchema = Schema.Struct({
 const LocalConfigSourceEntryBaseSchema = Schema.Struct({
   name: Schema.optional(Schema.String),
   namespace: Schema.optional(Schema.String),
+  iconUrl: Schema.optional(Schema.String),
   enabled: Schema.optional(Schema.Boolean),
   connection: LocalConfigSourceConnectionSchema,
 });

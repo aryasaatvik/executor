@@ -126,6 +126,7 @@ const writeConfiguredLocalMcpSource = (input: {
       status: "connected" as const,
       enabled: true,
       namespace: input.namespace ?? input.sourceId,
+      iconUrl: null,
       bindingVersion: 1,
       binding: {
         transport: "streamable-http",

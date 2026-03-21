@@ -653,6 +653,7 @@ const sourceRecordFromCatalogArtifact = (input: {
   status: input.source.status,
   enabled: input.source.enabled,
   namespace: input.source.namespace,
+  iconUrl: input.source.iconUrl,
   importAuthPolicy: input.source.importAuthPolicy,
   bindingConfigJson: JSON.stringify(input.source.binding),
   sourceHash: input.source.sourceHash,

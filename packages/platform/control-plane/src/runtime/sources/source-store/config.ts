@@ -162,6 +162,7 @@ export const configSourceFromLocalSource = (input: {
     ...(trimOrNull(input.source.namespace) !== trimOrNull(input.source.id)
       ? { namespace: input.source.namespace ?? undefined }
       : {}),
+    ...(input.source.iconUrl != null ? { iconUrl: input.source.iconUrl } : {}),
     ...(input.source.enabled === false ? { enabled: false } : {}),
     connection: {
       endpoint: input.source.endpoint,

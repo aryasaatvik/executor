@@ -508,6 +508,7 @@ const openApiSource = (input: {
   status: "connected",
   enabled: true,
   namespace: input.namespace ?? null,
+  iconUrl: null,
   bindingVersion: 1,
   binding: {
     specUrl: input.specUrl ?? null,

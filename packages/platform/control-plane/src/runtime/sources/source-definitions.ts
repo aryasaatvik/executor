@@ -299,6 +299,7 @@ export const createSourceFromPayload = (input: {
       status: input.payload.status ?? "draft",
       enabled: input.payload.enabled ?? true,
       namespace: trimOrNull(input.payload.namespace),
+      iconUrl: trimOrNull(input.payload.iconUrl),
       bindingVersion: getSourceAdapter(input.payload.kind).bindingConfigVersion,
       binding: input.payload.binding ?? {},
       importAuthPolicy,
@@ -340,6 +341,9 @@ export const updateSourceFromPayload = (input: {
       namespace: input.payload.namespace !== undefined
         ? trimOrNull(input.payload.namespace)
         : input.source.namespace,
+      iconUrl: input.payload.iconUrl !== undefined
+        ? trimOrNull(input.payload.iconUrl)
+        : input.source.iconUrl,
       bindingVersion: input.payload.binding !== undefined
         ? getSourceAdapter(input.source.kind).bindingConfigVersion
         : input.source.bindingVersion,
@@ -421,6 +425,7 @@ export const splitSourceForStorage = (input: {
     status: input.source.status,
     enabled: input.source.enabled,
     namespace: input.source.namespace,
+    iconUrl: input.source.iconUrl,
     importAuthPolicy: input.source.importAuthPolicy,
     bindingConfigJson: getSourceAdapterForSource(input.source).serializeBindingConfig(input.source),
     sourceHash: input.source.sourceHash,
@@ -473,6 +478,7 @@ export const projectSourceFromStorage = (input: {
       status: input.sourceRecord.status,
       enabled: input.sourceRecord.enabled,
       namespace: input.sourceRecord.namespace,
+      iconUrl: input.sourceRecord.iconUrl,
       bindingVersion: bindingConfig.version,
       binding: bindingConfig.payload,
       importAuthPolicy: input.sourceRecord.importAuthPolicy,

@@ -88,6 +88,7 @@ const makeGoogleDiscoverySource = (discoveryUrl: string): Source => ({
   status: "connected",
   enabled: true,
   namespace: "google.gmail",
+  iconUrl: null,
   bindingVersion: 1,
   binding: {
     service: "gmail",

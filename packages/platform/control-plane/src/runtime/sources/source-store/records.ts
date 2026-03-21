@@ -71,6 +71,7 @@ export const buildLocalSourceRecord = (input: {
         (sourceConfig.enabled ?? true ? "connected" : "draft"),
       enabled: sourceConfig.enabled ?? true,
       namespace: trimOrNull(sourceConfig.namespace) ?? input.sourceId,
+      iconUrl: trimOrNull(sourceConfig.iconUrl) ?? null,
       bindingVersion: adapter.bindingConfigVersion,
       binding: sourceConfig.binding,
       importAuthPolicy: adapter.defaultImportAuthPolicy,
