@@ -310,7 +310,7 @@ export function SourceDetailPage(props: {
                   {bundle.source.name}
                 </h2>
                 <Badge variant="outline">{bundle.source.kind}</Badge>
-                <span className="hidden text-[11px] tabular-nums text-muted-foreground/50 sm:block">
+                <span className="hidden text-[11px] tabular-nums text-muted-foreground/70 sm:block">
                   {bundle.toolCount} {bundle.toolCount === 1 ? "tool" : "tools"}
                 </span>
               </div>
