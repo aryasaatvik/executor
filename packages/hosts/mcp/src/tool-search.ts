@@ -45,6 +45,9 @@ export interface ToolSearchOutput {
   };
 }
 
+const DEFAULT_MAX_RESULTS = 10;
+const MAX_MAX_RESULTS = 100;
+
 /**
  * Parse query to determine mode.
  * "+github.issues.create" → exact lookup
@@ -87,6 +90,17 @@ function matchesSourceFilter(
   return tool?.sourceKey === source;
 }
 
+function normalizeMaxResults(maxResults?: number): number {
+  if (typeof maxResults !== "number" || !Number.isFinite(maxResults)) {
+    return DEFAULT_MAX_RESULTS;
+  }
+
+  return Math.min(
+    MAX_MAX_RESULTS,
+    Math.max(1, Math.trunc(maxResults)),
+  );
+}
+
 /**
  * Handle a tool_search request using the workspace ToolCatalog.
  */
@@ -95,7 +109,7 @@ export function handleToolSearch(
   input: ToolSearchInput,
 ): Effect.Effect<ToolSearchOutput, unknown> {
   return Effect.gen(function* () {
-    const maxResults = input.max_results ?? 10;
+    const maxResults = normalizeMaxResults(input.max_results);
     const includeSchemas = input.include_schemas ?? false;
     const { mode, cleanQuery } = parseQuery(input.query);
 

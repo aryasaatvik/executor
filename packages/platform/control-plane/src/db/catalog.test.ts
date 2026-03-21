@@ -3,8 +3,14 @@ import { SqlClient } from "@effect/sql";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { vi } from "vitest";
+
+vi.mock("./vec", () => ({
+  searchVec: vi.fn(),
+}));
 
 import { createSqliteToolCatalog } from "./catalog";
+import { searchVec } from "./vec";
 
 type CatalogRow = {
   path: string
@@ -173,6 +179,31 @@ const makeCatalog = (rows: readonly CatalogRow[]) =>
     ),
   )
 
+const makeSearchCatalog = (input: {
+  rows: readonly Array<{ path: string; raw_score: number }>
+  embedder?: {
+    provider: string
+    model: string
+    dimensions: number
+    embed: (text: string, hint?: "document" | "query") => Promise<number[]>
+    embedBatch: (texts: string[], hint?: "document" | "query") => Promise<number[][]>
+  }
+  onUnsafe?: (query: string, params: ReadonlyArray<unknown>) => void
+}) =>
+  createSqliteToolCatalog(input.embedder as never).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(SqliteDrizzle, {} as never),
+        Layer.succeed(SqlClient.SqlClient, {
+          unsafe: (query: string, params: ReadonlyArray<unknown>) => {
+            input.onUnsafe?.(query, params)
+            return Effect.succeed(input.rows)
+          },
+        } as never),
+      ),
+    ),
+  )
+
 describe("sqlite catalog", () => {
   const rows: readonly CatalogRow[] = [
     {
@@ -291,6 +322,98 @@ describe("sqlite catalog", () => {
         { namespace: "github", toolCount: 1 },
         { namespace: "slack.messages", toolCount: 1 },
       ])
+    }),
+  )
+})
+
+describe("sqlite catalog searchTools", () => {
+  it.effect("tokenizes non-ASCII queries for FTS instead of collapsing them", () =>
+    Effect.gen(function* () {
+      let capturedParams: ReadonlyArray<unknown> | null = null
+      const catalog = yield* makeSearchCatalog({
+        rows: [
+          { path: "github.issues.create", raw_score: 0.25 },
+        ],
+        onUnsafe: (_query, params) => {
+          capturedParams = params
+        },
+      })
+
+      const results = yield* catalog.searchTools({
+        query: "問題を作成",
+        limit: 5,
+      })
+
+      expect(results.map((result) => result.path)).toEqual(["github.issues.create"])
+      expect(capturedParams?.[0]).toBe("\"問題を作成\"")
+    }),
+  )
+
+  it.effect("falls back to semantic search when the FTS query is empty but an embedder exists", () =>
+    Effect.gen(function* () {
+      const searchVecMock = vi.mocked(searchVec)
+      searchVecMock.mockReset()
+      searchVecMock.mockReturnValue(
+        Effect.succeed([
+          { toolId: "github.issues.create", score: 0.7 },
+        ]),
+      )
+
+      const embedder = {
+        provider: "local",
+        model: "test-model",
+        dimensions: 3,
+        embed: async () => [1, 2, 3],
+        embedBatch: async () => [[1, 2, 3]],
+      }
+
+      const catalog = yield* makeSearchCatalog({
+        rows: [],
+        embedder,
+      })
+
+      const results = yield* catalog.searchTools({
+        query: "!!!",
+        limit: 5,
+      })
+
+      expect(results).toHaveLength(1)
+      expect(results[0]?.path).toBe("github.issues.create")
+      expect(results[0]?.score).toBeGreaterThan(0)
+      expect(searchVecMock).toHaveBeenCalledTimes(1)
+    }),
+  )
+
+  it.effect("skips semantic search when FTS already has a dominant lexical match", () =>
+    Effect.gen(function* () {
+      const searchVecMock = vi.mocked(searchVec)
+      searchVecMock.mockReset()
+      searchVecMock.mockReturnValue(Effect.succeed([]))
+
+      const embedder = {
+        provider: "local",
+        model: "test-model",
+        dimensions: 3,
+        embed: async () => [1, 2, 3],
+        embedBatch: async () => [[1, 2, 3]],
+      }
+
+      const catalog = yield* makeSearchCatalog({
+        rows: [
+          { path: "github.issues.create", raw_score: 0.000001 },
+          { path: "github.issues.update", raw_score: 0.5 },
+        ],
+        embedder,
+      })
+
+      const results = yield* catalog.searchTools({
+        query: "github issues create",
+        limit: 5,
+      })
+
+      expect(results.map((result) => result.path)).toEqual(["github.issues.create", "github.issues.update"])
+      expect(searchVecMock).not.toHaveBeenCalled()
+      expect(results[0]!.score).toBeGreaterThan(0.99)
     }),
   )
 })

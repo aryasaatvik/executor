@@ -29,7 +29,7 @@ import { reciprocalRankFusion } from "./rrf"
 const buildFtsQuery = (query: string): string =>
   query
     .toLowerCase()
-    .split(/\W+/)
+    .split(/[^\p{L}\p{N}_]+/u)
     .filter(Boolean)
     .map((token) => `"${token.replace(/"/g, '""')}"`)
     .join(" ")
@@ -148,10 +148,12 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // -----------------------------------------------------------------
           // Step 1: Always run FTS5 search
           // -----------------------------------------------------------------
-          const ftsQuery = buildFtsQuery(query)
-          if (ftsQuery.length === 0) {
+          const trimmedQuery = query.trim()
+          if (trimmedQuery.length === 0) {
             return [] as readonly SearchHit[]
           }
+
+          const ftsQuery = buildFtsQuery(trimmedQuery)
 
           const namespaceClause = namespace ? `AND t.namespace = ?` : ""
           const sourceKeyClause = sourceKey ? `AND t.source_key = ?` : ""
@@ -163,27 +165,29 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             ftsLimit,
           ]
 
-          const rows = yield* sql.unsafe<{
-            path: string
-            raw_score: number
-          }>(
-            `SELECT t.path,
-                    abs(bm25(catalog_tool_fts, 10.0, 8.0, 2.0, 1.0)) as raw_score
-             FROM catalog_tool_fts
-             JOIN catalog_tool t ON t.rowid = catalog_tool_fts.rowid
-             WHERE catalog_tool_fts MATCH ?
-               AND t.source_enabled = 1
-               AND t.source_status = 'connected'
-               ${namespaceClause}
-               ${sourceKeyClause}
-             ORDER BY raw_score DESC
-             LIMIT ?`,
-            params,
-          )
+          const rows = ftsQuery.length === 0
+            ? []
+            : yield* sql.unsafe<{
+                path: string
+                raw_score: number
+              }>(
+                `SELECT t.path,
+                        abs(bm25(catalog_tool_fts, 10.0, 8.0, 2.0, 1.0)) as raw_score
+                 FROM catalog_tool_fts
+                 JOIN catalog_tool t ON t.rowid = catalog_tool_fts.rowid
+                 WHERE catalog_tool_fts MATCH ?
+                   AND t.source_enabled = 1
+                   AND t.source_status = 'connected'
+                   ${namespaceClause}
+                   ${sourceKeyClause}
+                 ORDER BY raw_score ASC
+                 LIMIT ?`,
+                params,
+              )
 
           const ftsResults: readonly SearchHit[] = rows.map((row) => ({
             path: row.path as ToolPath,
-            score: row.raw_score / (1 + row.raw_score),
+            score: 1 / (1 + row.raw_score),
           }))
 
           // -----------------------------------------------------------------
@@ -205,7 +209,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // Step 4: Embed query and run vector search
           // -----------------------------------------------------------------
           const queryEmbedding = yield* Effect.tryPromise(() =>
-            embedder.embed(query, "query"),
+            embedder.embed(trimmedQuery, "query"),
           ).pipe(Effect.catchAll(() => Effect.succeed(null)))
 
           if (!queryEmbedding) return ftsResults.slice(0, limit) // embedding failed, FTS fallback
@@ -248,7 +252,12 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           if (query) {
             const sql = yield* SqlClient.SqlClient
 
-            const ftsQuery = buildFtsQuery(query)
+            const trimmedQuery = query.trim()
+            if (trimmedQuery.length === 0) {
+              return [] as readonly ToolDescriptor[]
+            }
+
+            const ftsQuery = buildFtsQuery(trimmedQuery)
             if (ftsQuery.length === 0) {
               return [] as readonly ToolDescriptor[]
             }

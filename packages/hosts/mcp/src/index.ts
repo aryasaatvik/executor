@@ -41,7 +41,7 @@ const resumeInputSchema = {
 
 const toolSearchInputSchema = {
   query: z.string().trim().min(1),
-  max_results: z.number().optional(),
+  max_results: z.number().finite().optional(),
   source: z.string().optional(),
   include_schemas: z.boolean().optional(),
 };

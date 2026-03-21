@@ -179,4 +179,37 @@ describe("tool_search", () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0]?.path).toBe(deepSlackTool.path);
   });
+
+  it("clamps max_results into a safe positive range", async () => {
+    const calls: Array<{
+      query: string;
+      namespace?: string;
+      sourceKey?: string;
+      limit: number;
+    }> = [];
+
+    const result = await Effect.runPromise(
+      handleToolSearch(makeCatalog({
+        searchHits: [
+          { path: githubIssueTool.path, score: 0.9 },
+          { path: slackMessageTool.path, score: 0.6 },
+        ] as const,
+        onSearchTools: (input) => {
+          calls.push(input);
+        },
+      }), {
+        query: "create github issue",
+        max_results: -5,
+      }),
+    );
+
+    expect(calls).toEqual([
+      {
+        query: "create github issue",
+        limit: 1,
+      },
+    ]);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0]?.path).toBe(githubIssueTool.path);
+  });
 });
