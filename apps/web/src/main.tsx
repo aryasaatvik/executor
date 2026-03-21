@@ -13,7 +13,7 @@ import "./globals.css";
 import { AppShell } from "./components/shell";
 import { DashboardPage } from "./views/dashboard";
 import { ExecutionsPage } from "./views/executions";
-import { SourcesPage } from "./views/sources";
+
 import { EditSourcePage, NewSourcePage } from "./views/source-editor";
 import { SourceDetailPage } from "./views/source-detail";
 import { SecretsPage } from "./views/secrets";
@@ -49,12 +49,6 @@ const executionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/executions",
   component: ExecutionsPage,
-});
-
-const sourcesRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sources",
-  component: SourcesPage,
 });
 
 const newSourceRoute = createRoute({
@@ -119,7 +113,7 @@ function EditSourcePageWrapper() {
 // Router
 // ---------------------------------------------------------------------------
 
-const routeTree = rootRoute.addChildren([dashboardRoute, executionsRoute, sourcesRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute]);
+const routeTree = rootRoute.addChildren([dashboardRoute, executionsRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute]);
 
 const router = createRouter({
   routeTree,
