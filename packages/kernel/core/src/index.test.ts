@@ -284,6 +284,12 @@ describe("codemode-core", () => {
 
   it.effect("hydrates dynamic discover results via tool catalog", () =>
     Effect.gen(function* () {
+      const searchCalls: Array<{
+        query: string;
+        namespace?: string;
+        sourceKey?: string;
+        limit: number;
+      }> = [];
       const descriptors: Record<string, ToolDescriptor> = {
         "source.docs.search": {
           path: asToolPath("source.docs.search"),
@@ -353,11 +359,13 @@ describe("codemode-core", () => {
           ),
         getToolByPath: ({ path }) =>
           Effect.succeed(descriptors[path] ?? null),
-        searchTools: () =>
-          Effect.succeed([
+        searchTools: (input) => {
+          searchCalls.push(input);
+          return Effect.succeed([
             { path: asToolPath("source.issues.create"), score: 0.93 },
             { path: asToolPath("source.docs.search"), score: 0.72 },
-          ]),
+          ]);
+        },
       };
 
       const dynamic = createToolCatalogDiscovery({ catalog });
@@ -373,6 +381,24 @@ describe("codemode-core", () => {
       expect(discovered.bestPath).toBe("source.issues.create");
       expect(discovered.results[0]?.path).toBe("source.issues.create");
       expect(discovered.results[0]?.interaction).toBe("required");
+      expect(searchCalls).toEqual([
+        {
+          query: "create issue",
+          limit: 5,
+        },
+      ]);
+
+      yield* dynamic.primitives.discover!({
+        query: "create issue",
+        sourceKey: "source.docs",
+        limit: 3,
+      });
+
+      expect(searchCalls[1]).toEqual({
+        query: "create issue",
+        sourceKey: "source.docs",
+        limit: 3,
+      });
     }),
   );
 
@@ -434,6 +460,16 @@ describe("codemode-core", () => {
         limit: 10,
       });
       expect(discovered[0]?.path).toBe("github.issues.list");
+
+      const sourceScoped = yield* catalog.searchTools({
+        query: "repository issues",
+        sourceKey: "source.github",
+        limit: 10,
+      });
+      expect(sourceScoped.map((hit) => hit.path)).toEqual([
+        "github.issues.list",
+        "github.repos.getRepo",
+      ]);
 
       const described = yield* catalog.getToolByPath({
         path: asToolPath("github.repos.getRepo"),

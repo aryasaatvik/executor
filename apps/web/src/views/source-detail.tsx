@@ -989,7 +989,6 @@ function DiscoveryView(props: {
                   title="Search your tools"
                   description="Type a query to find matching tools across this source."
                 />
-                <SemanticSearchCTA />
               </div>
             ) : result.results.length === 0 ? (
               <div>
@@ -997,14 +996,12 @@ function DiscoveryView(props: {
                   title="No results"
                   description="Try different search terms."
                 />
-                <SemanticSearchCTA />
               </div>
             ) : (
               <div className="max-w-3xl space-y-2">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs text-muted-foreground">{result.results.length} result{result.results.length === 1 ? "" : "s"}</span>
-                  {/* TODO: searchMode from API response — "FTS" | "Semantic" | "Hybrid" */}
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">FTS</span>
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Inspection</span>
                 </div>
                 {result.results.map((item, index) => (
                   <button
@@ -1063,29 +1060,11 @@ function DiscoveryView(props: {
                     )}
                   </button>
                 ))}
-                <SemanticSearchCTA />
               </div>
             )
           }
         </LoadableBlock>
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// SemanticSearchCTA
-// ---------------------------------------------------------------------------
-
-function SemanticSearchCTA() {
-  return (
-    <div className="flex items-center gap-2 mt-4 p-3 rounded-lg border border-dashed border-border">
-      <span className="text-xs text-muted-foreground">
-        Want better results? Enable semantic search in
-      </span>
-      <Link to="/settings" className="text-xs text-primary hover:underline">
-        Settings
-      </Link>
     </div>
   );
 }

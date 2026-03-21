@@ -79,7 +79,11 @@ function getProviderHints(
 }
 
 /**
- * Dynamically load a provider package, auto-installing with bun if missing.
+ * Dynamically load a provider package.
+ *
+ * The runtime must not mutate the checkout or install dependencies.
+ * Missing provider packages should fail deterministically so callers can
+ * fall back to keyword-only search.
  */
 async function importProviderPackage(
   providerName: string,
@@ -94,30 +98,12 @@ async function importProviderPackage(
 
   try {
     return await import(packageName)
-  } catch {
-    // Package not installed — try auto-installing with bun
-    console.log(`Installing ${packageName}...`)
-    const proc = Bun.spawn(["bun", "add", packageName], {
-      stdout: "inherit",
-      stderr: "inherit",
-    })
-    const exitCode = await proc.exited
-    if (exitCode !== 0) {
-      throw new Error(
-        `Failed to install ${packageName} (exit code ${exitCode}). ` +
-          `Install it manually: bun add ${packageName}`,
-      )
-    }
-
-    // Retry import after installation
-    try {
-      return await import(packageName)
-    } catch (retryError) {
-      throw new Error(
-        `Failed to import ${packageName} after installation. ` +
-          `Error: ${retryError instanceof Error ? retryError.message : String(retryError)}`,
-      )
-    }
+  } catch (error) {
+    throw new Error(
+      `Failed to load provider package ${packageName}. ` +
+        `Install it before enabling ${providerName} semantic search. ` +
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
+    )
   }
 }
 

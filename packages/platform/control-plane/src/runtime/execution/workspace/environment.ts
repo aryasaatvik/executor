@@ -53,7 +53,45 @@ const createEmptyLocalToolRuntime = (): LocalToolRuntime => ({
   toolPaths: new Set<string>(),
 });
 
-const loadConfiguredSemanticSearchEmbedder = (
+const semanticSearchEmbedderCache = new Map<
+  string,
+  Promise<Embedder | undefined>
+>()
+
+type SemanticSearchConfig = NonNullable<LocalExecutorConfig["semanticSearch"]>
+
+const semanticSearchEmbedderCacheKey = (
+  config: SemanticSearchConfig,
+): string =>
+  JSON.stringify({
+    provider: config.provider,
+    model: config.model ?? null,
+    apiKey: config.apiKey ?? null,
+    dimensions: config.dimensions ?? null,
+  })
+
+const getCachedSemanticSearchEmbedder = (
+  config: SemanticSearchConfig,
+): Promise<Embedder | undefined> => {
+  const cacheKey = semanticSearchEmbedderCacheKey(config)
+  const existing = semanticSearchEmbedderCache.get(cacheKey)
+  if (existing) {
+    return existing
+  }
+
+  const pending = createEmbedder(config).then((embedder) => embedder ?? undefined)
+  semanticSearchEmbedderCache.set(cacheKey, pending)
+  return pending.catch((error) => {
+    semanticSearchEmbedderCache.delete(cacheKey)
+    throw error
+  })
+}
+
+export const clearSemanticSearchEmbedderCacheForTests = (): void => {
+  semanticSearchEmbedderCache.clear()
+}
+
+export const loadConfiguredSemanticSearchEmbedder = (
   config: LocalExecutorConfig | null | undefined,
 ): Effect.Effect<Embedder | undefined, never, never> => {
   const semanticSearchConfig = config?.semanticSearch;
@@ -61,7 +99,7 @@ const loadConfiguredSemanticSearchEmbedder = (
     return Effect.succeed(undefined);
   }
 
-  return Effect.tryPromise(() => createEmbedder(semanticSearchConfig)).pipe(
+  return Effect.tryPromise(() => getCachedSemanticSearchEmbedder(semanticSearchConfig)).pipe(
     Effect.map((embedder) => embedder ?? undefined),
     Effect.catchAll((error) =>
       Effect.logWarning(
@@ -94,21 +132,19 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
       const embedder = yield* loadConfiguredSemanticSearchEmbedder(
         loadedConfig?.config,
       );
-
-      // Populate the SQLite catalog index from JSON artifacts.
-      // This runs before the catalog is queried so FTS results are up-to-date.
-      if (runtimeLocalWorkspace !== null) {
-        yield* indexWorkspaceToolsIntoSqlite({
-          workspaceId,
-          accountId,
-          sourceCatalogStore: input.sourceCatalogStore,
-          workspaceConfigStore: input.workspaceConfigStore,
-          workspaceStateStore: input.workspaceStateStore,
-          sourceArtifactStore: input.sourceArtifactStore,
-          runtimeLocalWorkspace,
-          embedder,
-        });
-      }
+      const sqliteCatalogReady =
+        runtimeLocalWorkspace === null
+          ? false
+          : yield* indexWorkspaceToolsIntoSqlite({
+            workspaceId,
+            accountId,
+            sourceCatalogStore: input.sourceCatalogStore,
+            workspaceConfigStore: input.workspaceConfigStore,
+            workspaceStateStore: input.workspaceStateStore,
+            sourceArtifactStore: input.sourceArtifactStore,
+            runtimeLocalWorkspace,
+            embedder,
+          });
 
       const { catalog, toolInvoker } = createWorkspaceToolInvoker({
         workspaceId,
@@ -122,6 +158,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         runtimeLocalWorkspace,
         localToolRuntime,
         embedder,
+        sqliteCatalogReady,
         onElicitation,
       });
 

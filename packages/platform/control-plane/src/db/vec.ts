@@ -74,11 +74,20 @@ export const searchVec = (input: {
   queryEmbedding: number[]
   limit: number
   sourceFilter?: string
+  namespaceFilter?: string
 }) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
 
     const embedding = new Float32Array(input.queryEmbedding)
+    const sourceClause = input.sourceFilter ? ` AND source_key = ?` : ``
+    const namespaceClause = input.namespaceFilter ? ` AND namespace = ?` : ``
+    const params: Array<Float32Array | number | string> = [
+      embedding,
+      input.limit * 2,
+      ...(input.sourceFilter ? [input.sourceFilter] : []),
+      ...(input.namespaceFilter ? [input.namespaceFilter] : []),
+    ]
 
     // Step 1: Vector KNN query (no joins!)
     const vecResults = yield* sql.unsafe<{
@@ -86,8 +95,8 @@ export const searchVec = (input: {
       distance: number
     }>(
       `SELECT tool_id, distance FROM vec_catalog_tool
-       WHERE embedding MATCH ? AND k = ?`,
-      [embedding, input.limit * 2], // over-fetch for post-filtering
+       WHERE embedding MATCH ? AND k = ?${sourceClause}${namespaceClause}`,
+      params, // over-fetch for any remaining ranking/dropoff
     )
 
     // Convert cosine distance to similarity score

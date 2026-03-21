@@ -3,7 +3,6 @@ import type {
   ToolCatalog,
   ToolDescriptor,
   ToolPath,
-  SearchHit,
 } from "@executor/codemode-core";
 
 /**
@@ -127,9 +126,10 @@ export function handleToolSearch(
     }
 
     // Search mode
-    const hits: readonly SearchHit[] = yield* catalog.searchTools({
+    const hits = yield* catalog.searchTools({
       query: cleanQuery,
-      limit: input.source ? Math.max(maxResults * 5, 50) : maxResults,
+      ...(input.source ? { sourceKey: input.source } : {}),
+      limit: maxResults,
     });
 
     // Hydrate results with descriptors

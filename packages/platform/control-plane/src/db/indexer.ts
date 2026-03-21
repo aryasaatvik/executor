@@ -161,12 +161,14 @@ export const indexSource = (input: {
           .select({
             tool_id: catalog_tool.tool_id,
             content_hash: catalog_tool.content_hash,
+            source_enabled: catalog_tool.source_enabled,
+            source_status: catalog_tool.source_status,
           })
           .from(catalog_tool)
           .where(eq(catalog_tool.source_id, input.sourceId))
 
-        const existingHashMap = new Map(
-          existing.map((row) => [row.tool_id, row.content_hash]),
+        const existingByToolId = new Map(
+          existing.map((row) => [row.tool_id, row]),
         )
 
         const incomingToolIds = new Set<string>()
@@ -176,17 +178,23 @@ export const indexSource = (input: {
           const contentHash = computeContentHash(tool, searchText)
           incomingToolIds.add(tool.toolId)
 
-          const existingHash = existingHashMap.get(tool.toolId)
+          const existingRow = existingByToolId.get(tool.toolId)
+          const existingHash = existingRow?.content_hash
 
           if (existingHash === contentHash) {
-            // Tool metadata is unchanged, but ensure the source is marked active.
-            yield* db
-              .update(catalog_tool)
-              .set({
-                source_enabled: true,
-                source_status: "connected",
-              })
-              .where(eq(catalog_tool.tool_id, tool.toolId))
+            const needsReactivation =
+              existingRow?.source_enabled !== true
+              || existingRow?.source_status !== "connected"
+
+            if (needsReactivation) {
+              yield* db
+                .update(catalog_tool)
+                .set({
+                  source_enabled: true,
+                  source_status: "connected",
+                })
+                .where(eq(catalog_tool.tool_id, tool.toolId))
+            }
             continue
           }
 

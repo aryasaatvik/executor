@@ -206,6 +206,7 @@ export interface ToolCatalog {
   searchTools(input: {
     query: string;
     namespace?: string;
+    sourceKey?: string;
     limit: number;
   }): Effect.Effect<readonly SearchHit[], unknown>;
 }

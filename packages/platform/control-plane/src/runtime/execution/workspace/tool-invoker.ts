@@ -51,6 +51,7 @@ export const createWorkspaceToolInvoker = (input: {
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;
   embedder?: Embedder;
+  sqliteCatalogReady?: boolean;
   onElicitation?: Parameters<
     typeof makeToolInvokerFromTools
   >[0]["onElicitation"];
@@ -81,6 +82,7 @@ export const createWorkspaceToolInvoker = (input: {
     sourceArtifactStore: input.sourceArtifactStore,
     runtimeLocalWorkspace: input.runtimeLocalWorkspace,
     embedder: input.embedder,
+    sqliteCatalogReady: input.sqliteCatalogReady,
   });
   let catalog: ToolCatalog | null = null;
   const systemTools = createSystemToolMap({
