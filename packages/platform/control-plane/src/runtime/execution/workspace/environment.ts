@@ -15,6 +15,7 @@ import {
   resolveConfiguredExecutionRuntime,
 } from "../runtime";
 import { createWorkspaceToolInvoker } from "./tool-invoker";
+import { indexWorkspaceToolsIntoSqlite } from "./source-catalog";
 import {
   RuntimeSourceAuthServiceTag,
 } from "../../sources/source-auth-service";
@@ -70,6 +71,21 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         runtimeLocalWorkspace === null
           ? createEmptyLocalToolRuntime()
           : yield* input.localToolRuntimeLoader.load(runtimeLocalWorkspace.context);
+
+      // Populate the SQLite catalog index from JSON artifacts.
+      // This runs before the catalog is queried so FTS results are up-to-date.
+      if (runtimeLocalWorkspace !== null) {
+        yield* indexWorkspaceToolsIntoSqlite({
+          workspaceId,
+          accountId,
+          sourceCatalogStore: input.sourceCatalogStore,
+          workspaceConfigStore: input.workspaceConfigStore,
+          workspaceStateStore: input.workspaceStateStore,
+          sourceArtifactStore: input.sourceArtifactStore,
+          runtimeLocalWorkspace,
+        });
+      }
+
       const { catalog, toolInvoker } = createWorkspaceToolInvoker({
         workspaceId,
         accountId,

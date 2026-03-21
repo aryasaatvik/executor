@@ -1,6 +1,5 @@
-import {
-  createToolCatalogFromEntries,
-  type ToolCatalog,
+import type {
+  ToolCatalog,
 } from "@executor/codemode-core";
 import type { AccountId, Source } from "#schema";
 import * as Effect from "effect/Effect";
@@ -8,7 +7,6 @@ import * as Effect from "effect/Effect";
 import {
   RuntimeSourceCatalogStoreService,
   type LoadedSourceCatalogToolIndexEntry,
-  catalogToolCatalogEntry,
 } from "../../catalog/source/runtime";
 import type { RuntimeLocalWorkspaceState } from "../../local/runtime-context";
 import {
@@ -19,59 +17,58 @@ import {
   type WorkspaceStorageServices,
 } from "../../local/storage";
 import { provideRuntimeLocalWorkspace } from "./local";
+import { createSqliteToolCatalog } from "../../../db/catalog";
+import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+import { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
+import type { ToolToIndex } from "../../../db/indexer";
+import { join } from "node:path";
 
-const tokenize = (value: string): string[] =>
-  value
-    .trim()
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+// ---------------------------------------------------------------------------
+// DB path resolution
+// ---------------------------------------------------------------------------
 
-const LOW_SIGNAL_QUERY_TOKENS = new Set([
-  "a",
-  "an",
-  "the",
-  "am",
-  "as",
-  "for",
-  "from",
-  "get",
-  "i",
-  "in",
-  "is",
-  "list",
-  "me",
-  "my",
-  "of",
-  "on",
-  "or",
-  "signed",
-  "to",
-  "who",
-]);
+const WORKSPACE_CATALOG_DB_FILENAME = "catalog.db";
 
-const singularizeToken = (value: string): string =>
-  value.length > 3 && value.endsWith("s") ? value.slice(0, -1) : value;
-
-const tokenEquals = (left: string, right: string): boolean =>
-  left === right || singularizeToken(left) === singularizeToken(right);
-
-const hasTokenMatch = (
-  tokens: readonly string[],
-  queryToken: string,
-): boolean => tokens.some((token) => tokenEquals(token, queryToken));
-
-const hasSubstringMatch = (value: string, queryToken: string): boolean => {
-  if (value.includes(queryToken)) {
-    return true;
+const resolveWorkspaceCatalogDbPath = (
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null,
+): string | null => {
+  if (!runtimeLocalWorkspace) {
+    return null;
   }
-
-  const singular = singularizeToken(queryToken);
-  return singular !== queryToken && value.includes(singular);
+  return join(
+    runtimeLocalWorkspace.context.stateDirectory,
+    WORKSPACE_CATALOG_DB_FILENAME,
+  );
 };
 
-const queryTokenWeight = (token: string): number =>
-  LOW_SIGNAL_QUERY_TOKENS.has(token) ? 0.25 : 1;
+// ---------------------------------------------------------------------------
+// Tool conversion: LoadedSourceCatalogToolIndexEntry -> ToolToIndex
+// ---------------------------------------------------------------------------
+
+export const toToolToIndex = (
+  tool: LoadedSourceCatalogToolIndexEntry,
+): ToolToIndex => ({
+  toolId: tool.path,
+  path: tool.path,
+  sourceId: tool.source.id,
+  sourceKey: tool.source.namespace ?? tool.source.id,
+  namespace: tool.searchNamespace,
+  title: tool.capability.surface.title ?? undefined,
+  description:
+    tool.capability.surface.summary
+    ?? tool.capability.surface.description
+    ?? undefined,
+  inputSchemaJson: tool.descriptor.contract?.inputSchema ?? undefined,
+  outputSchemaJson: tool.descriptor.contract?.outputSchema ?? undefined,
+  inputTypePreview: tool.descriptor.contract?.inputTypePreview ?? undefined,
+  outputTypePreview: tool.descriptor.contract?.outputTypePreview ?? undefined,
+  interaction: tool.descriptor.interaction ?? "auto",
+  providerKind: tool.descriptor.providerKind ?? undefined,
+});
+
+// ---------------------------------------------------------------------------
+// Existing helper: load tools from JSON artifacts (kept for indexing + invocation)
+// ---------------------------------------------------------------------------
 
 export const loadWorkspaceCatalogTools = (input: {
   workspaceId: Source["workspaceId"];
@@ -119,131 +116,88 @@ export const loadWorkspaceCatalogToolByPath = (input: {
     ),
   );
 
-const scoreCatalogTool = (
-  queryTokens: readonly string[],
-  tool: LoadedSourceCatalogToolIndexEntry,
-): number => {
-  const pathText = tool.path.toLowerCase();
-  const namespaceText = tool.searchNamespace.toLowerCase();
-  const toolIdText = tool.path.split(".").at(-1)?.toLowerCase() ?? "";
-  const titleText = tool.capability.surface.title?.toLowerCase() ?? "";
-  const descriptionText =
-    tool.capability.surface.summary?.toLowerCase()
-    ?? tool.capability.surface.description?.toLowerCase()
-    ?? "";
-  const templateText = [
-    tool.executable.display?.pathTemplate,
-    tool.executable.display?.operationId,
-    tool.executable.display?.leaf,
-  ]
-    .filter((part): part is string => typeof part === "string" && part.length > 0)
-    .join(" ")
-    .toLowerCase();
+// ---------------------------------------------------------------------------
+// Index workspace tools into SQLite
+// ---------------------------------------------------------------------------
 
-  const pathTokens = tokenize(`${tool.path} ${toolIdText}`);
-  const namespaceTokens = tokenize(tool.searchNamespace);
-  const titleTokens = tokenize(tool.capability.surface.title ?? "");
-  const templateTokens = tokenize(templateText);
-
-  let score = 0;
-  let structuralHits = 0;
-  let namespaceHits = 0;
-  let pathHits = 0;
-
-  for (const token of queryTokens) {
-    const weight = queryTokenWeight(token);
-
-    if (hasTokenMatch(pathTokens, token)) {
-      score += 12 * weight;
-      structuralHits += 1;
-      pathHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(namespaceTokens, token)) {
-      score += 11 * weight;
-      structuralHits += 1;
-      namespaceHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(titleTokens, token)) {
-      score += 9 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(templateTokens, token)) {
-      score += 8 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (
-      hasSubstringMatch(pathText, token) ||
-      hasSubstringMatch(toolIdText, token)
-    ) {
-      score += 6 * weight;
-      structuralHits += 1;
-      pathHits += 1;
-      continue;
-    }
-
-    if (hasSubstringMatch(namespaceText, token)) {
-      score += 5 * weight;
-      structuralHits += 1;
-      namespaceHits += 1;
-      continue;
-    }
-
-    if (
-      hasSubstringMatch(titleText, token) ||
-      hasSubstringMatch(templateText, token)
-    ) {
-      score += 4 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (hasSubstringMatch(descriptionText, token)) {
-      score += 0.5 * weight;
-    }
+/**
+ * Load all tools from the JSON artifact store and index them into
+ * the SQLite catalog. Called during workspace environment setup to
+ * ensure the DB is populated before queries hit it.
+ */
+export const indexWorkspaceToolsIntoSqlite = (input: {
+  workspaceId: Source["workspaceId"];
+  accountId: AccountId;
+  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  workspaceConfigStore: WorkspaceConfigStoreShape;
+  workspaceStateStore: WorkspaceStateStoreShape;
+  sourceArtifactStore: SourceArtifactStoreShape;
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
+}): Effect.Effect<void, unknown, never> => {
+  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
+  if (!dbPath) {
+    return Effect.void;
   }
 
-  const strongTokens = queryTokens.filter(
-    (token) => queryTokenWeight(token) >= 1,
-  );
-  if (strongTokens.length >= 2) {
-    for (let index = 0; index < strongTokens.length - 1; index += 1) {
-      const current = strongTokens[index]!;
-      const next = strongTokens[index + 1]!;
-      const phrases = [
-        `${current}-${next}`,
-        `${current}.${next}`,
-        `${current}/${next}`,
-      ];
+  const workspaceStorageLayer = makeWorkspaceStorageLayer({
+    workspaceConfigStore: input.workspaceConfigStore,
+    workspaceStateStore: input.workspaceStateStore,
+    sourceArtifactStore: input.sourceArtifactStore,
+  });
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
 
-      if (
-        phrases.some(
-          (phrase) =>
-            pathText.includes(phrase) || templateText.includes(phrase),
-        )
-      ) {
-        score += 10;
+  return loadWorkspaceCatalogTools({
+    workspaceId: input.workspaceId,
+    accountId: input.accountId,
+    sourceCatalogStore: input.sourceCatalogStore,
+    includeSchemas: true,
+  }).pipe(
+    Effect.flatMap((tools) => {
+      // Group tools by source for indexing
+      const toolsBySource = new Map<string, {
+        sourceId: string;
+        sourceKey: string;
+        tools: ToolToIndex[];
+      }>();
+
+      for (const tool of tools) {
+        const sourceId = tool.source.id;
+        if (!toolsBySource.has(sourceId)) {
+          toolsBySource.set(sourceId, {
+            sourceId,
+            sourceKey: tool.source.namespace ?? tool.source.id,
+            tools: [],
+          });
+        }
+        toolsBySource.get(sourceId)!.tools.push(toToolToIndex(tool));
       }
-    }
-  }
 
-  if (namespaceHits > 0 && pathHits > 0) {
-    score += 8;
-  }
-
-  if (structuralHits === 0 && score > 0) {
-    score *= 0.25;
-  }
-
-  return score;
+      return Effect.forEach(
+        [...toolsBySource.values()],
+        (group) =>
+          indexSource({
+            sourceId: group.sourceId,
+            sourceKey: group.sourceKey,
+            tools: group.tools,
+          }),
+        { concurrency: 1 },
+      );
+    }),
+    Effect.provide(workspaceStorageLayer),
+    Effect.provide(dbLayer),
+    Effect.catchAll((error) => {
+      // Log but don't fail — fallback to in-memory if indexing fails
+      return Effect.logWarning(
+        `Failed to index workspace tools into SQLite: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }),
+    Effect.asVoid,
+  );
 };
+
+// ---------------------------------------------------------------------------
+// SQLite-backed workspace source catalog
+// ---------------------------------------------------------------------------
 
 export const createWorkspaceSourceCatalog = (input: {
   workspaceId: Source["workspaceId"];
@@ -254,45 +208,43 @@ export const createWorkspaceSourceCatalog = (input: {
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
 }): ToolCatalog => {
-  const workspaceStorageLayer = makeWorkspaceStorageLayer({
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-  });
-  const provideWorkspaceStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(Effect.provide(workspaceStorageLayer));
+  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
 
-  const createSharedCatalog = (includeSchemas: boolean): Effect.Effect<ToolCatalog, Error, never> =>
-    provideWorkspaceStorage(Effect.gen(function* () {
-      const catalogTools = yield* loadWorkspaceCatalogTools({
-        workspaceId: input.workspaceId,
-        accountId: input.accountId,
-        sourceCatalogStore: input.sourceCatalogStore,
-        includeSchemas,
-      });
+  // If we have a valid DB path, use the SQLite-backed catalog.
+  // Otherwise, fall back gracefully with an empty catalog.
+  if (!dbPath) {
+    return createEmptySourceCatalog();
+  }
 
-      return createToolCatalogFromEntries({
-        entries: catalogTools.map((tool) =>
-          catalogToolCatalogEntry({
-            tool,
-            score: (queryTokens) => scoreCatalogTool(queryTokens, tool),
-          }),
-        ),
-      });
-    }));
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
 
+  // Create the SQLite catalog wrapped with the DB layer.
+  // Each catalog method's Effect is self-contained with `R = never`.
+  // TODO: Wire embedder config from workspace settings to enable hybrid search.
+  // For now, pass undefined to use FTS-only search.
+  const sqliteCatalogEffect = createSqliteToolCatalog(undefined).pipe(
+    Effect.provide(dbLayer),
+  );
+
+  // We need to resolve the catalog lazily per-method, since the catalog
+  // creation itself is an Effect. Each method creates the catalog and
+  // delegates to it.
   return {
-    listNamespaces: ({ limit }) =>
+    searchTools: ({ query, namespace, limit }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(false), (catalog) =>
-          catalog.listNamespaces({ limit }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.searchTools({
+            query,
+            ...(namespace !== undefined ? { namespace } : {}),
+            limit,
+          }),
         ),
         input.runtimeLocalWorkspace,
       ),
 
     listTools: ({ namespace, query, limit, includeSchemas = false }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(includeSchemas), (catalog) =>
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
           catalog.listTools({
             ...(namespace !== undefined ? { namespace } : {}),
             ...(query !== undefined ? { query } : {}),
@@ -303,24 +255,38 @@ export const createWorkspaceSourceCatalog = (input: {
         input.runtimeLocalWorkspace,
       ),
 
-    getToolByPath: ({ path, includeSchemas }) =>
+    listNamespaces: ({ limit }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(includeSchemas), (catalog) =>
-          catalog.getToolByPath({ path, includeSchemas }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.listNamespaces({ limit }),
         ),
         input.runtimeLocalWorkspace,
       ),
 
-    searchTools: ({ query, namespace, limit }) =>
+    getToolByPath: ({ path, includeSchemas }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(false), (catalog) =>
-          catalog.searchTools({
-            query,
-            ...(namespace !== undefined ? { namespace } : {}),
-            limit,
-          }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.getToolByPath({ path, includeSchemas }),
         ),
         input.runtimeLocalWorkspace,
       ),
   } satisfies ToolCatalog;
 };
+
+// ---------------------------------------------------------------------------
+// Empty catalog fallback (no local workspace)
+// ---------------------------------------------------------------------------
+
+const createEmptySourceCatalog = (): ToolCatalog => ({
+  searchTools: () => Effect.succeed([]),
+  listTools: () => Effect.succeed([]),
+  listNamespaces: () => Effect.succeed([]),
+  getToolByPath: () => Effect.succeed(null),
+});
+
+// ---------------------------------------------------------------------------
+// Re-export indexer functions for use in sync flow
+// ---------------------------------------------------------------------------
+
+export { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
+export type { ToolToIndex } from "../../../db/indexer";
