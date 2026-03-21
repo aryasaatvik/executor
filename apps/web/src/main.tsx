@@ -17,6 +17,7 @@ import { ExecutionsPage } from "./views/executions";
 import { EditSourcePage, NewSourcePage } from "./views/source-editor";
 import { SourceDetailPage } from "./views/source-detail";
 import { SecretsPage } from "./views/secrets";
+import { SettingsPage } from "./views/settings";
 import { AddSourcePage } from "./views/add-source";
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,12 @@ const secretsRoute = createRoute({
   component: SecretsPage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 
 function SourceDetailPageWrapper() {
   const { sourceId } = sourceRoute.useParams();
@@ -113,7 +120,7 @@ function EditSourcePageWrapper() {
 // Router
 // ---------------------------------------------------------------------------
 
-const routeTree = rootRoute.addChildren([dashboardRoute, executionsRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute]);
+const routeTree = rootRoute.addChildren([dashboardRoute, executionsRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute, settingsRoute]);
 
 const router = createRouter({
   routeTree,
