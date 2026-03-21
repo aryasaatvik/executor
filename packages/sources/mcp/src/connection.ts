@@ -2,6 +2,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { hasAuthorizationHeader } from "@executor/source-core";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 
@@ -159,6 +160,9 @@ export const createSdkMcpConnector = (
   const transport = isMcpStdioTransport(input)
     ? "stdio"
     : (input.transport ?? "auto");
+  const effectiveAuthProvider = hasAuthorizationHeader(headers)
+    ? undefined
+    : input.authProvider;
   const requestInit = Object.keys(headers).length > 0
     ? { headers }
     : undefined;
@@ -209,7 +213,7 @@ export const createSdkMcpConnector = (
       createTransport: () =>
         new StreamableHTTPClientTransport(endpoint, {
           requestInit,
-          authProvider: input.authProvider,
+          authProvider: effectiveAuthProvider,
         }),
     });
 
@@ -222,7 +226,7 @@ export const createSdkMcpConnector = (
       transport: "sse",
       createTransport: () =>
         new SSEClientTransport(endpoint, {
-          authProvider: input.authProvider,
+          authProvider: effectiveAuthProvider,
           requestInit,
           eventSourceInit: requestInit
             ? {

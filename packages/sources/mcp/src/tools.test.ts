@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { UrlElicitationRequiredError } from "@modelcontextprotocol/sdk/types.js";
@@ -16,6 +19,7 @@ import type {
 } from "@executor/codemode-core";
 
 import { createSdkMcpConnector } from "./connection";
+import { detectMcpSource } from "./discovery";
 import {
   McpToolsError,
   discoverMcpToolsFromConnector,
@@ -47,6 +51,11 @@ const resolveToolExecutor = (
 type RealMcpServer = {
   endpoint: string;
   seenValues: string[];
+  close: () => Promise<void>;
+};
+
+type OAuthProtectedMcpServer = {
+  endpoint: string;
   close: () => Promise<void>;
 };
 
@@ -151,6 +160,236 @@ const makeRealMcpServer = Effect.acquireRelease(
         error instanceof Error ? error : new Error(String(error)),
     }).pipe(Effect.orDie),
 );
+
+const makeAuthenticatedMcpServer = (expectedAuthorization: string) =>
+  Effect.acquireRelease(
+    Effect.promise<RealMcpServer>(
+      () =>
+        new Promise<RealMcpServer>((resolve, reject) => {
+          const seenValues: string[] = [];
+
+          const createServerForRequest = () => {
+            const mcp = new McpServer(
+              {
+                name: "codemode-mcp-auth-test-server",
+                version: "1.0.0",
+              },
+              {
+                capabilities: {
+                  tools: {},
+                },
+              },
+            );
+
+            mcp.registerTool(
+              "echo",
+              {
+                description: "Echoes the input value after auth succeeds",
+                inputSchema: {
+                  value: z.string(),
+                },
+              },
+              async ({ value }: { value: string }) => {
+                seenValues.push(value);
+                return {
+                  content: [{ type: "text", text: `echo:${value}` }],
+                };
+              },
+            );
+
+            const transport = new StreamableHTTPServerTransport({
+              sessionIdGenerator: undefined,
+            });
+
+            return { mcp, transport };
+          };
+
+          const app = createMcpExpressApp({ host: "127.0.0.1" });
+
+          const handle = async (req: any, res: any, parsedBody?: unknown) => {
+            if (req.headers.authorization !== expectedAuthorization) {
+              res.status(401).json({
+                jsonrpc: "2.0",
+                error: {
+                  code: -32001,
+                  message: "Unauthorized",
+                },
+                id: null,
+              });
+              return;
+            }
+
+            const { mcp, transport } = createServerForRequest();
+            try {
+              await mcp.connect(transport);
+              await transport.handleRequest(req, res, parsedBody);
+            } finally {
+              await transport.close().catch(() => undefined);
+              await mcp.close().catch(() => undefined);
+            }
+          };
+
+          app.post("/mcp", async (req: any, res: any) => {
+            await handle(req, res, req.body);
+          });
+
+          app.get("/mcp", async (req: any, res: any) => {
+            await handle(req, res);
+          });
+
+          app.delete("/mcp", async (req: any, res: any) => {
+            await handle(req, res, req.body);
+          });
+
+          const listener = app.listen(0, "127.0.0.1", () => {
+            const address = listener.address();
+            if (!address || typeof address === "string") {
+              reject(new Error("failed to resolve authenticated MCP test server address"));
+              return;
+            }
+
+            resolve({
+              endpoint: `http://127.0.0.1:${address.port}/mcp`,
+              seenValues,
+              close: async () => {
+                await new Promise<void>((closeResolve, closeReject) => {
+                  listener.close((error: Error | undefined) => {
+                    if (error) {
+                      closeReject(error);
+                      return;
+                    }
+                    closeResolve();
+                  });
+                });
+              },
+            });
+          });
+
+          listener.once("error", reject);
+        }),
+    ),
+    (server: RealMcpServer) =>
+      Effect.tryPromise({
+        try: () => server.close(),
+        catch: (error: unknown) =>
+          error instanceof Error ? error : new Error(String(error)),
+      }).pipe(Effect.orDie),
+  );
+
+const makeOAuthProtectedMcpServer = Effect.acquireRelease(
+  Effect.promise<OAuthProtectedMcpServer>(
+    () =>
+      new Promise<OAuthProtectedMcpServer>((resolve, reject) => {
+        const app = createMcpExpressApp({ host: "127.0.0.1" });
+        const listener = app.listen(0, "127.0.0.1", () => {
+          const address = listener.address();
+          if (!address || typeof address === "string") {
+            reject(new Error("failed to resolve OAuth-protected MCP test server address"));
+            return;
+          }
+
+          const baseUrl = `http://127.0.0.1:${address.port}`;
+          const endpoint = `${baseUrl}/mcp`;
+          const resourceMetadataUrl = `${baseUrl}/.well-known/oauth-protected-resource/mcp`;
+
+          app.post("/mcp", (_req: any, res: any) => {
+            res.status(401).set(
+              "WWW-Authenticate",
+              `Bearer resource_metadata="${resourceMetadataUrl}"`,
+            ).json({
+              error: "unauthorized",
+            });
+          });
+
+          app.get("/mcp", (_req: any, res: any) => {
+            res.status(401).set(
+              "WWW-Authenticate",
+              `Bearer resource_metadata="${resourceMetadataUrl}"`,
+            ).json({
+              error: "unauthorized",
+            });
+          });
+
+          app.get("/.well-known/oauth-protected-resource/mcp", (_req: any, res: any) => {
+            res.status(200).json({
+              resource: endpoint,
+              authorization_servers: [baseUrl],
+              scopes_supported: ["openid", "offline_access"],
+              bearer_methods_supported: ["header"],
+            });
+          });
+
+          app.get("/.well-known/oauth-authorization-server", (_req: any, res: any) => {
+            res.status(200).json({
+              issuer: baseUrl,
+              authorization_endpoint: `${baseUrl}/authorize`,
+              token_endpoint: `${baseUrl}/token`,
+              registration_endpoint: `${baseUrl}/register`,
+              response_types_supported: ["code"],
+              grant_types_supported: ["authorization_code", "refresh_token"],
+              code_challenge_methods_supported: ["S256"],
+              token_endpoint_auth_methods_supported: ["none"],
+            });
+          });
+
+          app.post("/register", (req: any, res: any) => {
+            res.status(201).json({
+              ...req.body,
+              client_id: `client_${randomUUID()}`,
+              client_id_issued_at: Math.floor(Date.now() / 1000),
+            });
+          });
+
+          resolve({
+            endpoint,
+            close: async () => {
+              await new Promise<void>((closeResolve, closeReject) => {
+                listener.close((error: Error | undefined) => {
+                  if (error) {
+                    closeReject(error);
+                    return;
+                  }
+                  closeResolve();
+                });
+              });
+            },
+          });
+        });
+
+        listener.once("error", reject);
+      }),
+  ),
+  (server) =>
+    Effect.tryPromise({
+      try: () => server.close(),
+      catch: (error: unknown) =>
+        error instanceof Error ? error : new Error(String(error)),
+    }).pipe(Effect.orDie),
+);
+
+const makeThrowingAuthProvider = (): OAuthClientProvider => ({
+  redirectUrl: "http://127.0.0.1/callback",
+  clientMetadata: {
+    redirect_uris: ["http://127.0.0.1/callback"],
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+    client_name: "codemode-mcp-test",
+  },
+  clientInformation: () => undefined,
+  saveClientInformation: () => Promise.resolve(),
+  tokens: () => {
+    throw new Error("authProvider.tokens should not be called");
+  },
+  saveTokens: () => Promise.resolve(),
+  redirectToAuthorization: () => {
+    throw new Error("redirectToAuthorization should not be called");
+  },
+  saveCodeVerifier: () => undefined,
+  codeVerifier: () => {
+    throw new Error("codeVerifier should not be called");
+  },
+});
 
 
 describe("codemode-mcp", () => {
@@ -424,6 +663,48 @@ describe("codemode-mcp", () => {
         content: [{ type: "text", text: "echo:from-test" }],
       });
       expect(realServer.seenValues).toEqual(["from-test"]);
+    }),
+  );
+
+  it.scoped("does not consult authProvider when an Authorization header is already configured", () =>
+    Effect.gen(function* () {
+      const realServer = yield* makeAuthenticatedMcpServer("Bearer header-token");
+
+      const discovered = yield* discoverMcpToolsFromConnector({
+        connect: createSdkMcpConnector({
+          endpoint: realServer.endpoint,
+          transport: "streamable-http",
+          headers: {
+            Authorization: "Bearer header-token",
+          },
+          authProvider: makeThrowingAuthProvider(),
+        }),
+        namespace: "source.auth.header",
+        sourceKey: "mcp.auth.header",
+      });
+
+      expect(Object.keys(discovered.tools)).toEqual(["source.auth.header.echo"]);
+    }),
+  );
+
+  it.scoped("infers MCP OAuth only when discovery does not already include Authorization headers", () =>
+    Effect.gen(function* () {
+      const oauthServer = yield* makeOAuthProtectedMcpServer;
+
+      const unauthenticated = yield* detectMcpSource({
+        normalizedUrl: oauthServer.endpoint,
+        headers: {},
+      });
+      expect(unauthenticated?.detectedKind).toBe("mcp");
+      expect(unauthenticated?.authInference.suggestedKind).toBe("oauth2");
+
+      const explicitHeader = yield* detectMcpSource({
+        normalizedUrl: oauthServer.endpoint,
+        headers: {
+          Authorization: "Bearer wrong-token",
+        },
+      });
+      expect(explicitHeader).toBeNull();
     }),
   );
 

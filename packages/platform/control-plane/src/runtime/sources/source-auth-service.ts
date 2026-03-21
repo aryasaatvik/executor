@@ -6,6 +6,7 @@ import {
 } from "@executor/source-mcp";
 import {
   isSourceCredentialRequiredError,
+  hasAuthorizationHeader,
   type SourceAdapterOauth2SetupConfig,
 } from "@executor/source-core";
 import {
@@ -1984,9 +1985,19 @@ const connectMcpSourceInternal = (input: {
         input.mcpDiscoveryElicitation,
       ),
     );
+    const hasExplicitAuthorization = hasAuthorizationHeader(chosenHeaders);
 
     const connectedResult = yield* Either.match(discovered, {
-      onLeft: () => Effect.succeed(null),
+      onLeft: (error) =>
+        hasExplicitAuthorization
+          ? updateSourceStatus(input.sourceStore, persistedDraft, {
+              actorAccountId: input.actorAccountId,
+              status: "error",
+              lastError: error.message,
+            }).pipe(
+              Effect.zipRight(Effect.fail(error)),
+            )
+          : Effect.succeed(null),
       onRight: (result) =>
         Effect.gen(function* () {
           const connected = yield* updateSourceStatus(input.sourceStore, persistedDraft, {

@@ -12,6 +12,7 @@ import {
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
+import * as Either from "effect/Either";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
@@ -1503,6 +1504,89 @@ describe("local-executor-server", () => {
       expect(approvedToolCall.execution.status).toBe("completed");
       expect(approvedToolCall.pendingInteraction).toBeNull();
       expect(approvedToolCall.execution.resultJson).toContain("oauth-demo");
+    })),
+    15_000,
+  );
+
+  it.live("connects an OAuth-capable MCP source with explicit Authorization headers instead of falling through to OAuth", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const oauthServer = yield* Effect.acquireRelease(
+        Effect.promise(() => startOAuthProtectedMcpServer()),
+        (server) => Effect.promise(() => server.close()).pipe(Effect.orDie),
+      );
+      const { installation, client } = yield* createApiClientHarness();
+
+      const connected = yield* client.sources.connect({
+        path: {
+          workspaceId: installation.workspaceId,
+        },
+        payload: {
+          kind: "mcp",
+          endpoint: oauthServer.endpoint,
+          name: "Axiom Static",
+          namespace: "axiom.static",
+          headers: {
+            Authorization: `Bearer ${DEMO_OAUTH_ACCESS_TOKEN}`,
+          },
+        },
+      });
+
+      expect(connected.kind).toBe("connected");
+      if (connected.kind !== "connected") {
+        throw new Error(`Expected connected result, received ${connected.kind}`);
+      }
+      expect(connected.source.status).toBe("connected");
+      expect(connected.source.auth.kind).toBe("none");
+
+      const inspection = yield* client.sources.inspection({
+        path: {
+          workspaceId: installation.workspaceId,
+          sourceId: connected.source.id,
+        },
+      });
+
+      expect(inspection.namespace).toBe("axiom.static");
+      expect(inspection.toolCount).toBeGreaterThan(0);
+    })),
+    15_000,
+  );
+
+  it.live("fails MCP connect with the original auth error when explicit Authorization headers are invalid", () =>
+    Effect.scoped(Effect.gen(function* () {
+      const oauthServer = yield* Effect.acquireRelease(
+        Effect.promise(() => startOAuthProtectedMcpServer()),
+        (server) => Effect.promise(() => server.close()).pipe(Effect.orDie),
+      );
+      const { installation, client } = yield* createApiClientHarness();
+
+      const failed = yield* Effect.either(client.sources.connect({
+        path: {
+          workspaceId: installation.workspaceId,
+        },
+        payload: {
+          kind: "mcp",
+          endpoint: oauthServer.endpoint,
+          name: "Axiom Invalid Static",
+          namespace: "axiom.invalid.static",
+          headers: {
+            Authorization: "Bearer not-the-right-token",
+          },
+        },
+      }));
+
+      assertTrue(Either.isLeft(failed));
+      expect(failed.left.message).toContain("Failed connecting to MCP server");
+
+      const sources = yield* client.sources.list({
+        path: {
+          workspaceId: installation.workspaceId,
+        },
+      });
+      const source = sources.find((entry) => entry.namespace === "axiom.invalid.static");
+
+      expect(source?.status).toBe("error");
+      expect(source?.auth.kind).toBe("none");
+      expect(source?.lastError).toContain("Failed connecting to MCP server");
     })),
     15_000,
   );

@@ -1,5 +1,6 @@
 import {
   defaultNameFromEndpoint,
+  hasAuthorizationHeader,
   namespaceFromSourceName,
   noneAuthInference,
   supportedAuthInference,
@@ -7,6 +8,7 @@ import {
   type SourceDiscoveryResult,
 } from "@executor/source-core";
 import { startMcpOAuthAuthorization } from "@executor/auth-mcp-oauth";
+import * as Cause from "effect/Cause";
 import * as Either from "effect/Either";
 import * as Effect from "effect/Effect";
 
@@ -48,6 +50,12 @@ export const detectMcpSource = (
       } satisfies SourceDiscoveryResult;
     }
 
+    if (hasAuthorizationHeader(input.headers)) {
+      return yield* Effect.logDebug("Skipping OAuth inference — explicit Authorization header present").pipe(
+        Effect.zipRight(Effect.succeed(null)),
+      );
+    }
+
     const oauthProbe = yield* Effect.either(startMcpOAuthAuthorization({
       endpoint: input.normalizedUrl,
       redirectUrl: "http://127.0.0.1/executor/discovery/oauth/callback",
@@ -81,4 +89,10 @@ export const detectMcpSource = (
       toolCount: null,
       warnings: ["OAuth is required before MCP tools can be listed."],
     } satisfies SourceDiscoveryResult;
-  }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+  }).pipe(
+    Effect.catchAllCause((cause) =>
+      Effect.logDebug(`MCP source detection failed: ${Cause.pretty(cause)}`).pipe(
+        Effect.zipRight(Effect.succeed(null)),
+      )
+    ),
+  );
