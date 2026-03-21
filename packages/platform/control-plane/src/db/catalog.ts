@@ -296,7 +296,10 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // No query — use Drizzle query builder
           const db = yield* SqliteDrizzle
 
-          const conditions = [eq(catalog_tool.source_enabled, true)]
+          const conditions = [
+            eq(catalog_tool.source_enabled, true),
+            eq(catalog_tool.source_status, "connected"),
+          ]
           if (namespace) {
             conditions.push(eq(catalog_tool.namespace, namespace))
           }
@@ -349,7 +352,11 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           const rows = yield* db
             .select(descriptorColumns)
             .from(catalog_tool)
-            .where(eq(catalog_tool.path, path))
+            .where(and(
+              eq(catalog_tool.path, path),
+              eq(catalog_tool.source_enabled, true),
+              eq(catalog_tool.source_status, "connected"),
+            ))
             .limit(1)
 
           if (rows.length === 0) {
