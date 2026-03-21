@@ -1007,6 +1007,13 @@ export const createLocalControlPlaneStore = (
             : Option.none<Execution>();
         }),
 
+      listByWorkspaceId: (workspaceId: Execution["workspaceId"]) =>
+        stateManager.read((state) =>
+          [...state.executions]
+            .filter((e) => e.workspaceId === workspaceId)
+            .sort((a, b) => b.createdAt - a.createdAt),
+        ),
+
       insert: (execution: Execution) =>
         stateManager.mutate((state) => ({
           state: {

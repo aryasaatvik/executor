@@ -54,6 +54,8 @@ import { runtimeEffectError } from "../effect-errors";
 const executionOps = {
   create: operationErrors("executions.create"),
   get: operationErrors("executions.get"),
+  list: operationErrors("executions.list"),
+  listSteps: operationErrors("executions.listSteps"),
   resume: operationErrors("executions.resume"),
 } as const;
 
@@ -619,7 +621,8 @@ const persistExecutionOutcome = (input: {
       state: updated.value.status === "completed" ? "completed" : "failed",
     });
 
-    yield* input.rows.executionSteps.deleteByExecutionId(input.executionId);
+    // Retained for observability analytics
+    // yield* input.rows.executionSteps.deleteByExecutionId(input.executionId);
   });
 
 const persistExecutionFailure = (input: {
@@ -647,7 +650,8 @@ const persistExecutionFailure = (input: {
       state: "failed",
     });
 
-    yield* input.rows.executionSteps.deleteByExecutionId(input.executionId);
+    // Retained for observability analytics
+    // yield* input.rows.executionSteps.deleteByExecutionId(input.executionId);
   });
 
 const runExecutionAttemptWithDependencies = (
@@ -1008,4 +1012,31 @@ export const resumeExecution = (input: {
       previousPendingInteractionId: existing.pendingInteraction?.id ?? null,
       attemptsRemaining: 400,
     });
+  });
+
+export const listExecutions = (input: {
+  workspaceId: WorkspaceId;
+}) =>
+  Effect.flatMap(ControlPlaneStore, (store) =>
+    executionOps.list.mapStorage(
+      store.executions.listByWorkspaceId(input.workspaceId),
+    ),
+  );
+
+export const listExecutionSteps = (input: {
+  workspaceId: WorkspaceId;
+  executionId: ExecutionId;
+}) =>
+  Effect.gen(function* () {
+    const store = yield* ControlPlaneStore;
+
+    yield* fetchExecution(store, {
+      workspaceId: input.workspaceId,
+      executionId: input.executionId,
+      operation: executionOps.listSteps,
+    });
+
+    return yield* executionOps.listSteps.mapStorage(
+      store.executionSteps.listByExecutionId(input.executionId),
+    );
   });

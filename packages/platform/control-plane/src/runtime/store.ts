@@ -162,6 +162,9 @@ export type ControlPlaneStoreShape = {
       workspaceId: Execution["workspaceId"],
       executionId: Execution["id"],
     ) => Effect.Effect<import("effect/Option").Option<Execution>, Error, never>;
+    listByWorkspaceId: (
+      workspaceId: Execution["workspaceId"],
+    ) => Effect.Effect<readonly Execution[], Error, never>;
     insert: (execution: Execution) => Effect.Effect<void, Error, never>;
     update: (
       executionId: Execution["id"],

@@ -3,6 +3,8 @@ import * as Effect from "effect/Effect";
 import {
   createExecution,
   getExecution,
+  listExecutionSteps,
+  listExecutions,
   resumeExecution,
 } from "../../runtime/execution/service";
 
@@ -44,6 +46,25 @@ export const ControlPlaneExecutionsLive = HttpApiBuilder.group(
               payload,
               resumedByAccountId: runtimeLocalWorkspace.installation.accountId,
             })
+          ),
+        ),
+      )
+      .handle("list", ({ path }) =>
+        resolveRequestedLocalWorkspace("executions.list", path.workspaceId).pipe(
+          Effect.zipRight(
+            listExecutions({
+              workspaceId: path.workspaceId,
+            }),
+          ),
+        ),
+      )
+      .handle("listSteps", ({ path }) =>
+        resolveRequestedLocalWorkspace("executions.listSteps", path.workspaceId).pipe(
+          Effect.zipRight(
+            listExecutionSteps({
+              workspaceId: path.workspaceId,
+              executionId: path.executionId,
+            }),
           ),
         ),
       ),

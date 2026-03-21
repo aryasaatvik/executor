@@ -2,6 +2,8 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform";
 import {
   ExecutionIdSchema,
   ExecutionEnvelopeSchema,
+  ExecutionSchema,
+  ExecutionStepSchema,
   WorkspaceIdSchema,
 } from "#schema";
 import * as Schema from "effect/Schema";
@@ -56,6 +58,24 @@ export class ExecutionsApi extends HttpApiGroup.make("executions")
     HttpApiEndpoint.post("resume")`/workspaces/${workspaceIdParam}/executions/${executionIdParam}/resume`
       .setPayload(ResumeExecutionPayloadSchema)
       .addSuccess(ExecutionEnvelopeSchema)
+      .addError(ControlPlaneBadRequestError)
+      .addError(ControlPlaneUnauthorizedError)
+      .addError(ControlPlaneForbiddenError)
+      .addError(ControlPlaneNotFoundError)
+      .addError(ControlPlaneStorageError),
+  )
+  .add(
+    HttpApiEndpoint.get("list")`/workspaces/${workspaceIdParam}/executions`
+      .addSuccess(Schema.Array(ExecutionSchema))
+      .addError(ControlPlaneBadRequestError)
+      .addError(ControlPlaneUnauthorizedError)
+      .addError(ControlPlaneForbiddenError)
+      .addError(ControlPlaneNotFoundError)
+      .addError(ControlPlaneStorageError),
+  )
+  .add(
+    HttpApiEndpoint.get("listSteps")`/workspaces/${workspaceIdParam}/executions/${executionIdParam}/steps`
+      .addSuccess(Schema.Array(ExecutionStepSchema))
       .addError(ControlPlaneBadRequestError)
       .addError(ControlPlaneUnauthorizedError)
       .addError(ControlPlaneForbiddenError)
