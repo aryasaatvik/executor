@@ -8,6 +8,7 @@ import { createSqliteToolCatalog } from "./catalog";
 
 type CatalogRow = {
   path: string
+  namespace: string
   source_key: string
   description: string | null
   interaction: string | null
@@ -98,28 +99,65 @@ const matchesConditions = (
   })
 
 const makeFakeDb = (rows: readonly CatalogRow[]) => ({
-  select: () => ({
+  select: (fields: Record<string, unknown>) => ({
     from: () => ({
       where: (condition: unknown) => ({
-        limit: (limit: number) =>
-          Effect.succeed(
-            rows
-              .filter((row) =>
-                matchesConditions(row, extractEqualsConditions(condition)),
-              )
-              .slice(0, limit)
-              .map((row) => ({
-                path: row.path,
-                source_key: row.source_key,
-                description: row.description,
-                interaction: row.interaction,
-                input_type_preview: row.input_type_preview,
-                output_type_preview: row.output_type_preview,
-                input_schema_json: row.input_schema_json,
-                output_schema_json: row.output_schema_json,
-                provider_kind: row.provider_kind,
+        limit: (limit: number) => {
+          const filteredRows = rows
+            .filter((row) =>
+              matchesConditions(row, extractEqualsConditions(condition)),
+            )
+            .slice(0, limit)
+
+          if ("tool_count" in fields) {
+            return Effect.succeed(
+              Array.from(
+                filteredRows.reduce((acc, row) => {
+                  acc.set(row.namespace, (acc.get(row.namespace) ?? 0) + 1)
+                  return acc
+                }, new Map<string, number>()),
+              ).map(([namespace, tool_count]) => ({
+                namespace,
+                tool_count,
               })),
-          ),
+            )
+          }
+
+          return Effect.succeed(
+            filteredRows.map((row) => ({
+              path: row.path,
+              source_key: row.source_key,
+              description: row.description,
+              interaction: row.interaction,
+              input_type_preview: row.input_type_preview,
+              output_type_preview: row.output_type_preview,
+              input_schema_json: row.input_schema_json,
+              output_schema_json: row.output_schema_json,
+              provider_kind: row.provider_kind,
+            })),
+          )
+        },
+        groupBy: () => ({
+          limit: (limit: number) => {
+            const filteredRows = rows.filter((row) =>
+              matchesConditions(row, extractEqualsConditions(condition))
+            )
+
+            return Effect.succeed(
+              Array.from(
+                filteredRows.reduce((acc, row) => {
+                  acc.set(row.namespace, (acc.get(row.namespace) ?? 0) + 1)
+                  return acc
+                }, new Map<string, number>()),
+              )
+                .slice(0, limit)
+                .map(([namespace, tool_count]) => ({
+                  namespace,
+                  tool_count,
+                })),
+            )
+          },
+        }),
       }),
     }),
   }),
@@ -139,6 +177,7 @@ describe("sqlite catalog", () => {
   const rows: readonly CatalogRow[] = [
     {
       path: "github.connected",
+      namespace: "github",
       source_key: "github",
       description: "Connected tool",
       interaction: "auto",
@@ -152,6 +191,7 @@ describe("sqlite catalog", () => {
     },
     {
       path: "github.disconnected",
+      namespace: "github",
       source_key: "github",
       description: "Disconnected tool",
       interaction: "auto",
@@ -165,6 +205,7 @@ describe("sqlite catalog", () => {
     },
     {
       path: "github.disabled",
+      namespace: "github",
       source_key: "github",
       description: "Disabled tool",
       interaction: "auto",
@@ -207,6 +248,49 @@ describe("sqlite catalog", () => {
       expect(connected?.path).toBe("github.connected")
       expect(disconnected).toBeNull()
       expect(disabled).toBeNull()
+    }),
+  )
+
+  it.effect("listNamespaces excludes disabled and disconnected sources", () =>
+    Effect.gen(function* () {
+      const catalog = yield* makeCatalog([
+        ...rows,
+        {
+          path: "slack.messages.send",
+          namespace: "slack.messages",
+          source_key: "slack",
+          description: "Slack tool",
+          interaction: "auto",
+          input_type_preview: null,
+          output_type_preview: null,
+          input_schema_json: null,
+          output_schema_json: null,
+          provider_kind: null,
+          source_enabled: true,
+          source_status: "connected",
+        },
+        {
+          path: "slack.messages.archived",
+          namespace: "slack.messages",
+          source_key: "slack",
+          description: "Disconnected Slack tool",
+          interaction: "auto",
+          input_type_preview: null,
+          output_type_preview: null,
+          input_schema_json: null,
+          output_schema_json: null,
+          provider_kind: null,
+          source_enabled: true,
+          source_status: "error",
+        },
+      ])
+
+      const namespaces = yield* catalog.listNamespaces({ limit: 10 })
+
+      expect(namespaces).toEqual([
+        { namespace: "github", toolCount: 1 },
+        { namespace: "slack.messages", toolCount: 1 },
+      ])
     }),
   )
 })

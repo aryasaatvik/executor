@@ -140,7 +140,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
     // -----------------------------------------------------------------------
     // searchTools
     // -----------------------------------------------------------------------
-    searchTools: ({ query, namespace, limit }) =>
+    searchTools: ({ query, namespace, sourceKey, limit }) =>
       run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
@@ -154,10 +154,14 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           }
 
           const namespaceClause = namespace ? `AND t.namespace = ?` : ""
+          const sourceKeyClause = sourceKey ? `AND t.source_key = ?` : ""
           const ftsLimit = embedder ? limit * 2 : limit
-          const params: Array<string | number> = namespace
-            ? [ftsQuery, namespace, ftsLimit]
-            : [ftsQuery, ftsLimit]
+          const params: Array<string | number> = [
+            ftsQuery,
+            ...(namespace ? [namespace] : []),
+            ...(sourceKey ? [sourceKey] : []),
+            ftsLimit,
+          ]
 
           const rows = yield* sql.unsafe<{
             path: string
@@ -171,6 +175,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
                AND t.source_enabled = 1
                AND t.source_status = 'connected'
                ${namespaceClause}
+               ${sourceKeyClause}
              ORDER BY raw_score DESC
              LIMIT ?`,
             params,
@@ -208,6 +213,8 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           const vecResults = yield* searchVec({
             queryEmbedding,
             limit: limit * 2,
+            ...(sourceKey ? { sourceFilter: sourceKey } : {}),
+            ...(namespace ? { namespaceFilter: namespace } : {}),
           }).pipe(Effect.catchAll(() => Effect.succeed([] as { toolId: string; score: number }[])))
 
           // -----------------------------------------------------------------
@@ -330,7 +337,10 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
               tool_count: drizzleSql<number>`COUNT(*)`.as("tool_count"),
             })
             .from(catalog_tool)
-            .where(eq(catalog_tool.source_enabled, true))
+            .where(and(
+              eq(catalog_tool.source_enabled, true),
+              eq(catalog_tool.source_status, "connected"),
+            ))
             .groupBy(catalog_tool.namespace)
             .limit(limit)
 
