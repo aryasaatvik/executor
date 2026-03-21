@@ -27,6 +27,7 @@ import {
 } from "../../sources/source-auth-service";
 import { createExecutorToolMap } from "../../sources/executor-tools";
 import { invokeIrTool } from "../ir-execution";
+import type { Embedder } from "../../../db/embedder";
 import {
   authorizePersistedToolInvocation,
   toSecretResolutionContext,
@@ -49,6 +50,7 @@ export const createWorkspaceToolInvoker = (input: {
   sourceAuthService: RuntimeSourceAuthService;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;
+  embedder?: Embedder;
   onElicitation?: Parameters<
     typeof makeToolInvokerFromTools
   >[0]["onElicitation"];
@@ -78,6 +80,7 @@ export const createWorkspaceToolInvoker = (input: {
     workspaceStateStore: input.workspaceStateStore,
     sourceArtifactStore: input.sourceArtifactStore,
     runtimeLocalWorkspace: input.runtimeLocalWorkspace,
+    embedder: input.embedder,
   });
   let catalog: ToolCatalog | null = null;
   const systemTools = createSystemToolMap({

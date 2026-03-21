@@ -39,6 +39,8 @@ import {
   WorkspaceStateStore,
   type WorkspaceStateStoreShape,
 } from "../../local/storage";
+import { createEmbedder, type Embedder } from "../../../db/embedder";
+import type { LocalExecutorConfig } from "#schema";
 export {
   createCodeExecutorForRuntime,
   resolveConfiguredExecutionRuntime,
@@ -50,6 +52,24 @@ const createEmptyLocalToolRuntime = (): LocalToolRuntime => ({
   toolInvoker: makeToolInvokerFromTools({ tools: {} }),
   toolPaths: new Set<string>(),
 });
+
+const loadConfiguredSemanticSearchEmbedder = (
+  config: LocalExecutorConfig | null | undefined,
+): Effect.Effect<Embedder | undefined, never, never> => {
+  const semanticSearchConfig = config?.semanticSearch;
+  if (!semanticSearchConfig) {
+    return Effect.succeed(undefined);
+  }
+
+  return Effect.tryPromise(() => createEmbedder(semanticSearchConfig)).pipe(
+    Effect.map((embedder) => embedder ?? undefined),
+    Effect.catchAll((error) =>
+      Effect.logWarning(
+        `Failed to initialize semantic search embedder: ${error instanceof Error ? error.message : String(error)}`,
+      ).pipe(Effect.as(undefined)),
+    ),
+  );
+};
 
 export const createWorkspaceExecutionEnvironmentResolver = (input: {
   sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
@@ -71,6 +91,9 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         runtimeLocalWorkspace === null
           ? createEmptyLocalToolRuntime()
           : yield* input.localToolRuntimeLoader.load(runtimeLocalWorkspace.context);
+      const embedder = yield* loadConfiguredSemanticSearchEmbedder(
+        loadedConfig?.config,
+      );
 
       // Populate the SQLite catalog index from JSON artifacts.
       // This runs before the catalog is queried so FTS results are up-to-date.
@@ -83,6 +106,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
           workspaceStateStore: input.workspaceStateStore,
           sourceArtifactStore: input.sourceArtifactStore,
           runtimeLocalWorkspace,
+          embedder,
         });
       }
 
@@ -97,6 +121,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         sourceAuthService: input.sourceAuthService,
         runtimeLocalWorkspace,
         localToolRuntime,
+        embedder,
         onElicitation,
       });
 

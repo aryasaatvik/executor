@@ -34,6 +34,10 @@ describe("local-config", () => {
         join(configDirectory, "executor.jsonc"),
         `{
   "runtime": "ses",
+  "semanticSearch": {
+    "provider": "openai",
+    "model": "text-embedding-3-small"
+  },
   // local workspace config
   "sources": {
     "github": {
@@ -57,8 +61,10 @@ describe("local-config", () => {
       expect(loaded.config?.sources?.github?.connection.endpoint).toBe(
         "https://api.github.com",
       );
+      expect(loaded.config?.semanticSearch?.provider).toBe("openai");
+      expect(loaded.config?.semanticSearch?.model).toBe("text-embedding-3-small");
       expect(loaded.config?.runtime).toBe("ses");
-      expect(context.homeStateDirectory).toContain("executor");
+      expect(context.homeStateDirectory).toMatch(/executor/i);
     }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 
@@ -133,13 +139,23 @@ describe("local-config", () => {
     const merged = mergeLocalExecutorConfigs(
       {
         runtime: "quickjs",
+        semanticSearch: {
+          provider: "local",
+          model: "Qwen3-Embedding-0.6B-Q8_0",
+        },
         sources: {},
       },
       {
         runtime: "deno",
+        semanticSearch: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
       },
     );
 
     expect(merged?.runtime).toBe("deno");
+    expect(merged?.semanticSearch?.provider).toBe("openai");
+    expect(merged?.semanticSearch?.model).toBe("text-embedding-3-small");
   });
 });

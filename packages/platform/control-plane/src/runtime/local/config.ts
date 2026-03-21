@@ -248,6 +248,7 @@ export const mergeLocalExecutorConfigs = (
       ...base?.workspace,
       ...extra?.workspace,
     },
+    semanticSearch: extra?.semanticSearch ?? base?.semanticSearch,
     sources: mergeSourceMaps(base?.sources, extra?.sources),
     policies: mergePolicyMaps(base?.policies, extra?.policies),
     secrets: {

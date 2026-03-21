@@ -139,9 +139,17 @@ export const LocalConfigWorkspaceSchema = Schema.Struct({
   name: Schema.optional(Schema.String),
 });
 
+export const LocalConfigSemanticSearchSchema = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.optional(Schema.String),
+  apiKey: Schema.optional(Schema.String),
+  dimensions: Schema.optional(Schema.Number),
+});
+
 export const LocalExecutorConfigSchema = Schema.Struct({
   runtime: Schema.optional(LocalExecutorRuntimeSchema),
   workspace: Schema.optional(LocalConfigWorkspaceSchema),
+  semanticSearch: Schema.optional(LocalConfigSemanticSearchSchema),
   sources: Schema.optional(
     Schema.Record({
       key: Schema.String,
@@ -166,5 +174,6 @@ export type LocalConfigExplicitSecretRef =
 export type LocalConfigSecretInput = typeof LocalConfigSecretInputSchema.Type;
 export type LocalConfigPolicy = typeof LocalConfigPolicySchema.Type;
 export type LocalConfigSecrets = typeof LocalConfigSecretsSchema.Type;
+export type LocalConfigSemanticSearch = typeof LocalConfigSemanticSearchSchema.Type;
 export type LocalExecutorRuntime = typeof LocalExecutorRuntimeSchema.Type;
 export type LocalExecutorConfig = typeof LocalExecutorConfigSchema.Type;

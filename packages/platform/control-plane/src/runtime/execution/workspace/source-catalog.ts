@@ -21,7 +21,11 @@ import { createSqliteToolCatalog } from "../../../db/catalog";
 import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
 import { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
 import type { ToolToIndex } from "../../../db/indexer";
+import type { Embedder } from "../../../db/embedder";
+import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-indexer";
+import { catalog_tool } from "../../../db/schema";
 import { join } from "node:path";
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 
 // ---------------------------------------------------------------------------
 // DB path resolution
@@ -133,6 +137,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
+  embedder?: Embedder;
 }): Effect.Effect<void, unknown, never> => {
   const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
   if (!dbPath) {
@@ -144,7 +149,9 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     workspaceStateStore: input.workspaceStateStore,
     sourceArtifactStore: input.sourceArtifactStore,
   });
-  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
+    ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
+  });
 
   return loadWorkspaceCatalogTools({
     workspaceId: input.workspaceId,
@@ -153,6 +160,8 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     includeSchemas: true,
   }).pipe(
     Effect.flatMap((tools) => {
+      const activeSourceIds = new Set<string>();
+
       // Group tools by source for indexing
       const toolsBySource = new Map<string, {
         sourceId: string;
@@ -162,6 +171,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
 
       for (const tool of tools) {
         const sourceId = tool.source.id;
+        activeSourceIds.add(sourceId);
         if (!toolsBySource.has(sourceId)) {
           toolsBySource.set(sourceId, {
             sourceId,
@@ -172,16 +182,45 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
         toolsBySource.get(sourceId)!.tools.push(toToolToIndex(tool));
       }
 
-      return Effect.forEach(
-        [...toolsBySource.values()],
-        (group) =>
-          indexSource({
-            sourceId: group.sourceId,
-            sourceKey: group.sourceKey,
-            tools: group.tools,
-          }),
-        { concurrency: 1 },
-      );
+      return Effect.gen(function* () {
+        const db = yield* SqliteDrizzle;
+        const indexedSources = yield* db
+          .selectDistinct({
+            sourceId: catalog_tool.source_id,
+            sourceKey: catalog_tool.source_key,
+          })
+          .from(catalog_tool);
+
+        for (const indexedSource of indexedSources) {
+          if (activeSourceIds.has(indexedSource.sourceId)) {
+            continue;
+          }
+
+          yield* removeSourceTools(indexedSource.sourceId);
+          yield* removeSourceEmbeddings(indexedSource.sourceKey);
+        }
+
+        yield* Effect.forEach(
+          [...toolsBySource.values()],
+          (group) =>
+            Effect.gen(function* () {
+              const result = yield* indexSource({
+                sourceId: group.sourceId,
+                sourceKey: group.sourceKey,
+                tools: group.tools,
+              });
+
+              if (input.embedder && result.changedTools.length > 0) {
+                yield* embedSourceTools({
+                  embedder: input.embedder,
+                  tools: result.changedTools,
+                  sourceKey: group.sourceKey,
+                });
+              }
+            }),
+          { concurrency: 1 },
+        );
+      });
     }),
     Effect.provide(workspaceStorageLayer),
     Effect.provide(dbLayer),
@@ -207,6 +246,7 @@ export const createWorkspaceSourceCatalog = (input: {
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
+  embedder?: Embedder;
 }): ToolCatalog => {
   const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
 
@@ -216,13 +256,13 @@ export const createWorkspaceSourceCatalog = (input: {
     return createEmptySourceCatalog();
   }
 
-  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
+    ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
+  });
 
   // Create the SQLite catalog wrapped with the DB layer.
   // Each catalog method's Effect is self-contained with `R = never`.
-  // TODO: Wire embedder config from workspace settings to enable hybrid search.
-  // For now, pass undefined to use FTS-only search.
-  const sqliteCatalogEffect = createSqliteToolCatalog(undefined).pipe(
+  const sqliteCatalogEffect = createSqliteToolCatalog(input.embedder).pipe(
     Effect.provide(dbLayer),
   );
 

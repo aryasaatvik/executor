@@ -3,6 +3,7 @@ import { SqlClient } from "@effect/sql"
 import { eq, and, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import { catalog_tool } from "./schema"
+import { removeVecTools } from "./vec"
 
 // ---------------------------------------------------------------------------
 // Types
@@ -108,16 +109,25 @@ const extractParams = (schema: unknown): string[] => {
 
 /**
  * Compute a SHA-256 content hash for a tool using Bun's native crypto.
- * The hash is derived from: path + description + input_schema + output_schema.
+ * The hash is derived from every field that can affect indexed metadata,
+ * descriptors, or search text.
  */
-const computeContentHash = (tool: ToolToIndex): string => {
+const computeContentHash = (tool: ToolToIndex, searchText: string): string => {
   const hasher = new Bun.CryptoHasher("sha256")
-  hasher.update(
-    tool.path +
-      (tool.description ?? "") +
-      JSON.stringify(tool.inputSchemaJson) +
-      JSON.stringify(tool.outputSchemaJson),
-  )
+  hasher.update(JSON.stringify({
+    path: tool.path,
+    sourceKey: tool.sourceKey,
+    namespace: tool.namespace,
+    title: tool.title ?? null,
+    description: tool.description ?? null,
+    searchText,
+    inputSchemaJson: tool.inputSchemaJson ?? null,
+    outputSchemaJson: tool.outputSchemaJson ?? null,
+    inputTypePreview: tool.inputTypePreview ?? null,
+    outputTypePreview: tool.outputTypePreview ?? null,
+    interaction: tool.interaction ?? "auto",
+    providerKind: tool.providerKind ?? null,
+  }))
   return hasher.digest("hex") as string
 }
 
@@ -142,6 +152,7 @@ export const indexSource = (input: {
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle
     const sql = yield* SqlClient.SqlClient
+    const changedTools: ToolToIndex[] = []
 
     yield* sql.withTransaction(
       Effect.gen(function* () {
@@ -161,14 +172,21 @@ export const indexSource = (input: {
         const incomingToolIds = new Set<string>()
 
         for (const tool of input.tools) {
-          const contentHash = computeContentHash(tool)
           const searchText = buildSearchText(tool)
+          const contentHash = computeContentHash(tool, searchText)
           incomingToolIds.add(tool.toolId)
 
           const existingHash = existingHashMap.get(tool.toolId)
 
           if (existingHash === contentHash) {
-            // Tool unchanged — skip
+            // Tool metadata is unchanged, but ensure the source is marked active.
+            yield* db
+              .update(catalog_tool)
+              .set({
+                source_enabled: true,
+                source_status: "connected",
+              })
+              .where(eq(catalog_tool.tool_id, tool.toolId))
             continue
           }
 
@@ -194,6 +212,7 @@ export const indexSource = (input: {
                 source_status: "connected",
               })
               .where(eq(catalog_tool.tool_id, tool.toolId))
+            changedTools.push(tool)
           } else {
             // New tool — insert
             yield* db.insert(catalog_tool).values({
@@ -215,6 +234,7 @@ export const indexSource = (input: {
               source_enabled: true,
               source_status: "connected",
             })
+            changedTools.push(tool)
           }
         }
 
@@ -232,9 +252,14 @@ export const indexSource = (input: {
                 inArray(catalog_tool.tool_id, staleToolIds),
               ),
             )
+          yield* removeVecTools(staleToolIds)
         }
       }),
     )
+
+    return {
+      changedTools,
+    } as const
   })
 
 // ---------------------------------------------------------------------------
