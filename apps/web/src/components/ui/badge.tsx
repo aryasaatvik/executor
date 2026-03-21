@@ -16,6 +16,12 @@ const badgeVariants = cva(
         put: "border-[var(--method-put)]/20 bg-[var(--method-put)]/10 text-[var(--method-put)]",
         delete: "border-[var(--method-delete)]/20 bg-[var(--method-delete)]/10 text-[var(--method-delete)]",
         destructive: "border-destructive/20 bg-destructive/10 text-destructive",
+        "status-completed": "border-emerald-500/20 bg-emerald-500/10 text-emerald-500",
+        "status-failed": "border-destructive/20 bg-destructive/10 text-destructive",
+        "status-running": "border-blue-500/20 bg-blue-500/10 text-blue-500",
+        "status-waiting": "border-amber-500/20 bg-amber-500/10 text-amber-500",
+        "status-pending": "border-blue-500/20 bg-blue-500/10 text-blue-500",
+        "status-cancelled": "border-transparent bg-muted text-muted-foreground",
       },
     },
     defaultVariants: {
@@ -28,6 +34,20 @@ export type BadgeProps = HTMLAttributes<HTMLSpanElement> & VariantProps<typeof b
 
 export function Badge({ className, variant, ...props }: BadgeProps) {
   return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
+}
+
+export function ExecutionStatusBadge({ status }: { status: string }) {
+  const variantMap: Record<string, string> = {
+    completed: "status-completed",
+    failed: "status-failed",
+    running: "status-running",
+    pending: "status-pending",
+    waiting_for_interaction: "status-waiting",
+    cancelled: "status-cancelled",
+  };
+  const variant = (variantMap[status] ?? "muted") as any;
+  const label = status === "waiting_for_interaction" ? "waiting" : status;
+  return <Badge variant={variant}>{label}</Badge>;
 }
 
 export function MethodBadge({ method }: { method: string }) {

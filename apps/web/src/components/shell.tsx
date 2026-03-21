@@ -212,6 +212,7 @@ export function AppShell() {
   const sources = useSources();
   const matchRoute = useMatchRoute();
   const isHome = matchRoute({ to: "/" });
+  const isExecutions = matchRoute({ to: "/executions" });
   const isSecrets = matchRoute({ to: "/secrets" });
   const { latestVersion, updateAvailable, channel } = useLatestVersion(VITE_APP_VERSION);
   return (
@@ -233,6 +234,7 @@ export function AppShell() {
         {/* Main nav */}
         <nav className="flex flex-1 flex-col p-2 overflow-y-auto">
           <NavItem to="/" label="Dashboard" active={!!isHome} />
+          <NavItem to="/executions" label="Executions" active={!!isExecutions} />
           <NavItem to="/secrets" label="Secrets" active={!!isSecrets} />
 
           {/* Sources */}

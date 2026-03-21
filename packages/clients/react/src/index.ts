@@ -15,6 +15,8 @@ import type {
   CreateWorkspaceOauthClientPayload,
   DeleteSecretResult,
   DiscoverSourcePayload,
+  Execution,
+  ExecutionStep,
   InstanceConfig,
   LocalInstallation,
   SecretListItem,
@@ -77,6 +79,8 @@ type WorkspaceOauthClientsKeyParts = readonly [
   string,
   string,
 ];
+type ExecutionsKeyParts = readonly [boolean, Source["workspaceId"], string];
+type ExecutionStepsKeyParts = readonly [boolean, Source["workspaceId"], string, string];
 
 type InvalidationTarget = {
   workspaceId?: Source["workspaceId"];
@@ -184,6 +188,20 @@ const encodeWorkspaceOauthClientsKey = (
   encodeAtomKey(
     [enabled, workspaceId, accountId, providerKey] satisfies WorkspaceOauthClientsKeyParts,
   );
+
+const encodeExecutionsKey = (
+  enabled: boolean,
+  workspaceId: Source["workspaceId"],
+  accountId: string,
+): string => encodeAtomKey([enabled, workspaceId, accountId] satisfies ExecutionsKeyParts);
+
+const encodeExecutionStepsKey = (
+  enabled: boolean,
+  workspaceId: Source["workspaceId"],
+  accountId: string,
+  executionId: string,
+): string =>
+  encodeAtomKey([enabled, workspaceId, accountId, executionId] satisfies ExecutionStepsKeyParts);
 
 const causeMessage = (cause: Cause.Cause<unknown>): Error =>
   new Error(Cause.pretty(cause));
@@ -415,6 +433,41 @@ const workspaceOauthClientsAtom = Atom.family((key: string) => {
             },
           }),
         })
+      : Effect.never,
+  ).pipe(Atom.keepAlive);
+});
+
+const executionsAtom = Atom.family((key: string) => {
+  const [enabled, workspaceId, accountId] = decodeAtomKey<ExecutionsKeyParts>(key);
+
+  return Atom.make(
+    enabled
+      ? controlPlaneRequest({
+            accountId,
+            execute: (client) => client.executions.list({
+              path: {
+                workspaceId,
+              },
+            }),
+          })
+      : Effect.never,
+  ).pipe(Atom.keepAlive);
+});
+
+const executionStepsAtom = Atom.family((key: string) => {
+  const [enabled, workspaceId, accountId, executionId] = decodeAtomKey<ExecutionStepsKeyParts>(key);
+
+  return Atom.make(
+    enabled
+      ? controlPlaneRequest({
+            accountId,
+            execute: (client) => client.executions.listSteps({
+              path: {
+                workspaceId,
+                executionId: executionId as any,
+              },
+            }),
+          })
       : Effect.never,
   ).pipe(Atom.keepAlive);
 });
@@ -937,6 +990,28 @@ export const useSources = (): Loadable<ReadonlyArray<Source>> => {
   return workspace.enabled ? sources : pendingLoadable(workspace.workspace);
 };
 
+export const useExecutions = (): Loadable<ReadonlyArray<Execution>> => {
+  const workspace = useWorkspaceRequestContext();
+  const key = encodeExecutionsKey(workspace.enabled, workspace.workspaceId, workspace.accountId);
+  const executions = useLoadableAtom(executionsAtom(key));
+
+  return workspace.enabled ? executions : pendingLoadable(workspace.workspace);
+};
+
+export const useExecutionSteps = (executionId: string): Loadable<ReadonlyArray<ExecutionStep>> => {
+  const workspace = useWorkspaceRequestContext();
+  const enabled = workspace.enabled && executionId.length > 0;
+  const key = encodeExecutionStepsKey(
+    enabled,
+    workspace.workspaceId,
+    workspace.accountId,
+    executionId,
+  );
+  const steps = useLoadableAtom(executionStepsAtom(key));
+
+  return enabled ? steps : pendingLoadable(workspace.workspace);
+};
+
 export const useSource = (sourceId: string): Loadable<Source> => {
   const workspace = useWorkspaceRequestContext();
   const requestedSourceId = workspace.enabled
@@ -1419,6 +1494,8 @@ export type {
   CreateWorkspaceOauthClientPayload,
   DeleteSecretResult,
   DiscoverSourcePayload,
+  Execution,
+  ExecutionStep,
   InstanceConfig,
   LocalInstallation,
 

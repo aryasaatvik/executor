@@ -11,7 +11,9 @@ import { ExecutorReactProvider } from "@executor/react";
 import "./globals.css";
 
 import { AppShell } from "./components/shell";
-import { HomePage } from "./views/home";
+import { DashboardPage } from "./views/dashboard";
+import { ExecutionsPage } from "./views/executions";
+import { SourcesPage } from "./views/sources";
 import { EditSourcePage, NewSourcePage } from "./views/source-editor";
 import { SourceDetailPage } from "./views/source-detail";
 import { SecretsPage } from "./views/secrets";
@@ -37,10 +39,22 @@ const rootRoute = createRootRoute({
   component: AppShell,
 });
 
-const homeRoute = createRoute({
+const dashboardRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: HomePage,
+  component: DashboardPage,
+});
+
+const executionsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/executions",
+  component: ExecutionsPage,
+});
+
+const sourcesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sources",
+  component: SourcesPage,
 });
 
 const newSourceRoute = createRoute({
@@ -105,7 +119,7 @@ function EditSourcePageWrapper() {
 // Router
 // ---------------------------------------------------------------------------
 
-const routeTree = rootRoute.addChildren([homeRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute]);
+const routeTree = rootRoute.addChildren([dashboardRoute, executionsRoute, sourcesRoute, newSourceRoute, addSourceRoute, sourceRoute, editSourceRoute, secretsRoute]);
 
 const router = createRouter({
   routeTree,
