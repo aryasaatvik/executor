@@ -133,7 +133,8 @@ export const loadSqliteVecExtension = Effect.gen(function* () {
     return false
   }
 
-  yield* client.loadExtension(loadResult.value).pipe(
+  return yield* client.loadExtension(loadResult.value).pipe(
+    Effect.as(true),
     Effect.catchAll((error) =>
       Effect.gen(function* () {
         yield* Effect.logWarning(
@@ -144,6 +145,4 @@ export const loadSqliteVecExtension = Effect.gen(function* () {
       }),
     ),
   )
-
-  return true
 })

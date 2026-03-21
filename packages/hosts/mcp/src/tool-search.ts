@@ -53,9 +53,9 @@ export interface ToolSearchOutput {
  */
 function parseQuery(query: string): { mode: "exact" | "search"; cleanQuery: string } {
   if (query.startsWith("+")) {
-    return { mode: "exact", cleanQuery: query.slice(1) };
+    return { mode: "exact", cleanQuery: query.slice(1).trim() };
   }
-  return { mode: "search", cleanQuery: query };
+  return { mode: "search", cleanQuery: query.trim() };
 }
 
 /**
@@ -80,6 +80,14 @@ function descriptorToResult(
   };
 }
 
+function matchesSourceFilter(
+  tool: ToolDescriptor | null,
+  source?: string,
+): boolean {
+  if (!source) return true;
+  return tool?.sourceKey === source;
+}
+
 /**
  * Handle a tool_search request using the workspace ToolCatalog.
  */
@@ -93,12 +101,19 @@ export function handleToolSearch(
     const { mode, cleanQuery } = parseQuery(input.query);
 
     if (mode === "exact") {
+      if (cleanQuery.length === 0) {
+        return {
+          results: [] as ToolSearchResultItem[],
+          meta: { query: input.query, mode: "exact" as const, total: 0, search_mode: "fts" as const },
+        };
+      }
+
       const tool: ToolDescriptor | null = yield* catalog.getToolByPath({
         path: cleanQuery as ToolPath,
         includeSchemas,
       });
 
-      if (!tool) {
+      if (!tool || !matchesSourceFilter(tool, input.source)) {
         return {
           results: [] as ToolSearchResultItem[],
           meta: { query: input.query, mode: "exact" as const, total: 0, search_mode: "fts" as const },
@@ -114,7 +129,7 @@ export function handleToolSearch(
     // Search mode
     const hits: readonly SearchHit[] = yield* catalog.searchTools({
       query: cleanQuery,
-      limit: maxResults,
+      limit: input.source ? Math.max(maxResults * 5, 50) : maxResults,
     });
 
     // Hydrate results with descriptors
@@ -124,7 +139,13 @@ export function handleToolSearch(
         path: hit.path,
         includeSchemas,
       });
+      if (!matchesSourceFilter(tool, input.source)) {
+        continue;
+      }
       results.push(descriptorToResult(hit.path, hit.score, tool, includeSchemas));
+      if (results.length >= maxResults) {
+        break;
+      }
     }
 
     return {
