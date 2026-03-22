@@ -219,20 +219,18 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // -----------------------------------------------------------------
           // Step 4: Embed query and run vector search
           // -----------------------------------------------------------------
-          const queryEmbedding = yield* Effect.tryPromise(() =>
-            embedder.embed(trimmedQuery, "query"),
-          ).pipe(Effect.catchAll(() => Effect.succeed(null)))
-
-          if (!queryEmbedding) {
-            return withSearchMode(ftsResults.slice(0, limit), "fts")
-          } // embedding failed, FTS fallback
+          const queryEmbedding = yield* Effect.tryPromise({
+            try: () => embedder.embed(trimmedQuery, "query"),
+            catch: (cause) =>
+              cause instanceof Error ? cause : new Error(String(cause)),
+          })
 
           const vecResults = yield* searchVec({
             queryEmbedding,
             limit: limit * 2,
             ...(sourceKey ? { sourceFilter: sourceKey } : {}),
             ...(namespace ? { namespaceFilter: namespace } : {}),
-          }).pipe(Effect.catchAll(() => Effect.succeed([] as { toolId: string; score: number }[])))
+          })
 
           // -----------------------------------------------------------------
           // Step 5: RRF fusion

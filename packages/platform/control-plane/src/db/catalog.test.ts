@@ -418,6 +418,39 @@ describe("sqlite catalog searchTools", () => {
     }),
   )
 
+  it.effect("surfaces semantic embedding failures instead of silently falling back", () =>
+    Effect.gen(function* () {
+      const embedder = {
+        provider: "local",
+        model: "test-model",
+        dimensions: 3,
+        embed: async () => {
+          throw new Error("embed failed")
+        },
+        embedBatch: async () => [[1, 2, 3]],
+      }
+
+      const catalog = yield* makeSearchCatalog({
+        rows: [
+          { path: "github.issues.create", raw_score: -0.25 },
+        ],
+        embedder,
+      })
+
+      yield* Effect.flip(
+        catalog.searchTools({
+          query: "create github issue",
+          limit: 5,
+        }),
+      ).pipe(
+        Effect.map((error) => {
+          expect(error).toBeInstanceOf(Error)
+          expect((error as Error).message).toContain("embed failed")
+        }),
+      )
+    }),
+  )
+
   it.effect("uses direct bm25 ordering instead of abs() inversion", () =>
     Effect.gen(function* () {
       let capturedQuery: string | null = null

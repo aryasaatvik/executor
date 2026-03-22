@@ -509,34 +509,14 @@ const createExecutorMcpServer = async (config: {
             executionId: ExecutionIdSchema.make("exec_mcp_tool_search"),
           });
 
-          const catalog = environment.catalog;
-          if (!catalog) {
-            return {
-              results: [],
-              meta: {
-                query: input.query,
-                mode: "search" as const,
-                total: 0,
-                search_mode: "fts" as const,
-              },
-            };
+          if (!environment.catalog) {
+            return yield* Effect.fail(
+              new Error("Workspace tool catalog is unavailable."),
+            );
           }
 
-          return yield* handleToolSearch(catalog, input);
-        }).pipe(
-          Effect.catchAll((error) =>
-            Effect.succeed({
-              results: [],
-              meta: {
-                query: input.query,
-                mode: "search" as const,
-                total: 0,
-                search_mode: "fts" as const,
-              },
-              error: error instanceof Error ? error.message : String(error),
-            }),
-          ),
-        ),
+          return yield* handleToolSearch(environment.catalog, input);
+        }),
       );
 
       return {
@@ -544,7 +524,7 @@ const createExecutorMcpServer = async (config: {
           type: "text" as const,
           text: JSON.stringify(result, null, 2),
         }],
-        structuredContent: result as Record<string, unknown>,
+        structuredContent: result as unknown as Record<string, unknown>,
       };
     },
   );
