@@ -147,49 +147,12 @@ const readBindingTransport = (
     : undefined;
 };
 
-const refreshableHttpAuth = (
+type DirectRefreshAuth = Extract<Source["auth"], { kind: "none" }>;
+
+const supportsDirectRefreshAuth = (
   auth: Source["auth"],
-):
-  | { kind: "none" }
-  | {
-      kind: "bearer";
-      headerName?: string | null;
-      prefix?: string | null;
-      token?: string | null;
-      tokenRef?: { providerId: string; handle: string } | null;
-    }
-  | {
-      kind: "oauth2";
-      headerName?: string | null;
-      prefix?: string | null;
-      accessToken?: string | null;
-      accessTokenRef?: { providerId: string; handle: string } | null;
-      refreshToken?: string | null;
-      refreshTokenRef?: { providerId: string; handle: string } | null;
-    }
-  | undefined => {
-  switch (auth.kind) {
-    case "none":
-      return { kind: "none" };
-    case "bearer":
-      return {
-        kind: "bearer",
-        headerName: auth.headerName,
-        prefix: auth.prefix,
-        tokenRef: auth.token,
-      };
-    case "oauth2":
-      return {
-        kind: "oauth2",
-        headerName: auth.headerName,
-        prefix: auth.prefix,
-        accessTokenRef: auth.accessToken,
-        refreshTokenRef: auth.refreshToken,
-      };
-    default:
-      return undefined;
-  }
-};
+): auth is DirectRefreshAuth =>
+  auth.kind === "none";
 
 const refreshPayloadFromSource = (
   source: Source,
@@ -217,6 +180,13 @@ const refreshPayloadFromSource = (
         return null;
       }
 
+      if (
+        !supportsDirectRefreshAuth(source.importAuth) ||
+        !supportsDirectRefreshAuth(source.auth)
+      ) {
+        return null;
+      }
+
       return {
         kind: "openapi",
         endpoint: source.endpoint,
@@ -224,24 +194,38 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth: source.importAuth,
+        auth: source.auth,
       };
     }
     case "graphql":
+      if (
+        !supportsDirectRefreshAuth(source.importAuth) ||
+        !supportsDirectRefreshAuth(source.auth)
+      ) {
+        return null;
+      }
+
       return {
         kind: "graphql",
         endpoint: source.endpoint,
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth: source.importAuth,
+        auth: source.auth,
       };
     case "google_discovery": {
       const service = readBindingString(source, "service");
       const version = readBindingString(source, "version");
       if (!service || !version) {
+        return null;
+      }
+
+      if (
+        !supportsDirectRefreshAuth(source.importAuth) ||
+        !supportsDirectRefreshAuth(source.auth)
+      ) {
         return null;
       }
 
@@ -255,8 +239,8 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth: source.importAuth,
+        auth: source.auth,
       };
     }
     default:
