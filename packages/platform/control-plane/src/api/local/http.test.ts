@@ -7,36 +7,24 @@ describe("validateSemanticSearchConfigForWrite", () => {
     vi.unstubAllEnvs()
   })
 
-  it("rejects cloud semantic search config without any credential source", () => {
-    const previousGoogleApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY
-    const previousGeminiApiKey = process.env.GEMINI_API_KEY
-    delete process.env.GOOGLE_GENERATIVE_AI_API_KEY
-    delete process.env.GEMINI_API_KEY
-
-    try {
-      expect(
-        validateSemanticSearchConfigForWrite({
-          provider: "google",
-          model: "gemini-embedding-2-preview",
-        }),
-      ).toContain("requires an API key")
-    } finally {
-      if (previousGoogleApiKey !== undefined) {
-        process.env.GOOGLE_GENERATIVE_AI_API_KEY = previousGoogleApiKey
-      }
-      if (previousGeminiApiKey !== undefined) {
-        process.env.GEMINI_API_KEY = previousGeminiApiKey
-      }
-    }
+  it("rejects cloud semantic search config without a secret ref", () => {
+    expect(
+      validateSemanticSearchConfigForWrite({
+        provider: "google",
+        model: "gemini-embedding-2-preview",
+      }),
+    ).toContain("requires an apiKeyRef secret")
   })
 
-  it("accepts cloud semantic search config when the API key comes from the environment", () => {
-    vi.stubEnv("OPENAI_API_KEY", "sk-test")
-
+  it("accepts cloud semantic search config with a secret ref", () => {
     expect(
       validateSemanticSearchConfigForWrite({
         provider: "openai",
         model: "text-embedding-3-small",
+        apiKeyRef: {
+          providerId: "local",
+          handle: "secret_123",
+        },
       }),
     ).toBeNull()
   })
@@ -48,5 +36,18 @@ describe("validateSemanticSearchConfigForWrite", () => {
         model: "Qwen3-Embedding-0.6B-Q8_0.gguf",
       }),
     ).toBeNull()
+  })
+
+  it("rejects local semantic search config with an api key ref", () => {
+    expect(
+      validateSemanticSearchConfigForWrite({
+        provider: "local",
+        model: "Qwen3-Embedding-0.6B-Q8_0.gguf",
+        apiKeyRef: {
+          providerId: "local",
+          handle: "secret_123",
+        },
+      }),
+    ).toContain('does not accept "apiKeyRef"')
   })
 })

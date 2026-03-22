@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   type InstanceConfig,
+  type Loadable,
+  type SecretListItem,
+  useCreateSecret,
   useInstanceConfig,
+  useSecrets,
   useUpdateInstanceConfig,
 } from "@executor/react";
 import { LoadableBlock } from "../components/loadable";
@@ -20,7 +24,8 @@ type SemanticFormState = {
   provider: SemanticProvider;
   model: string;
   dimensions: string;
-  apiKey: string;
+  apiKeyProviderId: string;
+  apiKeyHandle: string;
 };
 
 const semanticProviders: ReadonlyArray<ConfiguredSemanticProvider> = [
@@ -47,11 +52,6 @@ const defaultDimensionsByProvider: Record<ConfiguredSemanticProvider, number> = 
   openai: 1536,
 };
 
-const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
-  google: "AIza...",
-  openai: "sk-...",
-};
-
 const isConfiguredProvider = (
   provider: string | null | undefined,
 ): provider is ConfiguredSemanticProvider =>
@@ -72,7 +72,8 @@ const buildSemanticFormState = (
       provider: "",
       model: "",
       dimensions: "",
-      apiKey: "",
+      apiKeyProviderId: "",
+      apiKeyHandle: "",
     };
   }
 
@@ -82,10 +83,8 @@ const buildSemanticFormState = (
     dimensions: String(
       semanticSearch.dimensions ?? defaultDimensionsForProvider(semanticSearch.provider),
     ),
-    apiKey:
-      semanticSearch.provider === "local"
-        ? ""
-        : semanticSearch.apiKey ?? "",
+    apiKeyProviderId: semanticSearch.apiKeyRef?.providerId ?? "",
+    apiKeyHandle: semanticSearch.apiKeyRef?.handle ?? "",
   };
 };
 
@@ -102,17 +101,194 @@ const buildCanonicalSemanticSearch = (
   const normalizedDimensions = Number.isFinite(parsedDimensions) && parsedDimensions > 0
     ? parsedDimensions
     : defaultDimensionsForProvider(provider);
-  const trimmedApiKey = form.apiKey.trim();
+  const apiKeyProviderId = form.apiKeyProviderId.trim();
+  const apiKeyHandle = form.apiKeyHandle.trim();
 
   return {
     provider,
     model: normalizedModel,
     dimensions: normalizedDimensions,
-    ...(provider !== "local" && trimmedApiKey.length > 0
-      ? { apiKey: trimmedApiKey }
+    ...(provider !== "local" && apiKeyProviderId.length > 0 && apiKeyHandle.length > 0
+      ? {
+          apiKeyRef: {
+            providerId: apiKeyProviderId,
+            handle: apiKeyHandle,
+          },
+        }
       : {}),
   };
 };
+
+const CREATE_NEW_VALUE = "__create_new__";
+
+function SemanticSearchSecretPicker(props: {
+  instanceConfig: InstanceConfig;
+  secrets: Loadable<ReadonlyArray<SecretListItem>>;
+  providerId: string;
+  handle: string;
+  onSelect: (providerId: string, handle: string) => void;
+  disabled: boolean;
+}) {
+  const createSecret = useCreateSecret();
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newValue, setNewValue] = useState("");
+  const [newProviderId, setNewProviderId] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const storableProviders = props.instanceConfig.secretProviders.filter(
+    (provider) => provider.canStore,
+  );
+
+  useEffect(() => {
+    if (newProviderId.length > 0) {
+      return;
+    }
+    setNewProviderId(props.instanceConfig.defaultSecretStoreProvider);
+  }, [newProviderId, props.instanceConfig.defaultSecretStoreProvider]);
+
+  const selectedValue = showCreate ? CREATE_NEW_VALUE : props.handle;
+  const matchedSecret =
+    props.secrets.status === "ready"
+      ? props.secrets.data.find((secret) => secret.id === props.handle)
+      : null;
+  const isExternalRef = props.handle.length > 0 && matchedSecret === undefined;
+
+  const handleSelectChange = (value: string) => {
+    if (value === CREATE_NEW_VALUE) {
+      setShowCreate(true);
+      setNewName("");
+      setNewValue("");
+      setNewProviderId(props.instanceConfig.defaultSecretStoreProvider);
+      setCreateError(null);
+      return;
+    }
+
+    setShowCreate(false);
+    if (value === "") {
+      props.onSelect("", "");
+      return;
+    }
+
+    const nextSecret =
+      props.secrets.status === "ready"
+        ? props.secrets.data.find((secret) => secret.id === value)
+        : null;
+    props.onSelect(nextSecret?.providerId ?? props.providerId, value);
+  };
+
+  const handleCreate = async () => {
+    setCreateError(null);
+    const trimmedName = newName.trim();
+    if (!trimmedName) {
+      setCreateError("Name is required.");
+      return;
+    }
+    if (!newValue) {
+      setCreateError("Value is required.");
+      return;
+    }
+
+    try {
+      const created = await createSecret.mutateAsync({
+        name: trimmedName,
+        value: newValue,
+        ...(newProviderId ? { providerId: newProviderId } : {}),
+      });
+      props.onSelect(created.providerId, created.id);
+      setShowCreate(false);
+    } catch (cause) {
+      setCreateError(
+        cause instanceof Error ? cause.message : "Failed creating secret.",
+      );
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <select
+        value={selectedValue}
+        onChange={(event) => handleSelectChange(event.target.value)}
+        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={props.disabled || props.secrets.status !== "ready"}
+      >
+        <option value="">Select a secret…</option>
+        {isExternalRef ? (
+          <option value={props.handle}>
+            Existing secret ({props.providerId}:{props.handle})
+          </option>
+        ) : null}
+        {props.secrets.status === "ready"
+          ? props.secrets.data.map((secret) => (
+              <option key={secret.id} value={secret.id}>
+                {secret.name ?? secret.id} ({secret.providerId})
+              </option>
+            ))
+          : null}
+        <option value={CREATE_NEW_VALUE}>Create new secret…</option>
+      </select>
+
+      {showCreate ? (
+        <div className="space-y-2 rounded-lg border border-border bg-background/50 p-3">
+          <input
+            type="text"
+            value={newName}
+            onChange={(event) => setNewName(event.target.value)}
+            placeholder="Secret name"
+            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25"
+            disabled={createSecret.status === "pending"}
+          />
+          <input
+            type="password"
+            value={newValue}
+            onChange={(event) => setNewValue(event.target.value)}
+            placeholder="API key"
+            className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25"
+            disabled={createSecret.status === "pending"}
+          />
+          <select
+            value={newProviderId}
+            onChange={(event) => setNewProviderId(event.target.value)}
+            className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25"
+            disabled={createSecret.status === "pending"}
+          >
+            {storableProviders.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.name}
+              </option>
+            ))}
+          </select>
+          {createError ? (
+            <p className="text-[11px] text-destructive">{createError}</p>
+          ) : null}
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setShowCreate(false);
+                setCreateError(null);
+              }}
+              disabled={createSecret.status === "pending"}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleCreate}
+              disabled={createSecret.status === "pending"}
+            >
+              {createSecret.status === "pending"
+                ? <IconSpinner className="size-3.5" />
+                : null}
+              Create secret
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 const semanticSearchFingerprint = (
   semanticSearch: InstanceConfig["semanticSearch"],
@@ -180,6 +356,7 @@ function SemanticSearchSettingsCard(props: {
   config: InstanceConfig;
 }) {
   const updateConfig = useUpdateInstanceConfig();
+  const secrets = useSecrets();
   const unsupportedConfig = useMemo(
     () =>
       props.config.semanticSearch && !isConfiguredProvider(props.config.semanticSearch.provider)
@@ -202,6 +379,9 @@ function SemanticSearchSettingsCard(props: {
   }, [props.config.semanticSearch]);
 
   const cloudProvider = form.provider !== "" && form.provider !== "local";
+  const missingCloudSecret =
+    cloudProvider &&
+    (form.apiKeyProviderId.trim().length === 0 || form.apiKeyHandle.trim().length === 0);
   const nextSemanticSearch = useMemo(
     () => buildCanonicalSemanticSearch(form),
     [form],
@@ -247,7 +427,8 @@ function SemanticSearchSettingsCard(props: {
         provider: "",
         model: "",
         dimensions: "",
-        apiKey: "",
+        apiKeyProviderId: "",
+        apiKeyHandle: "",
       });
       return;
     }
@@ -256,7 +437,8 @@ function SemanticSearchSettingsCard(props: {
       provider: nextProvider,
       model: defaultModelForProvider(nextProvider),
       dimensions: String(defaultDimensionsForProvider(nextProvider)),
-      apiKey: "",
+      apiKeyProviderId: "",
+      apiKeyHandle: "",
     });
   };
 
@@ -265,9 +447,9 @@ function SemanticSearchSettingsCard(props: {
       <div>
         <h2 className="text-sm font-semibold text-foreground">Semantic Search</h2>
         <p className="mt-1 text-[13px] text-muted-foreground">
-          Configure embedding providers for semantic tool discovery. The UI now
-          writes a canonical semantic-search block, so changing providers will
-          replace stale provider-specific fields instead of preserving them.
+          Configure embedding providers for semantic tool discovery. Cloud
+          provider credentials are stored as secrets and referenced from
+          settings instead of being persisted inline.
         </p>
       </div>
 
@@ -355,33 +537,33 @@ function SemanticSearchSettingsCard(props: {
             />
           </label>
 
-          <label className="block space-y-1">
+          <div className="space-y-1">
             <span className="text-[11px] font-medium text-muted-foreground">
-              API Key
+              API Key Secret
             </span>
-            <input
-              type="password"
-              value={form.apiKey}
-              onChange={(event) => updateForm({ apiKey: event.target.value })}
-              placeholder={
-                cloudProvider
-                  ? apiKeyPlaceholderByProvider[form.provider as ConfiguredSemanticProvider] ?? "API key"
-                  : "Not required for local provider"
-              }
-              className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
+            <SemanticSearchSecretPicker
+              instanceConfig={props.config}
+              secrets={secrets}
+              providerId={form.apiKeyProviderId}
+              handle={form.apiKeyHandle}
+              onSelect={(providerId, handle) =>
+                updateForm({
+                  apiKeyProviderId: providerId,
+                  apiKeyHandle: handle,
+                })}
               disabled={!cloudProvider || updateConfig.status === "pending"}
             />
             <p className="text-[11px] text-muted-foreground/60">
-              Leave blank to rely on environment variables such as
-              GEMINI_API_KEY or OPENAI_API_KEY.
+              Select or create a stored secret for cloud embedding providers.
+              Raw API keys are not saved in settings.
             </p>
-          </label>
+          </div>
 
           <div className="flex justify-end">
             <Button
               size="sm"
               onClick={handleSave}
-              disabled={updateConfig.status === "pending" || !dirty}
+              disabled={updateConfig.status === "pending" || !dirty || missingCloudSecret}
             >
               {updateConfig.status === "pending"
                 ? <IconSpinner className="size-3.5" />

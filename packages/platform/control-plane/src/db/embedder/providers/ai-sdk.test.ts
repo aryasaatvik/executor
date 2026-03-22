@@ -30,16 +30,15 @@ describe("createAiSdkEmbedder", () => {
   });
 
   afterEach(() => {
-    delete process.env.OPENAI_API_KEY;
   });
 
   it("loads a supported provider without mutating the runtime", async () => {
-    process.env.OPENAI_API_KEY = "test-key";
     const { createAiSdkEmbedder } = await import("./ai-sdk");
 
     const embedder = await createAiSdkEmbedder({
       provider: "openai",
       model: "text-embedding-3-small",
+      apiKey: "test-key",
     });
     const embedding = await embedder.embed("hello");
 
@@ -53,12 +52,12 @@ describe("createAiSdkEmbedder", () => {
   });
 
   it("passes through AI SDK model defaults when dimensions are omitted", async () => {
-    process.env.OPENAI_API_KEY = "test-key";
     const { createAiSdkEmbedder } = await import("./ai-sdk");
 
     await createAiSdkEmbedder({
       provider: "openai",
       model: "text-embedding-3-large",
+      apiKey: "test-key",
     });
 
     expect(textEmbeddingModelMock).toHaveBeenCalledWith(
@@ -73,6 +72,7 @@ describe("createAiSdkEmbedder", () => {
     await expect(
       createAiSdkEmbedder({
         provider: "unknown-provider",
+        apiKey: "test-key",
       }),
     ).rejects.toThrow(/Unknown AI SDK provider/);
   });
@@ -83,7 +83,18 @@ describe("createAiSdkEmbedder", () => {
     await expect(
       createAiSdkEmbedder({
         provider: "mistral",
+        apiKey: "test-key",
       }),
     ).rejects.toThrow(/Unknown AI SDK provider/);
+  });
+
+  it("fails fast when the runtime does not provide a resolved api key", async () => {
+    const { createAiSdkEmbedder } = await import("./ai-sdk");
+
+    await expect(
+      createAiSdkEmbedder({
+        provider: "openai",
+      }),
+    ).rejects.toThrow(/requires a resolved api key/);
   });
 });

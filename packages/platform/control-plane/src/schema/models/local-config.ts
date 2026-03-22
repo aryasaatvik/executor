@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
 import { localConfigurableSourceAdapters } from "../../runtime/sources/source-adapters";
+import { SecretRefSchema } from "./auth-artifact";
 
 export const LocalExecutorRuntimeSchema = Schema.Literal(
   "quickjs",
@@ -142,7 +143,7 @@ export const LocalConfigWorkspaceSchema = Schema.Struct({
 export const LocalConfigSemanticSearchSchema = Schema.Struct({
   provider: Schema.String,
   model: Schema.optional(Schema.String),
-  apiKey: Schema.optional(Schema.String),
+  apiKeyRef: Schema.optional(SecretRefSchema),
   dimensions: Schema.optional(Schema.Number),
 });
 

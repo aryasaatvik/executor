@@ -2,6 +2,7 @@ import {
   createToolCatalogFromTools,
   makeToolInvokerFromTools,
 } from "@executor/codemode-core";
+import { createHash } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -30,6 +31,10 @@ import {
   getRuntimeLocalWorkspaceOption,
 } from "../../local/runtime-context";
 import {
+  SecretMaterialResolverService,
+  type ResolveSecretMaterial,
+} from "../../local/secret-material-providers";
+import {
   LocalToolRuntimeLoaderService,
   type LocalToolRuntimeLoaderShape,
   type LocalToolRuntime,
@@ -43,7 +48,7 @@ import {
   type WorkspaceStateStoreShape,
 } from "../../local/storage";
 import { createEmbedder, type Embedder } from "../../../db/embedder";
-import type { LocalExecutorConfig } from "#schema";
+import type { LocalExecutorConfig, SecretRef } from "#schema";
 import type { LocalWorkspaceState } from "../../local/workspace-state";
 export {
   createCodeExecutorForRuntime,
@@ -70,19 +75,85 @@ type WorkspaceCatalogCacheEntry = {
 const workspaceCatalogCache = new Map<string, WorkspaceCatalogCacheEntry>()
 
 type SemanticSearchConfig = NonNullable<LocalExecutorConfig["semanticSearch"]>
+type ResolvedSemanticSearchConfig = Omit<SemanticSearchConfig, "apiKeyRef"> & {
+  apiKey?: string
+}
 
 const semanticSearchEmbedderCacheKey = (
-  config: SemanticSearchConfig,
+  config: ResolvedSemanticSearchConfig,
 ): string =>
   JSON.stringify({
     provider: config.provider,
     model: config.model ?? null,
-    apiKey: config.apiKey ?? null,
+    apiKeyHash: config.apiKey
+      ? createHash("sha256").update(config.apiKey).digest("hex")
+      : null,
     dimensions: config.dimensions ?? null,
   })
 
+const resolveConfiguredSemanticSearchConfig = (
+  resolveSecretMaterial: ResolveSecretMaterial,
+  config: LocalExecutorConfig | null | undefined,
+): Effect.Effect<ResolvedSemanticSearchConfig | undefined, unknown, never> => {
+  const semanticSearchConfig = config?.semanticSearch
+  if (!semanticSearchConfig) {
+    return Effect.succeed(undefined)
+  }
+
+  if (semanticSearchConfig.provider === "local") {
+    if (semanticSearchConfig.apiKeyRef !== undefined) {
+      return Effect.fail(
+        new Error('Local semantic search does not accept "apiKeyRef".'),
+      )
+    }
+
+    return Effect.succeed({
+      provider: semanticSearchConfig.provider,
+      ...(semanticSearchConfig.model !== undefined
+        ? { model: semanticSearchConfig.model }
+        : {}),
+      ...(semanticSearchConfig.dimensions !== undefined
+        ? { dimensions: semanticSearchConfig.dimensions }
+        : {}),
+    })
+  }
+
+  if (
+    semanticSearchConfig.provider !== "google" &&
+    semanticSearchConfig.provider !== "openai"
+  ) {
+    return Effect.fail(
+      new Error(
+        `Semantic search provider "${semanticSearchConfig.provider}" is not supported.`,
+      ),
+    )
+  }
+
+  if (!semanticSearchConfig.apiKeyRef) {
+    return Effect.fail(
+      new Error(
+        `Semantic search provider "${semanticSearchConfig.provider}" requires an apiKeyRef secret.`,
+      ),
+    )
+  }
+
+  return Effect.map(
+    resolveSecretMaterial({ ref: semanticSearchConfig.apiKeyRef as SecretRef }),
+    (apiKey) => ({
+      provider: semanticSearchConfig.provider,
+      ...(semanticSearchConfig.model !== undefined
+        ? { model: semanticSearchConfig.model }
+        : {}),
+      ...(semanticSearchConfig.dimensions !== undefined
+        ? { dimensions: semanticSearchConfig.dimensions }
+        : {}),
+      apiKey,
+    }),
+  )
+}
+
 const getCachedSemanticSearchEmbedder = (
-  config: SemanticSearchConfig,
+  config: ResolvedSemanticSearchConfig,
 ): Promise<Embedder | undefined> => {
   const cacheKey = semanticSearchEmbedderCacheKey(config)
   const existing = semanticSearchEmbedderCache.get(cacheKey)
@@ -150,23 +221,28 @@ const workspaceCatalogIndexSignature = (input: {
   })
 
 export const loadConfiguredSemanticSearchEmbedder = (
+  resolveSecretMaterial: ResolveSecretMaterial,
   config: LocalExecutorConfig | null | undefined,
-): Effect.Effect<Embedder | undefined, unknown, never> => {
-  const semanticSearchConfig = config?.semanticSearch;
-  if (!semanticSearchConfig) {
-    return Effect.succeed(undefined);
-  }
+): Effect.Effect<Embedder | undefined, unknown, never> =>
+  Effect.flatMap(
+    resolveConfiguredSemanticSearchConfig(resolveSecretMaterial, config),
+    (semanticSearchConfig) => {
+      if (!semanticSearchConfig) {
+        return Effect.succeed(undefined)
+      }
 
-  return Effect.tryPromise({
-    try: () => getCachedSemanticSearchEmbedder(semanticSearchConfig),
-    catch: (cause) =>
-      cause instanceof Error ? cause : new Error(String(cause)),
-  }).pipe(
-    Effect.map((embedder) => embedder ?? undefined),
-  );
-};
+      return Effect.tryPromise({
+        try: () => getCachedSemanticSearchEmbedder(semanticSearchConfig),
+        catch: (cause) =>
+          cause instanceof Error ? cause : new Error(String(cause)),
+      }).pipe(
+        Effect.map((embedder) => embedder ?? undefined),
+      )
+    },
+  )
 
 export const createWorkspaceExecutionEnvironmentResolver = (input: {
+  resolveSecretMaterial: ResolveSecretMaterial;
   sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
   sourceAuthService: Effect.Effect.Success<typeof RuntimeSourceAuthServiceTag>;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
@@ -191,6 +267,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
           ? createEmptyLocalToolRuntime()
           : yield* input.localToolRuntimeLoader.load(runtimeLocalWorkspace.context);
       const embedder = yield* loadConfiguredSemanticSearchEmbedder(
+        input.resolveSecretMaterial,
         loadedConfig?.config,
       );
       const cachedWorkspaceCatalog =
@@ -318,6 +395,7 @@ export const RuntimeExecutionResolverLive = (
       : Layer.effect(
         RuntimeExecutionResolverService,
         Effect.gen(function* () {
+          const resolveSecretMaterial = yield* SecretMaterialResolverService;
           const sourceAuthMaterialService = yield* RuntimeSourceAuthMaterialService;
           const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
           const sourceCatalogStore = yield* RuntimeSourceCatalogStoreService;
@@ -327,6 +405,7 @@ export const RuntimeExecutionResolverLive = (
           const sourceArtifactStore = yield* SourceArtifactStore;
 
           return createWorkspaceExecutionEnvironmentResolver({
+            resolveSecretMaterial,
             sourceAuthService,
             sourceAuthMaterialService,
             sourceCatalogStore,

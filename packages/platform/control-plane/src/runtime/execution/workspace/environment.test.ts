@@ -6,6 +6,7 @@ const createWorkspaceToolInvokerMock = vi.fn();
 const indexWorkspaceToolsIntoSqliteMock = vi.fn();
 const createWorkspaceSourceCatalogMock = vi.fn();
 const getRuntimeLocalWorkspaceOptionMock = vi.fn();
+const resolveSecretMaterialMock = vi.fn();
 
 vi.mock("../../../db/embedder", () => ({
   createEmbedder: createEmbedderMock,
@@ -31,6 +32,7 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     indexWorkspaceToolsIntoSqliteMock.mockReset();
     createWorkspaceSourceCatalogMock.mockReset();
     getRuntimeLocalWorkspaceOptionMock.mockReset();
+    resolveSecretMaterialMock.mockReset();
     const environmentModule = await import("./environment");
     environmentModule.clearWorkspaceExecutionCachesForTests();
   });
@@ -55,10 +57,16 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     };
 
     const first = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(config as never),
+      environmentModule.loadConfiguredSemanticSearchEmbedder(
+        resolveSecretMaterialMock as never,
+        config as never,
+      ),
     );
     const second = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(config as never),
+      environmentModule.loadConfiguredSemanticSearchEmbedder(
+        resolveSecretMaterialMock as never,
+        config as never,
+      ),
     );
 
     expect(first).toBe(embedder);
@@ -78,20 +86,31 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
       embedBatch: async () => [[1, 2, 3]],
     };
     createEmbedderMock.mockResolvedValue(embedder);
+    resolveSecretMaterialMock.mockReturnValue(Effect.succeed("google-api-key"));
 
     const environmentModule = await import("./environment");
 
     const loaded = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder({
+      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "google",
           model: "gemini-embedding-2-preview",
+          apiKeyRef: {
+            providerId: "local",
+            handle: "secret_google",
+          },
         },
       } as never),
     );
 
     expect(loaded).toBe(embedder);
     expect(embed).not.toHaveBeenCalled();
+    expect(resolveSecretMaterialMock).toHaveBeenCalledWith({
+      ref: {
+        providerId: "local",
+        handle: "secret_google",
+      },
+    });
   });
 
   it("creates a new embedder when the semantic search config changes", async () => {
@@ -110,23 +129,34 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
         embed: async () => [2],
         embedBatch: async () => [[2]],
       });
+    resolveSecretMaterialMock
+      .mockReturnValueOnce(Effect.succeed("openai-key-small"))
+      .mockReturnValueOnce(Effect.succeed("openai-key-large"));
 
     const environmentModule = await import("./environment");
 
     await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder({
+      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "openai",
           model: "text-embedding-3-small",
+          apiKeyRef: {
+            providerId: "local",
+            handle: "secret_small",
+          },
         },
       } as never),
     );
 
     await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder({
+      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "openai",
           model: "text-embedding-3-large",
+          apiKeyRef: {
+            providerId: "local",
+            handle: "secret_large",
+          },
         },
       } as never),
     );
@@ -136,15 +166,20 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
 
   it("fails when semantic search is configured and embedder initialization errors", async () => {
     createEmbedderMock.mockRejectedValue(new Error("missing provider package"));
+    resolveSecretMaterialMock.mockReturnValue(Effect.succeed("openai-key"));
 
     const environmentModule = await import("./environment");
 
     await expect(
       Effect.runPromise(
-        environmentModule.loadConfiguredSemanticSearchEmbedder({
+        environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
           semanticSearch: {
             provider: "openai",
             model: "text-embedding-3-small",
+            apiKeyRef: {
+              providerId: "local",
+              handle: "secret_openai",
+            },
           },
         } as never),
       ),
@@ -159,6 +194,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     indexWorkspaceToolsIntoSqliteMock.mockReset();
     createWorkspaceSourceCatalogMock.mockReset();
     getRuntimeLocalWorkspaceOptionMock.mockReset();
+    resolveSecretMaterialMock.mockReset();
     const environmentModule = await import("./environment");
     environmentModule.clearWorkspaceExecutionCachesForTests();
   });
@@ -186,6 +222,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     }));
 
     const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
+      resolveSecretMaterial: resolveSecretMaterialMock as never,
       sourceAuthMaterialService: {} as never,
       sourceAuthService: {} as never,
       sourceCatalogStore: {} as never,
@@ -307,6 +344,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     ];
 
     const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
+      resolveSecretMaterial: resolveSecretMaterialMock as never,
       sourceAuthMaterialService: {} as never,
       sourceAuthService: {} as never,
       sourceCatalogStore: {} as never,
@@ -386,6 +424,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     };
 
     const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
+      resolveSecretMaterial: resolveSecretMaterialMock as never,
       sourceAuthMaterialService: {} as never,
       sourceAuthService: {} as never,
       sourceCatalogStore: {} as never,

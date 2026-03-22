@@ -16,41 +16,11 @@ const DEFAULT_DIMENSIONS: Record<string, number> = {
   openai: 1536,
 }
 
-const ENV_KEYS: Record<string, string[]> = {
-  google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
-  openai: ["OPENAI_API_KEY"],
-}
-
 const PROVIDER_HINTS: Record<string, { document?: object; query?: object }> = {
   google: {
     document: { taskType: "RETRIEVAL_DOCUMENT" },
     query: { taskType: "RETRIEVAL_QUERY" },
   },
-}
-
-/**
- * Resolve an API key from config (with ${ENV_VAR} substitution) or environment variables.
- */
-function resolveApiKey(config: EmbedderConfig): string | undefined {
-  if (config.apiKey) {
-    // Support ${ENV_VAR} substitution
-    const envMatch = config.apiKey.match(/^\$\{(.+)\}$/)
-    if (envMatch) {
-      return process.env[envMatch[1]]
-    }
-    return config.apiKey
-  }
-
-  // Fall back to known environment variables for the provider
-  const envKeys = ENV_KEYS[config.provider]
-  if (envKeys) {
-    for (const key of envKeys) {
-      const value = process.env[key]
-      if (value) return value
-    }
-  }
-
-  return undefined
 }
 
 /**
@@ -70,8 +40,7 @@ function getProviderHints(
  * Dynamically load a provider package.
  *
  * The runtime must not mutate the checkout or install dependencies.
- * Missing provider packages should fail deterministically so callers can
- * fall back to keyword-only search.
+ * Missing provider packages should fail deterministically.
  */
 async function importProviderPackage(
   providerName: string,
@@ -189,10 +158,13 @@ export async function createAiSdkEmbedder(
   const requestedDimensions = config.dimensions
   const dimensions = requestedDimensions ?? DEFAULT_DIMENSIONS[providerName] ?? 3072
 
-  // Resolve API key
-  const apiKey = resolveApiKey(config)
+  const apiKey = config.apiKey?.trim()
+  if (!apiKey) {
+    throw new Error(
+      `Semantic search provider "${providerName}" requires a resolved api key.`,
+    )
+  }
 
-  // Dynamic import of AI SDK provider package
   const embeddingModel = await loadEmbeddingModel(
     providerName,
     model,
