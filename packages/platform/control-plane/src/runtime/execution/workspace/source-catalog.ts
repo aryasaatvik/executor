@@ -289,7 +289,7 @@ export const createWorkspaceSourceCatalog = (input: {
   const jsonCatalog = createJsonSourceCatalog(input);
 
   if (!dbPath) {
-    return createEmptySourceCatalog();
+    return jsonCatalog;
   }
 
   if (input.sqliteCatalogReady === false) {
@@ -300,8 +300,12 @@ export const createWorkspaceSourceCatalog = (input: {
     ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
   });
 
-  const sqliteCatalogEffect = createSqliteToolCatalog(input.embedder).pipe(
-    Effect.provide(dbLayer),
+  const sqliteCatalogEffect = Effect.runSync(
+    Effect.cached(
+      createSqliteToolCatalog(input.embedder).pipe(
+        Effect.provide(dbLayer),
+      ),
+    ),
   );
 
   const withSqliteFallback = <A>(

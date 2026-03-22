@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
+import { createSqliteToolCatalog } from "../../../db/catalog";
 
 const {
   indexSourceMock,
@@ -121,6 +122,101 @@ describe("createWorkspaceSourceCatalog", () => {
     expect(tools.map((tool) => tool.path)).toEqual([jsonTool.path]);
     expect(searched.map((hit) => hit.path)).toEqual([jsonTool.path]);
     expect(byPath?.path).toBe(jsonTool.path);
+  });
+
+  it("preserves the JSON-backed catalog when no local workspace is active", async () => {
+    const jsonTool = makeTool({
+      path: "github.issues.create",
+      sourceKey: "github",
+      namespace: "github.issues",
+      description: "Create a GitHub issue",
+    });
+
+    const catalog = createWorkspaceSourceCatalog({
+      workspaceId: "workspace-1" as never,
+      accountId: "account-1" as never,
+      sourceCatalogStore: {
+        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([jsonTool]),
+        loadWorkspaceSourceCatalogToolByPath: ({ path }: { path: string }) =>
+          Effect.succeed(path === jsonTool.path ? jsonTool : null),
+      } as never,
+      workspaceConfigStore: {} as never,
+      workspaceStateStore: {} as never,
+      sourceArtifactStore: {} as never,
+      runtimeLocalWorkspace: null,
+    });
+
+    const tools = await Effect.runPromise(
+      catalog.listTools({ limit: 10, includeSchemas: false }),
+    );
+    const searched = await Effect.runPromise(
+      catalog.searchTools({
+        query: "create github issue",
+        sourceKey: "github",
+        limit: 10,
+      }),
+    );
+
+    expect(tools.map((tool) => tool.path)).toEqual([jsonTool.path]);
+    expect(searched.map((hit) => hit.path)).toEqual([jsonTool.path]);
+  });
+
+  it("reuses the SQLite catalog across method calls", async () => {
+    vi.mocked(createSqliteToolCatalog).mockReset();
+
+    let executions = 0;
+    vi.mocked(createSqliteToolCatalog).mockReturnValue(
+      Effect.sync(() => {
+        executions += 1;
+        return {
+          searchTools: () =>
+            Effect.succeed([
+              { path: "github.issues.create", score: 1 },
+            ] as const),
+          listTools: () =>
+            Effect.succeed([
+              {
+                path: "github.issues.create",
+                sourceKey: "github",
+                interaction: "auto",
+              },
+            ] as const),
+          listNamespaces: () =>
+            Effect.succeed([
+              { namespace: "github.issues", toolCount: 1 },
+            ] as const),
+          getToolByPath: () =>
+            Effect.succeed({
+              path: "github.issues.create",
+              sourceKey: "github",
+              interaction: "auto",
+            } as const),
+        };
+      }) as never,
+    );
+
+    const catalog = createWorkspaceSourceCatalog({
+      workspaceId: "workspace-1" as never,
+      accountId: "account-1" as never,
+      sourceCatalogStore: {
+        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([]),
+        loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
+      } as never,
+      workspaceConfigStore: {} as never,
+      workspaceStateStore: {} as never,
+      sourceArtifactStore: {} as never,
+      runtimeLocalWorkspace: {
+        context: {
+          stateDirectory: "/tmp/executor-tests",
+        },
+      } as never,
+    });
+
+    await Effect.runPromise(catalog.listTools({ limit: 10, includeSchemas: false }));
+    await Effect.runPromise(catalog.searchTools({ query: "create", limit: 10 }));
+    await Effect.runPromise(catalog.listNamespaces({ limit: 10 }));
+
+    expect(executions).toBe(1);
   });
 
   it("re-embeds all tools when the semantic-search signature changes", async () => {
