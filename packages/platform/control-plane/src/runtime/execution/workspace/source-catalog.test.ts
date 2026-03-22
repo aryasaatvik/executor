@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
@@ -63,6 +63,12 @@ const makeTool = (input: {
   }) as LoadedSourceCatalogToolIndexEntry;
 
 describe("createWorkspaceSourceCatalog", () => {
+  beforeEach(() => {
+    vi.mocked(createSqliteToolCatalog).mockReset();
+    indexSourceMock.mockReset();
+    embedSourceToolsMock.mockReset();
+  });
+
   it("indexes tools with the canonical descriptor sourceKey", () => {
     const tool = makeTool({
       path: "github.issues.create",
@@ -75,70 +81,13 @@ describe("createWorkspaceSourceCatalog", () => {
     expect(toToolToIndex(tool).sourceKey).toBe("src_123");
   });
 
-  it("falls back to the JSON-backed catalog when SQLite indexing is unavailable", async () => {
-    const jsonTool = makeTool({
-      path: "github.issues.create",
-      sourceKey: "github",
-      namespace: "github.issues",
-      description: "Create a GitHub issue",
-    });
-
+  it("returns an empty catalog when no local workspace is active", async () => {
     const catalog = createWorkspaceSourceCatalog({
       workspaceId: "workspace-1" as never,
       accountId: "account-1" as never,
       sourceCatalogStore: {
-        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([jsonTool]),
-        loadWorkspaceSourceCatalogToolByPath: ({ path }: { path: string }) =>
-          Effect.succeed(path === jsonTool.path ? jsonTool : null),
-      } as never,
-      workspaceConfigStore: {} as never,
-      workspaceStateStore: {} as never,
-      sourceArtifactStore: {} as never,
-      runtimeLocalWorkspace: {
-        context: {
-          stateDirectory: "/tmp/executor-tests",
-        },
-      } as never,
-      sqliteCatalogReady: false,
-    });
-
-    const tools = await Effect.runPromise(
-      catalog.listTools({ limit: 10, includeSchemas: false }),
-    );
-    const searched = await Effect.runPromise(
-      catalog.searchTools({
-        query: "create github issue",
-        sourceKey: "github",
-        limit: 10,
-      }),
-    );
-    const byPath = await Effect.runPromise(
-      catalog.getToolByPath({
-        path: jsonTool.path as never,
-        includeSchemas: false,
-      }),
-    );
-
-    expect(tools.map((tool) => tool.path)).toEqual([jsonTool.path]);
-    expect(searched.map((hit) => hit.path)).toEqual([jsonTool.path]);
-    expect(byPath?.path).toBe(jsonTool.path);
-  });
-
-  it("preserves the JSON-backed catalog when no local workspace is active", async () => {
-    const jsonTool = makeTool({
-      path: "github.issues.create",
-      sourceKey: "github",
-      namespace: "github.issues",
-      description: "Create a GitHub issue",
-    });
-
-    const catalog = createWorkspaceSourceCatalog({
-      workspaceId: "workspace-1" as never,
-      accountId: "account-1" as never,
-      sourceCatalogStore: {
-        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([jsonTool]),
-        loadWorkspaceSourceCatalogToolByPath: ({ path }: { path: string }) =>
-          Effect.succeed(path === jsonTool.path ? jsonTool : null),
+        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([]),
+        loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
       } as never,
       workspaceConfigStore: {} as never,
       workspaceStateStore: {} as never,
@@ -156,9 +105,44 @@ describe("createWorkspaceSourceCatalog", () => {
         limit: 10,
       }),
     );
+    const byPath = await Effect.runPromise(
+      catalog.getToolByPath({
+        path: "github.issues.create" as never,
+        includeSchemas: false,
+      }),
+    );
 
-    expect(tools.map((tool) => tool.path)).toEqual([jsonTool.path]);
-    expect(searched.map((hit) => hit.path)).toEqual([jsonTool.path]);
+    expect(tools).toEqual([]);
+    expect(searched).toEqual([]);
+    expect(byPath).toBeNull();
+  });
+
+  it("surfaces SQLite catalog failures instead of falling back", async () => {
+    vi.mocked(createSqliteToolCatalog).mockReset();
+    vi.mocked(createSqliteToolCatalog).mockReturnValue(
+      Effect.fail(new Error("sqlite unavailable")) as never,
+    );
+
+    const catalog = createWorkspaceSourceCatalog({
+      workspaceId: "workspace-1" as never,
+      accountId: "account-1" as never,
+      sourceCatalogStore: {
+        loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed([]),
+        loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
+      } as never,
+      workspaceConfigStore: {} as never,
+      workspaceStateStore: {} as never,
+      sourceArtifactStore: {} as never,
+      runtimeLocalWorkspace: {
+        context: {
+          stateDirectory: "/tmp/executor-tests",
+        },
+      } as never,
+    });
+
+    await expect(
+      Effect.runPromise(catalog.listTools({ limit: 10, includeSchemas: false })),
+    ).rejects.toThrow("sqlite unavailable");
   });
 
   it("reuses the SQLite catalog across method calls", async () => {
@@ -277,7 +261,7 @@ describe("createWorkspaceSourceCatalog", () => {
       ),
     );
 
-    expect(result).toBe(true);
+    expect(result).toBeUndefined();
     expect(indexSourceMock).toHaveBeenCalledTimes(1);
     expect(embedSourceToolsMock).toHaveBeenCalledTimes(1);
     expect(embedSourceToolsMock.mock.calls[0]?.[0]?.tools).toHaveLength(1);

@@ -1,7 +1,6 @@
 import type {
   ToolCatalog,
 } from "@executor/codemode-core";
-import { createToolCatalogFromEntries } from "@executor/codemode-core";
 import type { AccountId, Source } from "#schema";
 import * as Effect from "effect/Effect";
 
@@ -166,10 +165,10 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   embedder?: Embedder;
-}): Effect.Effect<boolean, never, never> => {
+}): Effect.Effect<void, unknown, never> => {
   const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
   if (!dbPath) {
-    return Effect.succeed(false);
+    return Effect.fail(new Error("Workspace catalog DB path is unavailable."));
   }
 
   const workspaceStorageLayer = makeWorkspaceStorageLayer({
@@ -280,12 +279,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     }),
     Effect.provide(workspaceStorageLayer),
     Effect.provide(dbLayer),
-    Effect.as(true),
-    Effect.catchAll((error) => {
-      return Effect.logWarning(
-        `Failed to index workspace tools into SQLite: ${error instanceof Error ? error.message : String(error)}`,
-      ).pipe(Effect.as(false));
-    }),
+    Effect.asVoid,
   );
 };
 
@@ -302,17 +296,11 @@ export const createWorkspaceSourceCatalog = (input: {
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   embedder?: Embedder;
-  sqliteCatalogReady?: boolean;
 }): ToolCatalog => {
   const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
-  const jsonCatalog = createJsonSourceCatalog(input);
 
   if (!dbPath) {
-    return jsonCatalog;
-  }
-
-  if (input.sqliteCatalogReady === false) {
-    return jsonCatalog;
+    return createEmptySourceCatalog();
   }
 
   const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
@@ -327,125 +315,10 @@ export const createWorkspaceSourceCatalog = (input: {
     ),
   );
 
-  const withSqliteFallback = <A>(
-    sqliteEffect: Effect.Effect<A, unknown, never>,
-    fallback: () => Effect.Effect<A, unknown, never>,
-  ) =>
-    sqliteEffect.pipe(
-      Effect.catchAll((error) =>
-        Effect.logWarning(
-          `SQLite workspace catalog unavailable, falling back to JSON catalog: ${error instanceof Error ? error.message : String(error)}`,
-        ).pipe(Effect.zipRight(fallback())),
-      ),
-    )
-
   return {
     searchTools: ({ query, namespace, sourceKey, limit }) =>
       provideRuntimeLocalWorkspace(
-        withSqliteFallback(
-          Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-            catalog.searchTools({
-              query,
-              ...(namespace !== undefined ? { namespace } : {}),
-              ...(sourceKey !== undefined ? { sourceKey } : {}),
-              limit,
-            }),
-          ),
-          () =>
-            jsonCatalog.searchTools({
-              query,
-              ...(namespace !== undefined ? { namespace } : {}),
-              ...(sourceKey !== undefined ? { sourceKey } : {}),
-              limit,
-            }),
-        ),
-        input.runtimeLocalWorkspace,
-      ),
-
-    listTools: ({ namespace, query, limit, includeSchemas = false }) =>
-      provideRuntimeLocalWorkspace(
-        withSqliteFallback(
-          Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-            catalog.listTools({
-              ...(namespace !== undefined ? { namespace } : {}),
-              ...(query !== undefined ? { query } : {}),
-              limit,
-              includeSchemas,
-            }),
-          ),
-          () =>
-            jsonCatalog.listTools({
-              ...(namespace !== undefined ? { namespace } : {}),
-              ...(query !== undefined ? { query } : {}),
-              limit,
-              includeSchemas,
-            }),
-        ),
-        input.runtimeLocalWorkspace,
-      ),
-
-    listNamespaces: ({ limit }) =>
-      provideRuntimeLocalWorkspace(
-        withSqliteFallback(
-          Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-            catalog.listNamespaces({ limit }),
-          ),
-          () => jsonCatalog.listNamespaces({ limit }),
-        ),
-        input.runtimeLocalWorkspace,
-      ),
-
-    getToolByPath: ({ path, includeSchemas }) =>
-      provideRuntimeLocalWorkspace(
-        withSqliteFallback(
-          Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-            catalog.getToolByPath({ path, includeSchemas }),
-          ),
-          () => jsonCatalog.getToolByPath({ path, includeSchemas }),
-        ),
-        input.runtimeLocalWorkspace,
-      ),
-  } satisfies ToolCatalog;
-};
-
-const createJsonSourceCatalog = (input: {
-  workspaceId: Source["workspaceId"];
-  accountId: AccountId;
-  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
-  workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
-  runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
-}): ToolCatalog => {
-  const workspaceStorageLayer = makeWorkspaceStorageLayer({
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-  });
-
-  const loadCatalog = (includeSchemas: boolean) =>
-    loadWorkspaceCatalogTools({
-      workspaceId: input.workspaceId,
-      accountId: input.accountId,
-      sourceCatalogStore: input.sourceCatalogStore,
-      includeSchemas,
-    }).pipe(
-      Effect.map((tools) =>
-        createToolCatalogFromEntries({
-          entries: tools.map((tool) => ({
-            descriptor: tool.descriptor,
-            namespace: tool.searchNamespace,
-            searchText: tool.searchText,
-          })),
-        }),
-      ),
-      Effect.provide(workspaceStorageLayer),
-    )
-
-  return {
-    searchTools: ({ query, namespace, sourceKey, limit }) =>
-      loadCatalog(false).pipe(
-        Effect.flatMap((catalog) =>
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
           catalog.searchTools({
             query,
             ...(namespace !== undefined ? { namespace } : {}),
@@ -453,10 +326,12 @@ const createJsonSourceCatalog = (input: {
             limit,
           }),
         ),
+        input.runtimeLocalWorkspace,
       ),
+
     listTools: ({ namespace, query, limit, includeSchemas = false }) =>
-      loadCatalog(includeSchemas).pipe(
-        Effect.flatMap((catalog) =>
+      provideRuntimeLocalWorkspace(
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
           catalog.listTools({
             ...(namespace !== undefined ? { namespace } : {}),
             ...(query !== undefined ? { query } : {}),
@@ -464,24 +339,26 @@ const createJsonSourceCatalog = (input: {
             includeSchemas,
           }),
         ),
+        input.runtimeLocalWorkspace,
       ),
+
     listNamespaces: ({ limit }) =>
-      loadCatalog(false).pipe(
-        Effect.flatMap((catalog) => catalog.listNamespaces({ limit })),
+      provideRuntimeLocalWorkspace(
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.listNamespaces({ limit }),
+        ),
+        input.runtimeLocalWorkspace,
       ),
+
     getToolByPath: ({ path, includeSchemas }) =>
-      loadWorkspaceCatalogToolByPath({
-        workspaceId: input.workspaceId,
-        accountId: input.accountId,
-        sourceCatalogStore: input.sourceCatalogStore,
-        path,
-        includeSchemas,
-      }).pipe(
-        Effect.map((tool) => tool?.descriptor ?? null),
-        Effect.provide(workspaceStorageLayer),
+      provideRuntimeLocalWorkspace(
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.getToolByPath({ path, includeSchemas }),
+        ),
+        input.runtimeLocalWorkspace,
       ),
-  } satisfies ToolCatalog
-}
+  } satisfies ToolCatalog;
+};
 
 // ---------------------------------------------------------------------------
 // Empty catalog fallback (no local workspace)

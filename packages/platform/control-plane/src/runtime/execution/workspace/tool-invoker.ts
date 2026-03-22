@@ -51,7 +51,6 @@ export const createWorkspaceToolInvoker = (input: {
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;
   embedder?: Embedder;
-  sqliteCatalogReady?: boolean;
   onElicitation?: Parameters<
     typeof makeToolInvokerFromTools
   >[0]["onElicitation"];

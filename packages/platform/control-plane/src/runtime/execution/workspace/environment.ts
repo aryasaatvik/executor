@@ -64,7 +64,6 @@ const semanticSearchEmbedderCache = new Map<
 
 type WorkspaceCatalogCacheEntry = {
   indexSignature: string
-  sqliteCatalogReady: boolean
   sourceCatalog: ReturnType<typeof createWorkspaceSourceCatalog>
 }
 
@@ -213,23 +212,19 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
               embedder,
             });
       const canReuseCachedSqliteCatalog =
-        cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature &&
-        cachedWorkspaceCatalog.sqliteCatalogReady;
-      const sqliteCatalogReady =
-        runtimeLocalWorkspace === null
-          ? false
-          : canReuseCachedSqliteCatalog
-            ? cachedWorkspaceCatalog.sqliteCatalogReady
-            : yield* indexWorkspaceToolsIntoSqlite({
-                workspaceId,
-                accountId,
-                sourceCatalogStore: input.sourceCatalogStore,
-                workspaceConfigStore: input.workspaceConfigStore,
-                workspaceStateStore: input.workspaceStateStore,
-                sourceArtifactStore: input.sourceArtifactStore,
-                runtimeLocalWorkspace,
-                embedder,
-              });
+        cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature;
+      if (runtimeLocalWorkspace !== null && !canReuseCachedSqliteCatalog) {
+        yield* indexWorkspaceToolsIntoSqlite({
+          workspaceId,
+          accountId,
+          sourceCatalogStore: input.sourceCatalogStore,
+          workspaceConfigStore: input.workspaceConfigStore,
+          workspaceStateStore: input.workspaceStateStore,
+          sourceArtifactStore: input.sourceArtifactStore,
+          runtimeLocalWorkspace,
+          embedder,
+        });
+      }
       const sourceCatalog =
         runtimeLocalWorkspace === null
           ? createWorkspaceSourceCatalog({
@@ -241,7 +236,6 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
               sourceArtifactStore: input.sourceArtifactStore,
               runtimeLocalWorkspace,
               embedder,
-              sqliteCatalogReady,
             })
           : canReuseCachedSqliteCatalog
             ? cachedWorkspaceCatalog.sourceCatalog
@@ -254,13 +248,11 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
                 sourceArtifactStore: input.sourceArtifactStore,
                 runtimeLocalWorkspace,
                 embedder,
-                sqliteCatalogReady,
               });
 
       if (
         runtimeLocalWorkspace !== null &&
-        nextWorkspaceCatalogSignature !== null &&
-        sqliteCatalogReady
+        nextWorkspaceCatalogSignature !== null
       ) {
         workspaceCatalogCache.set(
           workspaceCatalogCacheKey({
@@ -270,7 +262,6 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
           }),
           {
             indexSignature: nextWorkspaceCatalogSignature,
-            sqliteCatalogReady,
             sourceCatalog,
           },
         );
@@ -297,7 +288,6 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         runtimeLocalWorkspace,
         localToolRuntime,
         embedder,
-        sqliteCatalogReady,
         onElicitation,
       });
 

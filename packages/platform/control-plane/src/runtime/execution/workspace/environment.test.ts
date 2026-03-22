@@ -161,7 +161,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     };
 
     getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
-    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.succeed(true));
+    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.void);
     createWorkspaceSourceCatalogMock.mockReturnValue(sourceCatalog);
     createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
       catalog: sourceCatalog,
@@ -235,7 +235,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     };
 
     getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
-    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.succeed(true));
+    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.void);
     createWorkspaceSourceCatalogMock
       .mockReturnValueOnce({
         searchTools: vi.fn(),
@@ -328,7 +328,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retries SQLite indexing after a cached failure for the same workspace signature", async () => {
+  it("retries SQLite indexing after a failure for the same workspace signature", async () => {
     const environmentModule = await import("./environment");
     const runtimeLocalWorkspace = {
       context: {
@@ -338,21 +338,14 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
 
     getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
     indexWorkspaceToolsIntoSqliteMock
-      .mockReturnValueOnce(Effect.succeed(false))
-      .mockReturnValueOnce(Effect.succeed(true));
-    createWorkspaceSourceCatalogMock
-      .mockReturnValueOnce({
-        searchTools: vi.fn(),
-        listTools: vi.fn(),
-        listNamespaces: vi.fn(),
-        getToolByPath: vi.fn(),
-      })
-      .mockReturnValueOnce({
-        searchTools: vi.fn(),
-        listTools: vi.fn(),
-        listNamespaces: vi.fn(),
-        getToolByPath: vi.fn(),
-      });
+      .mockReturnValueOnce(Effect.fail(new Error("sqlite unavailable")))
+      .mockReturnValueOnce(Effect.void);
+    createWorkspaceSourceCatalogMock.mockReturnValue({
+      searchTools: vi.fn(),
+      listTools: vi.fn(),
+      listNamespaces: vi.fn(),
+      getToolByPath: vi.fn(),
+    });
     createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
       catalog: sourceCatalog,
       toolInvoker: { invoke: vi.fn() },
@@ -397,12 +390,14 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
       sourceArtifactStore: {} as never,
     });
 
-    await Effect.runPromise(
-      resolver({
-        workspaceId: "workspace-1" as never,
-        accountId: "account-1" as never,
-      } as never),
-    );
+    await expect(
+      Effect.runPromise(
+        resolver({
+          workspaceId: "workspace-1" as never,
+          accountId: "account-1" as never,
+        } as never),
+      ),
+    ).rejects.toThrow("sqlite unavailable");
     await Effect.runPromise(
       resolver({
         workspaceId: "workspace-1" as never,
@@ -411,6 +406,6 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     );
 
     expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(2);
-    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(2);
+    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
   });
 });
