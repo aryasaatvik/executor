@@ -21,23 +21,6 @@ const DEFAULT_DIMENSIONS: Record<string, number> = {
   cohere: 1024,
 }
 
-const resolveDefaultDimensions = (
-  providerName: string,
-  model: string,
-): number | undefined => {
-  if (providerName === "openai") {
-    if (model === "text-embedding-3-large") {
-      return 3072
-    }
-    if (model === "text-embedding-3-small") {
-      return 1536
-    }
-    return undefined
-  }
-
-  return DEFAULT_DIMENSIONS[providerName]
-}
-
 const ENV_KEYS: Record<string, string[]> = {
   google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
   openai: ["OPENAI_API_KEY"],
@@ -215,7 +198,8 @@ export async function createAiSdkEmbedder(
 
   const providerName = config.provider
   const model = config.model ?? DEFAULT_MODELS[providerName] ?? providerName
-  const dimensions = config.dimensions ?? resolveDefaultDimensions(providerName, model)
+  const requestedDimensions = config.dimensions
+  const dimensions = requestedDimensions ?? DEFAULT_DIMENSIONS[providerName] ?? 3072
 
   // Resolve API key
   const apiKey = resolveApiKey(config)
@@ -225,14 +209,14 @@ export async function createAiSdkEmbedder(
     providerName,
     model,
     apiKey,
-    dimensions,
+    requestedDimensions,
   )
 
   // Determine if normalization is needed (Google MRL truncation requires L2 normalization)
   const needsNormalization =
     providerName === "google" &&
-    dimensions !== undefined &&
-    dimensions < 3072
+    requestedDimensions !== undefined &&
+    requestedDimensions < 3072
 
   return {
     provider: providerName,

@@ -84,9 +84,9 @@ const getCachedSemanticSearchEmbedder = (
       return undefined
     }
 
-    // Prime local embedders once so the actual output dimensions are known
-    // before SQLite provisions the vec table shape.
-    if (config.provider === "local" && config.dimensions == null) {
+    // Prime embedders without explicit dimensions once so the actual output
+    // width is known before SQLite provisions the vec table shape.
+    if (config.dimensions == null) {
       await embedder.embed("__executor_dimension_probe__", "document")
     }
 

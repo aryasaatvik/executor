@@ -46,13 +46,13 @@ describe("createAiSdkEmbedder", () => {
     expect(openaiFactoryMock).toHaveBeenCalledWith({ apiKey: "test-key" });
     expect(textEmbeddingModelMock).toHaveBeenCalledWith(
       "text-embedding-3-small",
-      { dimensions: 1536 },
+      undefined,
     );
     expect(embedMock).toHaveBeenCalledTimes(1);
     expect(embedding).toEqual([0.1, 0.2, 0.3]);
   });
 
-  it("preserves the large OpenAI embedding dimensions by default", async () => {
+  it("passes through AI SDK model defaults when dimensions are omitted", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     const { createAiSdkEmbedder } = await import("./ai-sdk");
 
@@ -63,7 +63,7 @@ describe("createAiSdkEmbedder", () => {
 
     expect(textEmbeddingModelMock).toHaveBeenCalledWith(
       "text-embedding-3-large",
-      { dimensions: 3072 },
+      undefined,
     );
   });
 

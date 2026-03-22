@@ -34,6 +34,10 @@ const defaultModelByProvider: Record<ConfiguredSemanticProvider, string> = {
   openai: "text-embedding-3-small",
 };
 
+const defaultDimensionsByProvider: Partial<Record<ConfiguredSemanticProvider, number>> = {
+  google: 768,
+};
+
 const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
   google: "AIza...",
   openai: "sk-...",
@@ -164,6 +168,8 @@ function SemanticSearchSettingsCard(props: {
                 ...(props.config.semanticSearch?.provider === provider
                   && props.config.semanticSearch.dimensions !== undefined
                   ? { dimensions: props.config.semanticSearch.dimensions }
+                  : defaultDimensionsByProvider[provider] !== undefined
+                    ? { dimensions: defaultDimensionsByProvider[provider] }
                   : {}),
                 ...(cloudProvider && trimmedApiKey.length > 0
                   ? { apiKey: trimmedApiKey }

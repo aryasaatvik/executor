@@ -59,6 +59,33 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     expect(embed).toHaveBeenCalledWith("__executor_dimension_probe__", "document");
   });
 
+  it("probes non-local embedders when dimensions are not configured", async () => {
+    const embed = vi.fn(async () => [1, 2, 3]);
+    const embedder = {
+      provider: "google",
+      model: "gemini-embedding-2-preview",
+      dimensions: 768,
+      embed,
+      embedBatch: async () => [[1, 2, 3]],
+    };
+    createEmbedderMock.mockResolvedValue(embedder);
+
+    const environmentModule = await import("./environment");
+
+    const loaded = await Effect.runPromise(
+      environmentModule.loadConfiguredSemanticSearchEmbedder({
+        semanticSearch: {
+          provider: "google",
+          model: "gemini-embedding-2-preview",
+        },
+      } as never),
+    );
+
+    expect(loaded).toBe(embedder);
+    expect(embed).toHaveBeenCalledTimes(1);
+    expect(embed).toHaveBeenCalledWith("__executor_dimension_probe__", "document");
+  });
+
   it("creates a new embedder when the semantic search config changes", async () => {
     createEmbedderMock
       .mockResolvedValueOnce({
