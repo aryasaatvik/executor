@@ -6,7 +6,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
-import { buildSearchText, indexSource, type ToolToIndex } from "./indexer";
+import { buildSearchText, indexSource, type SourceToIndex, type ToolToIndex } from "./indexer";
+import { source } from "./schema";
 
 vi.stubGlobal("Bun", {
   CryptoHasher: class {
@@ -52,6 +53,19 @@ const baseTool: ToolToIndex = {
   description: "Create a GitHub issue",
 };
 
+const baseSource: SourceToIndex = {
+  sourceId: "source-github",
+  workspaceId: "workspace-1",
+  name: "GitHub",
+  kind: "openapi",
+  endpoint: "https://api.github.com",
+  status: "connected",
+  enabled: true,
+  namespace: "github",
+  createdAt: 1,
+  updatedAt: 2,
+};
+
 const makeDb = (existingRows: Array<{
   tool_id: string;
   content_hash: string;
@@ -59,11 +73,18 @@ const makeDb = (existingRows: Array<{
   source_status: string | null;
 }>) => {
   const updates: Array<Record<string, unknown>> = [];
-  const inserts: Array<Record<string, unknown>> = [];
+  const toolInserts: Array<Record<string, unknown>> = [];
+  const sourceUpserts: Array<{
+    values: Record<string, unknown>;
+    set: Record<string, unknown>;
+  }> = [];
+  const operations: string[] = [];
 
   return {
     updates,
-    inserts,
+    toolInserts,
+    sourceUpserts,
+    operations,
     db: {
       select: () => ({
         from: () => ({
@@ -74,16 +95,33 @@ const makeDb = (existingRows: Array<{
         set: (values: Record<string, unknown>) => ({
           where: () => {
             updates.push(values);
+            operations.push("tool-update");
             return Effect.void;
           },
         }),
       }),
-      insert: () => ({
-        values: (values: Record<string, unknown>) => {
-          inserts.push(values);
-          return Effect.void;
-        },
-      }),
+      insert: (table: unknown) =>
+        table === source
+          ? {
+              values: (values: Record<string, unknown>) => ({
+                onConflictDoUpdate: ({
+                  set,
+                }: {
+                  set: Record<string, unknown>;
+                }) => {
+                  sourceUpserts.push({ values, set });
+                  operations.push("source-upsert");
+                  return Effect.void;
+                },
+              }),
+            }
+          : {
+              values: (values: Record<string, unknown>) => {
+                toolInserts.push(values);
+                operations.push("tool-insert");
+                return Effect.void;
+              },
+            },
       delete: () => ({
         where: () => Effect.void,
       }),
@@ -111,6 +149,7 @@ describe("indexSource", () => {
       const result = yield* indexSource({
         sourceId: baseTool.sourceId,
         sourceKey: baseTool.sourceKey,
+        source: baseSource,
         tools: [baseTool],
       }).pipe(
         Effect.provide(
@@ -123,7 +162,8 @@ describe("indexSource", () => {
 
       expect(result.changedTools).toEqual([]);
       expect(fake.updates).toEqual([]);
-      expect(fake.inserts).toEqual([]);
+      expect(fake.toolInserts).toEqual([]);
+      expect(fake.sourceUpserts).toHaveLength(1);
     }),
   );
 
@@ -142,6 +182,7 @@ describe("indexSource", () => {
       const result = yield* indexSource({
         sourceId: baseTool.sourceId,
         sourceKey: baseTool.sourceKey,
+        source: baseSource,
         tools: [baseTool],
       }).pipe(
         Effect.provide(
@@ -159,7 +200,61 @@ describe("indexSource", () => {
           source_status: "connected",
         },
       ]);
-      expect(fake.inserts).toEqual([]);
+      expect(fake.toolInserts).toEqual([]);
+      expect(fake.sourceUpserts).toHaveLength(1);
+    }),
+  );
+
+  it.effect("upserts the parent source row before inserting catalog tools", () =>
+    Effect.gen(function* () {
+      const fake = makeDb([]);
+
+      const result = yield* indexSource({
+        sourceId: baseTool.sourceId,
+        sourceKey: baseTool.sourceKey,
+        source: baseSource,
+        tools: [baseTool],
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.succeed(SqliteDrizzle, fake.db as never),
+            Layer.succeed(SqlClient.SqlClient, makeSql as never),
+          ),
+        ),
+      );
+
+      expect(result.changedTools).toEqual([baseTool]);
+      expect(fake.operations.slice(0, 2)).toEqual([
+        "source-upsert",
+        "tool-insert",
+      ]);
+      expect(fake.sourceUpserts).toEqual([
+        {
+          values: {
+            id: baseSource.sourceId,
+            workspace_id: baseSource.workspaceId,
+            name: baseSource.name,
+            kind: baseSource.kind,
+            endpoint: baseSource.endpoint,
+            status: baseSource.status,
+            enabled: baseSource.enabled,
+            namespace: baseSource.namespace,
+            time_created: baseSource.createdAt,
+            time_updated: baseSource.updatedAt,
+          },
+          set: {
+            workspace_id: baseSource.workspaceId,
+            name: baseSource.name,
+            kind: baseSource.kind,
+            endpoint: baseSource.endpoint,
+            status: baseSource.status,
+            enabled: baseSource.enabled,
+            namespace: baseSource.namespace,
+            time_updated: baseSource.updatedAt,
+          },
+        },
+      ]);
+      expect(fake.toolInserts).toHaveLength(1);
     }),
   );
 });

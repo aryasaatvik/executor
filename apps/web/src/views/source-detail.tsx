@@ -50,17 +50,21 @@ const visibleTabs: Array<{ id: SourceRouteSearch["tab"]; label: string }> = [
 ];
 
 const isSourceNotFoundError = (loadable: Loadable<unknown>): boolean =>
-  loadable.status === "error"
-  && loadable.error.message.toLowerCase().includes("source not found");
+  loadable.status === "error" &&
+  loadable.error.message.toLowerCase().includes("source not found");
 
 const isMissingCatalogArtifactError = (loadable: Loadable<unknown>): boolean =>
-  loadable.status === "error"
-  && loadable.error.message.toLowerCase().includes("catalog artifact missing for source");
+  loadable.status === "error" &&
+  loadable.error.message
+    .toLowerCase()
+    .includes("catalog artifact missing for source");
 
 const listExcludesSource = (
   sources: Loadable<ReadonlyArray<Source>>,
   sourceId: string,
-): boolean => sources.status === "ready" && !sources.data.some((source) => source.id === sourceId);
+): boolean =>
+  sources.status === "ready" &&
+  !sources.data.some((source) => source.id === sourceId);
 
 type SourceDetailPageState =
   | { kind: "source_not_found" }
@@ -74,14 +78,17 @@ const resolveSourceDetailPageState = (input: {
   sourceId: string;
 }): SourceDetailPageState => {
   if (
-    listExcludesSource(input.sources, input.sourceId)
-    || isSourceNotFoundError(input.source)
-    || isSourceNotFoundError(input.inspection)
+    listExcludesSource(input.sources, input.sourceId) ||
+    isSourceNotFoundError(input.source) ||
+    isSourceNotFoundError(input.inspection)
   ) {
     return { kind: "source_not_found" };
   }
 
-  if (input.source.status === "ready" && isMissingCatalogArtifactError(input.inspection)) {
+  if (
+    input.source.status === "ready" &&
+    isMissingCatalogArtifactError(input.inspection)
+  ) {
     return {
       kind: "tools_missing",
       source: input.source.data,
@@ -92,13 +99,22 @@ const resolveSourceDetailPageState = (input: {
 };
 
 const readBindingString = (source: Source, key: string): string | null =>
-  typeof source.binding[key] === "string" && source.binding[key].trim().length > 0
+  typeof source.binding[key] === "string" &&
+  source.binding[key].trim().length > 0
     ? String(source.binding[key])
     : null;
 
-const readBindingStringMap = (source: Source, key: string): Record<string, string> | null => {
+const readBindingStringMap = (
+  source: Source,
+  key: string,
+): Record<string, string> | null => {
   const candidate = source.binding[key];
-  if (candidate === null || candidate === undefined || typeof candidate !== "object" || Array.isArray(candidate)) {
+  if (
+    candidate === null ||
+    candidate === undefined ||
+    typeof candidate !== "object" ||
+    Array.isArray(candidate)
+  ) {
     return null;
   }
 
@@ -108,16 +124,25 @@ const readBindingStringMap = (source: Source, key: string): Record<string, strin
     : null;
 };
 
-const readBindingStringArray = (source: Source, key: string): Array<string> | undefined => {
+const readBindingStringArray = (
+  source: Source,
+  key: string,
+): Array<string> | undefined => {
   const candidate = source.binding[key];
-  return Array.isArray(candidate) && candidate.every((value) => typeof value === "string")
+  return Array.isArray(candidate) &&
+    candidate.every((value) => typeof value === "string")
     ? [...candidate]
     : undefined;
 };
 
-const readBindingTransport = (source: Source): "auto" | "streamable-http" | "sse" | "stdio" | undefined => {
+const readBindingTransport = (
+  source: Source,
+): "auto" | "streamable-http" | "sse" | "stdio" | undefined => {
   const candidate = source.binding.transport;
-  return candidate === "auto" || candidate === "streamable-http" || candidate === "sse" || candidate === "stdio"
+  return candidate === "auto" ||
+    candidate === "streamable-http" ||
+    candidate === "sse" ||
+    candidate === "stdio"
     ? candidate
     : undefined;
 };
@@ -166,7 +191,9 @@ const refreshableHttpAuth = (
   }
 };
 
-const refreshPayloadFromSource = (source: Source): ConnectSourcePayload | null => {
+const refreshPayloadFromSource = (
+  source: Source,
+): ConnectSourcePayload | null => {
   switch (source.kind) {
     case "mcp":
       return {
@@ -174,7 +201,9 @@ const refreshPayloadFromSource = (source: Source): ConnectSourcePayload | null =
         endpoint: source.endpoint,
         name: source.name,
         namespace: source.namespace,
-        ...(readBindingTransport(source) ? { transport: readBindingTransport(source) } : {}),
+        ...(readBindingTransport(source)
+          ? { transport: readBindingTransport(source) }
+          : {}),
         queryParams: readBindingStringMap(source, "queryParams"),
         headers: readBindingStringMap(source, "headers"),
         command: readBindingString(source, "command"),
@@ -242,7 +271,10 @@ const refreshPayloadFromSource = (source: Source): ConnectSourcePayload | null =
 export function SourceDetailPage(props: {
   sourceId: string;
   search: SourceRouteSearch;
-  navigate: (opts: { search: (prev: SourceRouteSearch) => SourceRouteSearch; replace?: boolean }) => void;
+  navigate: (opts: {
+    search: (prev: SourceRouteSearch) => SourceRouteSearch;
+    replace?: boolean;
+  }) => void;
 }) {
   const { sourceId, search, navigate } = props;
   const sources = useSources();
@@ -261,12 +293,14 @@ export function SourceDetailPage(props: {
   });
 
   const selectedToolPath =
-    search.tool
-    ?? (inspection.status === "ready" ? inspection.data.tools[0]?.path : undefined);
+    search.tool ??
+    (inspection.status === "ready"
+      ? inspection.data.tools[0]?.path
+      : undefined);
 
   const toolDetail = useSourceToolDetail(
     sourceId,
-    search.tab === "model" ? selectedToolPath ?? null : null,
+    search.tab === "model" ? (selectedToolPath ?? null) : null,
   );
 
   const discovery = useSourceDiscovery({
@@ -275,37 +309,47 @@ export function SourceDetailPage(props: {
     limit: 12,
   });
 
-  const handleRefresh = useCallback(async (currentSource: Source) => {
-    const payload = refreshPayloadFromSource(currentSource);
-    if (!payload) {
-      setRefreshFeedback({
-        tone: "error",
-        text: "Refresh is unavailable until this source has complete connection details.",
-      });
-      return;
-    }
+  const handleRefresh = useCallback(
+    async (currentSource: Source) => {
+      const payload = refreshPayloadFromSource(currentSource);
+      if (!payload) {
+        setRefreshFeedback({
+          tone: "error",
+          text: "Refresh is unavailable until this source has complete connection details.",
+        });
+        return;
+      }
 
-    setRefreshFeedback(null);
-    try {
-      await connectSource.mutateAsync(payload);
-      setRefreshFeedback({
-        tone: "success",
-        text: `Refreshed ${currentSource.name}.`,
-      });
-    } catch (error) {
-      setRefreshFeedback({
-        tone: "error",
-        text: error instanceof Error ? error.message : "Failed to refresh source.",
-      });
-    }
-  }, [connectSource]);
+      setRefreshFeedback(null);
+      try {
+        await connectSource.mutateAsync(payload);
+        setRefreshFeedback({
+          tone: "success",
+          text: `Refreshed ${currentSource.name}.`,
+        });
+      } catch (error) {
+        setRefreshFeedback({
+          tone: "error",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Failed to refresh source.",
+        });
+      }
+    },
+    [connectSource],
+  );
 
   // Auto-select first tool
   useEffect(() => {
-    if (search.tab !== "model" || search.tool || inspection.status !== "ready") return;
+    if (search.tab !== "model" || search.tool || inspection.status !== "ready")
+      return;
     const firstTool = inspection.data.tools[0]?.path;
     if (!firstTool) return;
-    void navigate({ search: (prev) => ({ ...prev, tool: firstTool }), replace: true });
+    void navigate({
+      search: (prev) => ({ ...prev, tool: firstTool }),
+      replace: true,
+    });
   }, [inspection, navigate, search.tab, search.tool]);
 
   if (sourceDetailPageState.kind === "source_not_found") {
@@ -313,7 +357,9 @@ export function SourceDetailPage(props: {
   }
 
   if (sourceDetailPageState.kind === "tools_missing") {
-    const refreshPayload = refreshPayloadFromSource(sourceDetailPageState.source);
+    const refreshPayload = refreshPayloadFromSource(
+      sourceDetailPageState.source,
+    );
 
     return (
       <SourceRecoveryState
@@ -326,7 +372,9 @@ export function SourceDetailPage(props: {
             ? "Refresh is unavailable for this source configuration"
             : "Reconnect and rebuild this source"
         }
-        refreshDisabled={connectSource.status === "pending" || refreshPayload === null}
+        refreshDisabled={
+          connectSource.status === "pending" || refreshPayload === null
+        }
         refreshPending={connectSource.status === "pending"}
         feedback={refreshFeedback}
         onRefresh={() => void handleRefresh(sourceDetailPageState.source)}
@@ -338,7 +386,9 @@ export function SourceDetailPage(props: {
     <LoadableBlock loadable={inspection} loading="Loading source...">
       {(bundle) => {
         const selectedTool =
-          bundle.tools.find((t) => t.path === selectedToolPath) ?? bundle.tools[0] ?? null;
+          bundle.tools.find((t) => t.path === selectedToolPath) ??
+          bundle.tools[0] ??
+          null;
 
         return (
           <div className="flex h-full flex-col overflow-hidden">
@@ -375,7 +425,11 @@ export function SourceDetailPage(props: {
                     <button
                       key={tab.id}
                       type="button"
-                      onClick={() => void navigate({ search: (prev) => ({ ...prev, tab: tab.id }) })}
+                      onClick={() =>
+                        void navigate({
+                          search: (prev) => ({ ...prev, tab: tab.id }),
+                        })
+                      }
                       className={cn(
                         "rounded-md px-3 py-1 text-[12px] font-medium transition-colors",
                         tab.id === search.tab
@@ -391,16 +445,19 @@ export function SourceDetailPage(props: {
                   variant="outline"
                   size="sm"
                   onClick={() => void handleRefresh(bundle.source)}
-                  disabled={connectSource.status === "pending" || refreshPayloadFromSource(bundle.source) === null}
+                  disabled={
+                    connectSource.status === "pending" ||
+                    refreshPayloadFromSource(bundle.source) === null
+                  }
                   title={
                     refreshPayloadFromSource(bundle.source) === null
                       ? "Refresh is unavailable for this source configuration"
                       : "Reconnect and resync this source"
                   }
                 >
-                  {connectSource.status === "pending"
-                    ? <IconSpinner className="size-3" />
-                    : null}
+                  {connectSource.status === "pending" ? (
+                    <IconSpinner className="size-3" />
+                  ) : null}
                   Refresh
                 </Button>
                 <Link
@@ -422,7 +479,13 @@ export function SourceDetailPage(props: {
                   detail={toolDetail}
                   selectedToolPath={selectedTool?.path ?? null}
                   onSelectTool={(toolPath) =>
-                    void navigate({ search: (prev) => ({ ...prev, tool: toolPath, tab: "model" }) })
+                    void navigate({
+                      search: (prev) => ({
+                        ...prev,
+                        tool: toolPath,
+                        tab: "model",
+                      }),
+                    })
                   }
                   sourceId={sourceId}
                 />
@@ -433,10 +496,18 @@ export function SourceDetailPage(props: {
                   discovery={discovery}
                   initialQuery={search.query ?? ""}
                   onSubmitQuery={(query) =>
-                    void navigate({ search: (prev) => ({ ...prev, query, tab: "discover" }) })
+                    void navigate({
+                      search: (prev) => ({ ...prev, query, tab: "discover" }),
+                    })
                   }
                   onOpenTool={(toolPath) =>
-                    void navigate({ search: (prev) => ({ ...prev, tab: "model", tool: toolPath }) })
+                    void navigate({
+                      search: (prev) => ({
+                        ...prev,
+                        tab: "model",
+                        tool: toolPath,
+                      }),
+                    })
                   }
                 />
               )}
@@ -527,7 +598,9 @@ function ModelView(props: {
         <div className="flex-1 overflow-y-auto">
           {filteredTools.length === 0 ? (
             <div className="p-4 text-center text-[13px] text-muted-foreground/50">
-              {terms.length > 0 ? "No tools match your filter" : "No tools available"}
+              {terms.length > 0
+                ? "No tools match your filter"
+                : "No tools available"}
             </div>
           ) : (
             <div className="p-1.5">
@@ -551,8 +624,16 @@ function ModelView(props: {
               <ToolDetailPanel detail={detail} />
             ) : (
               <EmptyState
-                title={props.bundle.toolCount > 0 ? "Select a tool" : "No tools available"}
-                description={props.bundle.toolCount > 0 ? "Choose from the list or press / to search" : undefined}
+                title={
+                  props.bundle.toolCount > 0
+                    ? "Select a tool"
+                    : "No tools available"
+                }
+                description={
+                  props.bundle.toolCount > 0
+                    ? "Choose from the list or press / to search"
+                    : undefined
+                }
               />
             )
           }
@@ -625,7 +706,8 @@ function ToolTreeNodeView(props: {
   search: string;
   defaultOpen: boolean;
 }) {
-  const { node, depth, selectedToolPath, onSelectTool, search, defaultOpen } = props;
+  const { node, depth, selectedToolPath, onSelectTool, search, defaultOpen } =
+    props;
   const hasChildren = node.children.size > 0;
   const isLeaf = !!node.tool && !hasChildren;
 
@@ -708,10 +790,12 @@ function ToolTreeNodeView(props: {
               open && "rotate-90",
             )}
           />
-          <IconFolder className={cn(
-            "size-3 shrink-0",
-            open ? "text-primary/60" : "text-muted-foreground/30",
-          )} />
+          <IconFolder
+            className={cn(
+              "size-3 shrink-0",
+              open ? "text-primary/60" : "text-muted-foreground/30",
+            )}
+          />
           <span className="flex-1 truncate text-left font-mono">
             {highlightMatch(node.segment, search)}
           </span>
@@ -774,9 +858,10 @@ function ToolListItem(props: {
     }
   }, [props.active]);
 
-  const label = props.depth >= 0
-    ? props.tool.path.split(".").pop() ?? props.tool.path
-    : props.tool.path;
+  const label =
+    props.depth >= 0
+      ? (props.tool.path.split(".").pop() ?? props.tool.path)
+      : props.tool.path;
 
   return (
     <button
@@ -829,10 +914,17 @@ function ToolDetailPanel(props: { detail: SourceInspectionToolDetail }) {
               <h3 className="truncate text-sm font-semibold text-foreground">
                 {detail.summary.path}
               </h3>
-              <CopyButton text={detail.summary.path} field="path" copiedField={copiedField} onCopy={copy} />
+              <CopyButton
+                text={detail.summary.path}
+                field="path"
+                copiedField={copiedField}
+                onCopy={copy}
+              />
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              {detail.summary.method && <MethodBadge method={detail.summary.method} />}
+              {detail.summary.method && (
+                <MethodBadge method={detail.summary.method} />
+              )}
               {detail.summary.pathTemplate && (
                 <span className="font-mono text-[11px] text-muted-foreground/60">
                   {detail.summary.pathTemplate}
@@ -926,14 +1018,18 @@ function ToolDetailPanel(props: { detail: SourceInspectionToolDetail }) {
                   </div>
                   <div className="grid grid-cols-1 gap-3 p-3 md:grid-cols-2">
                     {section.items.map((item) => (
-                      <div key={`${section.title}:${item.label}`} className="min-w-0">
+                      <div
+                        key={`${section.title}:${item.label}`}
+                        className="min-w-0"
+                      >
                         <div className="text-[11px] uppercase tracking-wider text-muted-foreground/60">
                           {item.label}
                         </div>
-                        <div className={cn(
-                          "mt-1 text-sm text-foreground",
-                          item.mono && "font-mono text-[12px]",
-                        )}
+                        <div
+                          className={cn(
+                            "mt-1 text-sm text-foreground",
+                            item.mono && "font-mono text-[12px]",
+                          )}
                         >
                           {item.value}
                         </div>
@@ -965,7 +1061,9 @@ function ToolDetailPanel(props: { detail: SourceInspectionToolDetail }) {
                 key={`${section.kind}:${section.title}:${String(index)}`}
                 title={section.title}
                 body={section.body}
-                lang={section.language === "text" ? undefined : section.language}
+                lang={
+                  section.language === "text" ? undefined : section.language
+                }
                 empty=""
                 compact
               />
@@ -1014,7 +1112,9 @@ function DiscoveryView(props: {
               className="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground/40 focus:border-ring focus:ring-1 focus:ring-ring/30"
             />
           </div>
-          <Button type="submit" size="sm">Search</Button>
+          <Button type="submit" size="sm">
+            Search
+          </Button>
         </form>
       </div>
 
@@ -1038,67 +1138,91 @@ function DiscoveryView(props: {
               </div>
             ) : (
               <div className="max-w-3xl space-y-2">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs text-muted-foreground">{result.results.length} result{result.results.length === 1 ? "" : "s"}</span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">Inspection</span>
-                </div>
-                {result.results.map((item, index) => (
-                  <button
-                    key={item.path}
-                    type="button"
-                    onClick={() => props.onOpenTool(item.path)}
-                    className="group w-full rounded-lg border border-border bg-card/60 p-3.5 text-left transition-all hover:border-primary/30 hover:shadow-sm"
-                  >
-                    <div className="flex items-center justify-between gap-3 mb-1.5">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-mono tabular-nums text-muted-foreground/60">
-                          {index + 1}
+                {(() => {
+                  const maxScore = Math.max(
+                    ...result.results.map((item) => item.score),
+                    1,
+                  );
+
+                  return (
+                    <>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs text-muted-foreground">
+                          {result.results.length} result
+                          {result.results.length === 1 ? "" : "s"}
                         </span>
-                        <h4 className="truncate font-mono text-[13px] font-medium text-foreground group-hover:text-primary transition-colors">
-                          {item.path}
-                        </h4>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                          Inspection
+                        </span>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <div className="w-12 h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-primary"
-                            style={{ width: `${Math.round(item.score * 100)}%` }}
-                          />
-                        </div>
-                        <span className="text-[11px] text-muted-foreground">{Math.round(item.score * 100)}%</span>
-                      </div>
-                    </div>
-                    {item.description && (
-                      <p className="text-[12px] text-muted-foreground leading-relaxed line-clamp-2">
-                        {item.description}
-                      </p>
-                    )}
-                    {(item.inputTypePreview || item.outputTypePreview) && (
-                      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                        {item.inputTypePreview && (
-                          <div className="rounded-md border border-border/70 bg-background/70 px-2.5 py-2">
-                            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
-                              Input
+                      {result.results.map((item, index) => (
+                        <button
+                          key={item.path}
+                          type="button"
+                          onClick={() => props.onOpenTool(item.path)}
+                          className="group w-full rounded-lg border border-border bg-card/60 p-3.5 text-left transition-all hover:border-primary/30 hover:shadow-sm"
+                        >
+                          <div className="flex items-center justify-between gap-3 mb-1.5">
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-muted text-[10px] font-mono tabular-nums text-muted-foreground/60">
+                                {index + 1}
+                              </span>
+                              <h4 className="truncate font-mono text-[13px] font-medium text-foreground group-hover:text-primary transition-colors">
+                                {item.path}
+                              </h4>
                             </div>
-                            <div className="font-mono text-[11px] text-foreground/85 line-clamp-3">
-                              {item.inputTypePreview}
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <div className="w-12 h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-primary"
+                                  style={{
+                                    width: `${Math.max(
+                                      8,
+                                      Math.round((item.score / maxScore) * 100),
+                                    )}%`,
+                                  }}
+                                />
+                              </div>
+                              <span className="text-[11px] text-muted-foreground">
+                                score {item.score}
+                              </span>
                             </div>
                           </div>
-                        )}
-                        {item.outputTypePreview && (
-                          <div className="rounded-md border border-border/70 bg-background/70 px-2.5 py-2">
-                            <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
-                              Output
+                          {item.description && (
+                            <p className="text-[12px] text-muted-foreground leading-relaxed line-clamp-2">
+                              {item.description}
+                            </p>
+                          )}
+                          {(item.inputTypePreview ||
+                            item.outputTypePreview) && (
+                            <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
+                              {item.inputTypePreview && (
+                                <div className="rounded-md border border-border/70 bg-background/70 px-2.5 py-2">
+                                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
+                                    Input
+                                  </div>
+                                  <div className="font-mono text-[11px] text-foreground/85 line-clamp-3">
+                                    {item.inputTypePreview}
+                                  </div>
+                                </div>
+                              )}
+                              {item.outputTypePreview && (
+                                <div className="rounded-md border border-border/70 bg-background/70 px-2.5 py-2">
+                                  <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
+                                    Output
+                                  </div>
+                                  <div className="font-mono text-[11px] text-foreground/85 line-clamp-3">
+                                    {item.outputTypePreview}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                            <div className="font-mono text-[11px] text-foreground/85 line-clamp-3">
-                              {item.outputTypePreview}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </button>
-                ))}
+                          )}
+                        </button>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
             )
           }
@@ -1163,7 +1287,8 @@ function highlightMatch(text: string, search: string) {
   const parts: Array<{ text: string; hl: boolean }> = [];
   let cursor = 0;
   for (const [start, end] of merged) {
-    if (cursor < start) parts.push({ text: text.slice(cursor, start), hl: false });
+    if (cursor < start)
+      parts.push({ text: text.slice(cursor, start), hl: false });
     parts.push({ text: text.slice(start, end), hl: true });
     cursor = end;
   }
@@ -1173,7 +1298,10 @@ function highlightMatch(text: string, search: string) {
     <>
       {parts.map((part, i) =>
         part.hl ? (
-          <mark key={i} className="rounded-sm bg-primary/20 text-foreground px-px">
+          <mark
+            key={i}
+            className="rounded-sm bg-primary/20 text-foreground px-px"
+          >
             {part.text}
           </mark>
         ) : (

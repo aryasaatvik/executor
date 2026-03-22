@@ -2,7 +2,7 @@ import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite"
 import { SqlClient } from "@effect/sql"
 import { eq, and, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
-import { catalog_tool } from "./schema"
+import { catalog_tool, source } from "./schema"
 import { removeVecTools } from "./vec"
 
 // ---------------------------------------------------------------------------
@@ -28,6 +28,19 @@ export interface ToolToIndex {
   outputTypePreview?: string
   interaction?: string
   providerKind?: string
+}
+
+export interface SourceToIndex {
+  sourceId: string
+  workspaceId: string
+  name: string
+  kind: string
+  endpoint: string
+  status: string
+  enabled: boolean
+  namespace: string | null
+  createdAt: number
+  updatedAt: number
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +160,7 @@ const computeContentHash = (tool: ToolToIndex, searchText: string): string => {
 export const indexSource = (input: {
   sourceId: string
   sourceKey: string
+  source: SourceToIndex
   tools: readonly ToolToIndex[]
 }) =>
   Effect.gen(function* () {
@@ -156,6 +170,31 @@ export const indexSource = (input: {
 
     yield* sql.withTransaction(
       Effect.gen(function* () {
+        yield* db.insert(source).values({
+          id: input.source.sourceId,
+          workspace_id: input.source.workspaceId,
+          name: input.source.name,
+          kind: input.source.kind,
+          endpoint: input.source.endpoint,
+          status: input.source.status,
+          enabled: input.source.enabled,
+          namespace: input.source.namespace,
+          time_created: input.source.createdAt,
+          time_updated: input.source.updatedAt,
+        }).onConflictDoUpdate({
+          target: source.id,
+          set: {
+            workspace_id: input.source.workspaceId,
+            name: input.source.name,
+            kind: input.source.kind,
+            endpoint: input.source.endpoint,
+            status: input.source.status,
+            enabled: input.source.enabled,
+            namespace: input.source.namespace,
+            time_updated: input.source.updatedAt,
+          },
+        })
+
         // Fetch existing tools for this source to compare hashes
         const existing = yield* db
           .select({

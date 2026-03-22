@@ -21,7 +21,7 @@ import { provideRuntimeLocalWorkspace } from "./local";
 import { createSqliteToolCatalog } from "../../../db/catalog";
 import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
 import { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
-import type { ToolToIndex } from "../../../db/indexer";
+import type { SourceToIndex, ToolToIndex } from "../../../db/indexer";
 import type { Embedder } from "../../../db/embedder";
 import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-indexer";
 import { catalog_tool } from "../../../db/schema";
@@ -69,6 +69,21 @@ export const toToolToIndex = (
   outputTypePreview: tool.descriptor.contract?.outputTypePreview ?? undefined,
   interaction: tool.descriptor.interaction ?? "auto",
   providerKind: tool.descriptor.providerKind ?? undefined,
+});
+
+export const toSourceToIndex = (
+  source: LoadedSourceCatalogToolIndexEntry["source"],
+): SourceToIndex => ({
+  sourceId: source.id,
+  workspaceId: source.workspaceId,
+  name: source.name,
+  kind: source.kind,
+  endpoint: source.endpoint,
+  status: source.status,
+  enabled: source.enabled,
+  namespace: source.namespace,
+  createdAt: source.createdAt,
+  updatedAt: source.updatedAt,
 });
 
 const semanticSearchSignature = (
@@ -179,6 +194,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
       const toolsBySource = new Map<string, {
         sourceId: string;
         sourceKey: string;
+        source: SourceToIndex;
         tools: ToolToIndex[];
       }>();
 
@@ -189,6 +205,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
           toolsBySource.set(sourceId, {
             sourceId,
             sourceKey: tool.descriptor.sourceKey,
+            source: toSourceToIndex(tool.source),
             tools: [],
           });
         }
@@ -227,6 +244,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
               const result = yield* indexSource({
                 sourceId: group.sourceId,
                 sourceKey: group.sourceKey,
+                source: group.source,
                 tools: group.tools,
               });
 
