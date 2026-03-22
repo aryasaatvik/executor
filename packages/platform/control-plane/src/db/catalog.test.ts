@@ -6,11 +6,12 @@ import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
 vi.mock("./vec", () => ({
+  hasVecTable: vi.fn(() => Effect.succeed(true)),
   searchVec: vi.fn(),
 }));
 
 import { createSqliteToolCatalog } from "./catalog";
-import { searchVec } from "./vec";
+import { hasVecTable, searchVec } from "./vec";
 
 type CatalogRow = {
   path: string
@@ -352,7 +353,10 @@ describe("sqlite catalog searchTools", () => {
   it.effect("falls back to semantic search when the FTS query is empty but an embedder exists", () =>
     Effect.gen(function* () {
       const searchVecMock = vi.mocked(searchVec)
+      const hasVecTableMock = vi.mocked(hasVecTable)
       searchVecMock.mockReset()
+      hasVecTableMock.mockReset()
+      hasVecTableMock.mockReturnValue(Effect.succeed(true))
       searchVecMock.mockReturnValue(
         Effect.succeed([
           { toolId: "github.issues.create", score: 0.7 },
@@ -387,7 +391,10 @@ describe("sqlite catalog searchTools", () => {
   it.effect("skips semantic search when FTS already has a dominant lexical match", () =>
     Effect.gen(function* () {
       const searchVecMock = vi.mocked(searchVec)
+      const hasVecTableMock = vi.mocked(hasVecTable)
       searchVecMock.mockReset()
+      hasVecTableMock.mockReset()
+      hasVecTableMock.mockReturnValue(Effect.succeed(true))
       searchVecMock.mockReturnValue(Effect.succeed([]))
 
       const embedder = {
@@ -420,6 +427,10 @@ describe("sqlite catalog searchTools", () => {
 
   it.effect("surfaces semantic embedding failures instead of silently falling back", () =>
     Effect.gen(function* () {
+      const hasVecTableMock = vi.mocked(hasVecTable)
+      hasVecTableMock.mockReset()
+      hasVecTableMock.mockReturnValue(Effect.succeed(true))
+
       const embedder = {
         provider: "local",
         model: "test-model",
@@ -448,6 +459,44 @@ describe("sqlite catalog searchTools", () => {
           expect((error as Error).message).toContain("embed failed")
         }),
       )
+    }),
+  )
+
+  it.effect("returns lexical results when sqlite-vec is unavailable", () =>
+    Effect.gen(function* () {
+      const searchVecMock = vi.mocked(searchVec)
+      const hasVecTableMock = vi.mocked(hasVecTable)
+      searchVecMock.mockReset()
+      hasVecTableMock.mockReset()
+      hasVecTableMock.mockReturnValue(Effect.succeed(false))
+
+      const embedder = {
+        provider: "local",
+        model: "test-model",
+        dimensions: 3,
+        embed: async () => [1, 2, 3],
+        embedBatch: async () => [[1, 2, 3]],
+      }
+
+      const catalog = yield* makeSearchCatalog({
+        rows: [
+          { path: "github.issues.create", raw_score: -0.6 },
+          { path: "github.issues.update", raw_score: -0.2 },
+        ],
+        embedder,
+      })
+
+      const results = yield* catalog.searchTools({
+        query: "github issues",
+        limit: 5,
+      })
+
+      expect(results.map((result) => result.path)).toEqual([
+        "github.issues.create",
+        "github.issues.update",
+      ])
+      expect(results.searchMode).toBe("fts")
+      expect(searchVecMock).not.toHaveBeenCalled()
     }),
   )
 

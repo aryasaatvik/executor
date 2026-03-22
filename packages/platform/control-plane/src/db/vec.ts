@@ -1,13 +1,14 @@
 import { SqlClient } from "@effect/sql"
 import * as Effect from "effect/Effect"
 
-const hasVecTable = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const tables = yield* sql.unsafe<{ name: string }>(
-    `SELECT name FROM sqlite_master WHERE type='table' AND name='vec_catalog_tool'`,
-  )
-  return tables.length > 0
-})
+export const hasVecTable = () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    const tables = yield* sql.unsafe<{ name: string }>(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='vec_catalog_tool'`,
+    )
+    return tables.length > 0
+  })
 
 /**
  * Create the vec_catalog_tool virtual table.
@@ -37,7 +38,7 @@ export const setupVecTable = (dimensions: number) =>
  */
 export const getVecTableDimensions = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient
-  if (!(yield* hasVecTable)) return null
+  if (!(yield* hasVecTable())) return null
 
   // Introspect the embedding column dimensions via table_info
   // vec0 tables report column info through pragma
@@ -137,7 +138,7 @@ export const upsertVecTool = (input: {
 export const removeVecSourceTools = (sourceKey: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient
-    if (!(yield* hasVecTable)) return
+    if (!(yield* hasVecTable())) return
     yield* sql.unsafe(`DELETE FROM vec_catalog_tool WHERE source_key = ?`, [
       sourceKey,
     ])
@@ -151,7 +152,7 @@ export const removeVecTools = (toolIds: readonly string[]) =>
     if (toolIds.length === 0) return
 
     const sql = yield* SqlClient.SqlClient
-    if (!(yield* hasVecTable)) return
+    if (!(yield* hasVecTable())) return
 
     for (const toolId of toolIds) {
       yield* sql.unsafe(`DELETE FROM vec_catalog_tool WHERE tool_id = ?`, [toolId])

@@ -29,6 +29,7 @@ import type {
   UpdateInstanceConfigPayload,
   UpdateSecretResult,
 } from "./api";
+import { validateSemanticSearchConfigForWrite } from "./semantic-search-config";
 
 import { ControlPlaneApi } from "../api";
 import {
@@ -38,7 +39,6 @@ import {
 } from "../errors";
 
 const SECRET_STORE_PROVIDER_ENV = "EXECUTOR_SECRET_STORE_PROVIDER";
-
 const getInstanceConfig = (
   semanticSearch: InstanceConfig["semanticSearch"],
 ): Effect.Effect<InstanceConfig> => {
@@ -133,6 +133,17 @@ const writeInstanceConfig = (
         ),
       ),
     );
+
+    const semanticSearchValidationError = validateSemanticSearchConfigForWrite(
+      payload.semanticSearch,
+    );
+    if (semanticSearchValidationError) {
+      return yield* new ControlPlaneBadRequestError({
+        operation: "local.config.update",
+        message: semanticSearchValidationError,
+        details: semanticSearchValidationError,
+      });
+    }
 
     const currentProjectConfig = loadedConfig.projectConfig ?? {};
     const nextProjectConfig = {

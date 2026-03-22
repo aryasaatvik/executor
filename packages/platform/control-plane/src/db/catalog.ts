@@ -13,7 +13,7 @@ import type {
   ToolContract,
 } from "@executor/codemode-core"
 import type { Embedder } from "./embedder/types"
-import { searchVec } from "./vec"
+import { hasVecTable, searchVec } from "./vec"
 import { reciprocalRankFusion } from "./rrf"
 
 // ---------------------------------------------------------------------------
@@ -224,6 +224,10 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             catch: (cause) =>
               cause instanceof Error ? cause : new Error(String(cause)),
           })
+
+          if (!(yield* hasVecTable())) {
+            return withSearchMode(ftsResults.slice(0, limit), "fts")
+          }
 
           const vecResults = yield* searchVec({
             queryEmbedding,

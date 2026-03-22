@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect"
 import type { Embedder } from "./embedder/types"
 import type { ToolToIndex } from "./indexer"
-import { upsertVecTool, removeVecSourceTools } from "./vec"
+import { removeVecSourceTools, removeVecTools, upsertVecTool } from "./vec"
 
 const BATCH_SIZE = 32
 
@@ -44,6 +44,14 @@ export const embedSourceTools = (input: {
           }),
         ),
       )
+
+      const failedToolIds = batch
+        .filter((_, index) => !embeddings[index] || embeddings[index].length === 0)
+        .map((tool) => tool.toolId)
+
+      if (failedToolIds.length > 0) {
+        yield* removeVecTools(failedToolIds)
+      }
 
       // Upsert into vector table
       for (let j = 0; j < batch.length; j++) {
