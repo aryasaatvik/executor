@@ -8,20 +8,62 @@ import { LoadableBlock } from "../components/loadable";
 import { Button } from "../components/ui/button";
 import { IconSpinner } from "../components/icons";
 
-type SemanticProvider = "" | "local" | "google" | "openai";
+type SemanticProvider =
+  | ""
+  | "local"
+  | "google"
+  | "openai"
+  | "cohere"
+  | "mistral"
+  | "anthropic";
 
-const defaultModelByProvider: Record<Exclude<SemanticProvider, "">, string> = {
+type ConfiguredSemanticProvider = Exclude<SemanticProvider, "">;
+
+const semanticProviders: ReadonlyArray<ConfiguredSemanticProvider> = [
+  "local",
+  "google",
+  "openai",
+  "cohere",
+  "mistral",
+  "anthropic",
+];
+
+const providerLabel: Record<ConfiguredSemanticProvider, string> = {
+  local: "Local",
+  google: "Google",
+  openai: "OpenAI",
+  cohere: "Cohere",
+  mistral: "Mistral",
+  anthropic: "Anthropic",
+};
+
+const defaultModelByProvider: Record<ConfiguredSemanticProvider, string> = {
   local: "Qwen3-Embedding-0.6B-Q8_0",
   google: "gemini-embedding-2-preview",
   openai: "text-embedding-3-small",
+  cohere: "embed-english-v3.0",
+  mistral: "mistral",
+  anthropic: "anthropic",
 };
+
+const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
+  google: "AIza...",
+  openai: "sk-...",
+  cohere: "co-...",
+};
+
+const isConfiguredProvider = (
+  provider: string | null | undefined,
+): provider is ConfiguredSemanticProvider =>
+  semanticProviders.includes(provider as ConfiguredSemanticProvider);
+
+const defaultModelForProvider = (provider: ConfiguredSemanticProvider): string =>
+  defaultModelByProvider[provider];
 
 const readProvider = (
   semanticSearch: InstanceConfig["semanticSearch"],
 ): SemanticProvider =>
-  semanticSearch?.provider === "local"
-  || semanticSearch?.provider === "google"
-  || semanticSearch?.provider === "openai"
+  isConfiguredProvider(semanticSearch?.provider)
     ? semanticSearch.provider
     : "";
 
@@ -42,15 +84,28 @@ const statusText = (
   semanticSearch: InstanceConfig["semanticSearch"],
   provider: SemanticProvider,
 ): string => {
+  if (provider === "") {
+    return "Full-text search only";
+  }
+
+  const model =
+    semanticSearch?.provider === provider
+      ? semanticSearch.model ?? defaultModelForProvider(provider)
+      : defaultModelForProvider(provider);
+
   switch (provider) {
     case "local":
-      return `Configured: Local (${semanticSearch?.model ?? defaultModelByProvider.local})`;
+      return `Configured: ${providerLabel.local} (${model})`;
     case "google":
-      return `Configured: Google (${semanticSearch?.model ?? defaultModelByProvider.google})`;
+      return `Configured: ${providerLabel.google} (${model})`;
     case "openai":
-      return `Configured: OpenAI (${semanticSearch?.model ?? defaultModelByProvider.openai})`;
-    default:
-      return "Full-text search only";
+      return `Configured: ${providerLabel.openai} (${model})`;
+    case "cohere":
+      return `Configured: ${providerLabel.cohere} (${model})`;
+    case "mistral":
+      return `Configured: ${providerLabel.mistral} (${model})`;
+    case "anthropic":
+      return `Configured: ${providerLabel.anthropic} (${model})`;
   }
 };
 
@@ -58,7 +113,7 @@ const readApiKey = (
   semanticSearch: InstanceConfig["semanticSearch"],
   provider: SemanticProvider = readProvider(semanticSearch),
 ): string =>
-  provider === "google" || provider === "openai"
+  provider !== "" && provider !== "local"
     ? semanticSearch?.provider === provider
       ? semanticSearch.apiKey ?? ""
       : ""
@@ -102,7 +157,7 @@ function SemanticSearchSettingsCard(props: {
     setApiKey(readApiKey(props.config.semanticSearch));
   }, [props.config.semanticSearch]);
 
-  const cloudProvider = provider === "google" || provider === "openai";
+  const cloudProvider = provider !== "" && provider !== "local";
   const trimmedApiKey = apiKey.trim();
   const dirty = useMemo(() => {
     const currentProvider = readProvider(props.config.semanticSearch);
@@ -124,7 +179,7 @@ function SemanticSearchSettingsCard(props: {
                 model:
                   props.config.semanticSearch?.provider === provider
                     ? props.config.semanticSearch.model
-                    : defaultModelByProvider[provider],
+                    : defaultModelForProvider(provider),
                 ...(props.config.semanticSearch?.provider === provider
                   && props.config.semanticSearch.dimensions !== undefined
                   ? { dimensions: props.config.semanticSearch.dimensions }
@@ -192,6 +247,9 @@ function SemanticSearchSettingsCard(props: {
               <option value="local">Local (Qwen3-Embedding-0.6B)</option>
               <option value="google">Google (gemini-embedding-2-preview)</option>
               <option value="openai">OpenAI (text-embedding-3-small)</option>
+              <option value="cohere">Cohere (embed-english-v3.0)</option>
+              <option value="mistral">Mistral</option>
+              <option value="anthropic">Anthropic</option>
             </select>
             <p className="text-[11px] text-muted-foreground/60">
               Local runs offline after a ~600 MB model download. Cloud
@@ -209,9 +267,7 @@ function SemanticSearchSettingsCard(props: {
               onChange={(event) => setApiKey(event.target.value)}
               placeholder={
                 cloudProvider
-                  ? provider === "google"
-                    ? "AIza..."
-                    : "sk-..."
+                  ? apiKeyPlaceholderByProvider[provider] ?? "API key"
                   : "Not required for local provider"
               }
               className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
@@ -219,7 +275,7 @@ function SemanticSearchSettingsCard(props: {
             />
             <p className="text-[11px] text-muted-foreground/60">
               Optional. Leave blank to rely on environment variables such as
-              GEMINI_API_KEY or OPENAI_API_KEY.
+              GEMINI_API_KEY, OPENAI_API_KEY, or COHERE_API_KEY.
             </p>
           </label>
 
