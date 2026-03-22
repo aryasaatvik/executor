@@ -77,13 +77,13 @@ describe("createAiSdkEmbedder", () => {
     ).rejects.toThrow(/Unknown AI SDK provider/);
   });
 
-  it("fails deterministically when the provider package is missing", async () => {
+  it("fails fast for providers that are not shipped in this branch", async () => {
     const { createAiSdkEmbedder } = await import("./ai-sdk");
 
     await expect(
       createAiSdkEmbedder({
         provider: "mistral",
       }),
-    ).rejects.toThrow(/Failed to load provider package @ai-sdk\/mistral/);
+    ).rejects.toThrow(/Unknown AI SDK provider/);
   });
 });

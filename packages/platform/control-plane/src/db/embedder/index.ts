@@ -19,7 +19,7 @@ export async function createEmbedder(
       return createLocalEmbedder(config)
     }
     default: {
-      // AI SDK providers (google, openai, cohere, etc.)
+      // Shipped AI SDK remote providers (google, openai)
       const { createAiSdkEmbedder } = await import("./providers/ai-sdk")
       return createAiSdkEmbedder(config)
     }

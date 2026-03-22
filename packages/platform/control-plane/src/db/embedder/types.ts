@@ -29,14 +29,11 @@ export interface Embedder {
  * Configuration for an embedding provider.
  */
 export interface EmbedderConfig {
-  /** Provider type: "local" for node-llama-cpp, or an AI SDK provider name. */
+  /** Provider type: "local" or one of the shipped remote providers. */
   provider:
     | "local"
     | "google"
     | "openai"
-    | "cohere"
-    | "mistral"
-    | "anthropic"
     | (string & {})
 
   /** Model identifier. Optional — each provider has a default. */

@@ -4,39 +4,27 @@ import { l2Normalize } from "../normalize"
 const PROVIDER_PACKAGES: Record<string, string> = {
   google: "@ai-sdk/google",
   openai: "@ai-sdk/openai",
-  cohere: "@ai-sdk/cohere",
-  mistral: "@ai-sdk/mistral",
-  anthropic: "@ai-sdk/anthropic",
 }
 
 const DEFAULT_MODELS: Record<string, string> = {
   google: "gemini-embedding-2-preview",
   openai: "text-embedding-3-small",
-  cohere: "embed-english-v3.0",
 }
 
 const DEFAULT_DIMENSIONS: Record<string, number> = {
   google: 3072,
   openai: 1536,
-  cohere: 1024,
 }
 
 const ENV_KEYS: Record<string, string[]> = {
   google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
   openai: ["OPENAI_API_KEY"],
-  cohere: ["COHERE_API_KEY"],
-  mistral: ["MISTRAL_API_KEY"],
-  anthropic: ["ANTHROPIC_API_KEY"],
 }
 
 const PROVIDER_HINTS: Record<string, { document?: object; query?: object }> = {
   google: {
     document: { taskType: "RETRIEVAL_DOCUMENT" },
     query: { taskType: "RETRIEVAL_QUERY" },
-  },
-  cohere: {
-    document: { inputType: "search_document" },
-    query: { inputType: "search_query" },
   },
 }
 
@@ -176,7 +164,7 @@ function buildModelSettings(
   }
 
   if (
-    (providerName === "openai" || providerName === "cohere") &&
+    providerName === "openai" &&
     dimensions !== undefined
   ) {
     return { dimensions }
@@ -187,7 +175,7 @@ function buildModelSettings(
 
 /**
  * Create an embedder using Vercel AI SDK.
- * Supports Google, OpenAI, Cohere, Mistral, Anthropic, and other AI SDK providers.
+ * Supports the remote providers shipped in this branch: Google and OpenAI.
  *
  * Default for Google: gemini-embedding-2-preview, 3072 dims.
  */
