@@ -12,10 +12,7 @@ type SemanticProvider =
   | ""
   | "local"
   | "google"
-  | "openai"
-  | "cohere"
-  | "mistral"
-  | "anthropic";
+  | "openai";
 
 type ConfiguredSemanticProvider = Exclude<SemanticProvider, "">;
 
@@ -23,33 +20,23 @@ const semanticProviders: ReadonlyArray<ConfiguredSemanticProvider> = [
   "local",
   "google",
   "openai",
-  "cohere",
-  "mistral",
-  "anthropic",
 ];
 
 const providerLabel: Record<ConfiguredSemanticProvider, string> = {
   local: "Local",
   google: "Google",
   openai: "OpenAI",
-  cohere: "Cohere",
-  mistral: "Mistral",
-  anthropic: "Anthropic",
 };
 
 const defaultModelByProvider: Record<ConfiguredSemanticProvider, string> = {
   local: "Qwen3-Embedding-0.6B-Q8_0",
   google: "gemini-embedding-2-preview",
   openai: "text-embedding-3-small",
-  cohere: "embed-english-v3.0",
-  mistral: "mistral",
-  anthropic: "anthropic",
 };
 
 const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
   google: "AIza...",
   openai: "sk-...",
-  cohere: "co-...",
 };
 
 const isConfiguredProvider = (
@@ -100,12 +87,6 @@ const statusText = (
       return `Configured: ${providerLabel.google} (${model})`;
     case "openai":
       return `Configured: ${providerLabel.openai} (${model})`;
-    case "cohere":
-      return `Configured: ${providerLabel.cohere} (${model})`;
-    case "mistral":
-      return `Configured: ${providerLabel.mistral} (${model})`;
-    case "anthropic":
-      return `Configured: ${providerLabel.anthropic} (${model})`;
   }
 };
 
@@ -247,9 +228,6 @@ function SemanticSearchSettingsCard(props: {
               <option value="local">Local (Qwen3-Embedding-0.6B)</option>
               <option value="google">Google (gemini-embedding-2-preview)</option>
               <option value="openai">OpenAI (text-embedding-3-small)</option>
-              <option value="cohere">Cohere (embed-english-v3.0)</option>
-              <option value="mistral">Mistral</option>
-              <option value="anthropic">Anthropic</option>
             </select>
             <p className="text-[11px] text-muted-foreground/60">
               Local runs offline after a ~600 MB model download. Cloud
@@ -275,7 +253,7 @@ function SemanticSearchSettingsCard(props: {
             />
             <p className="text-[11px] text-muted-foreground/60">
               Optional. Leave blank to rely on environment variables such as
-              GEMINI_API_KEY, OPENAI_API_KEY, or COHERE_API_KEY.
+              GEMINI_API_KEY or OPENAI_API_KEY.
             </p>
           </label>
 
