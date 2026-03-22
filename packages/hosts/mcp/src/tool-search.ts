@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type {
+  SearchHit,
   ToolCatalog,
   ToolDescriptor,
   ToolPath,
@@ -47,6 +48,10 @@ export interface ToolSearchOutput {
 
 const DEFAULT_MAX_RESULTS = 10;
 const MAX_MAX_RESULTS = 100;
+
+type SearchHitsWithMode = readonly SearchHit[] & {
+  searchMode?: ToolSearchOutput["meta"]["search_mode"];
+};
 
 /**
  * Parse query to determine mode.
@@ -145,6 +150,7 @@ export function handleToolSearch(
       ...(input.source ? { sourceKey: input.source } : {}),
       limit: maxResults,
     });
+    const searchMode = (hits as SearchHitsWithMode).searchMode ?? "fts";
 
     // Hydrate results with descriptors
     const results: ToolSearchResultItem[] = [];
@@ -168,7 +174,7 @@ export function handleToolSearch(
         query: input.query,
         mode: "search" as const,
         total: results.length,
-        search_mode: "fts" as const,
+        search_mode: searchMode,
       },
     };
   });

@@ -34,7 +34,6 @@ import {
 } from "./authorization";
 import { provideRuntimeLocalWorkspace } from "./local";
 import {
-  createWorkspaceSourceCatalog,
   loadWorkspaceCatalogToolByPath,
 } from "./source-catalog";
 import { runtimeEffectError } from "../../effect-errors";
@@ -43,6 +42,7 @@ export const createWorkspaceToolInvoker = (input: {
   workspaceId: Source["workspaceId"];
   accountId: AccountId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  sourceCatalog: ToolCatalog;
   workspaceConfigStore: WorkspaceConfigStoreShape;
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
@@ -73,17 +73,6 @@ export const createWorkspaceToolInvoker = (input: {
     sourceAuthService: input.sourceAuthService,
     runtimeLocalWorkspace: input.runtimeLocalWorkspace,
   });
-  const sourceCatalog = createWorkspaceSourceCatalog({
-    workspaceId: input.workspaceId,
-    accountId: input.accountId,
-    sourceCatalogStore: input.sourceCatalogStore,
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-    runtimeLocalWorkspace: input.runtimeLocalWorkspace,
-    embedder: input.embedder,
-    sqliteCatalogReady: input.sqliteCatalogReady,
-  });
   let catalog: ToolCatalog | null = null;
   const systemTools = createSystemToolMap({
     getCatalog: () => {
@@ -103,7 +92,7 @@ export const createWorkspaceToolInvoker = (input: {
     tools: authoredTools,
   });
   catalog = mergeToolCatalogs({
-    catalogs: [authoredCatalog, sourceCatalog],
+    catalogs: [authoredCatalog, input.sourceCatalog],
   });
   const authoredToolPaths = new Set(Object.keys(authoredTools));
   const authoredInvoker = makeToolInvokerFromTools({

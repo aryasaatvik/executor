@@ -15,7 +15,10 @@ import {
   resolveConfiguredExecutionRuntime,
 } from "../runtime";
 import { createWorkspaceToolInvoker } from "./tool-invoker";
-import { indexWorkspaceToolsIntoSqlite } from "./source-catalog";
+import {
+  createWorkspaceSourceCatalog,
+  indexWorkspaceToolsIntoSqlite,
+} from "./source-catalog";
 import {
   RuntimeSourceAuthServiceTag,
 } from "../../sources/source-auth-service";
@@ -41,6 +44,7 @@ import {
 } from "../../local/storage";
 import { createEmbedder, type Embedder } from "../../../db/embedder";
 import type { LocalExecutorConfig } from "#schema";
+import type { LocalWorkspaceState } from "../../local/workspace-state";
 export {
   createCodeExecutorForRuntime,
   resolveConfiguredExecutionRuntime,
@@ -57,6 +61,14 @@ const semanticSearchEmbedderCache = new Map<
   string,
   Promise<Embedder | undefined>
 >()
+
+type WorkspaceCatalogCacheEntry = {
+  indexSignature: string
+  sqliteCatalogReady: boolean
+  sourceCatalog: ReturnType<typeof createWorkspaceSourceCatalog>
+}
+
+const workspaceCatalogCache = new Map<string, WorkspaceCatalogCacheEntry>()
 
 type SemanticSearchConfig = NonNullable<LocalExecutorConfig["semanticSearch"]>
 
@@ -103,6 +115,41 @@ export const clearSemanticSearchEmbedderCacheForTests = (): void => {
   semanticSearchEmbedderCache.clear()
 }
 
+export const clearWorkspaceExecutionCachesForTests = (): void => {
+  semanticSearchEmbedderCache.clear()
+  workspaceCatalogCache.clear()
+}
+
+const workspaceCatalogCacheKey = (input: {
+  stateDirectory: string
+  workspaceId: string
+  accountId: string
+}): string =>
+  JSON.stringify(input)
+
+const workspaceCatalogIndexSignature = (input: {
+  workspaceState: LocalWorkspaceState
+  embedder?: Embedder
+}): string =>
+  JSON.stringify({
+    semanticSearchSignature: input.workspaceState.catalog?.semanticSearchSignature ?? null,
+    embedder: input.embedder
+      ? {
+          provider: input.embedder.provider,
+          model: input.embedder.model,
+          dimensions: input.embedder.dimensions,
+        }
+      : null,
+    sources: Object.entries(input.workspaceState.sources)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([sourceId, state]) => ({
+        sourceId,
+        status: state.status,
+        sourceHash: state.sourceHash,
+        updatedAt: state.updatedAt,
+      })),
+  })
+
 export const loadConfiguredSemanticSearchEmbedder = (
   config: LocalExecutorConfig | null | undefined,
 ): Effect.Effect<Embedder | undefined, never, never> => {
@@ -137,6 +184,10 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         runtimeLocalWorkspace === null
           ? null
           : yield* input.workspaceConfigStore.load(runtimeLocalWorkspace.context);
+      const loadedWorkspaceState =
+        runtimeLocalWorkspace === null
+          ? null
+          : yield* input.workspaceStateStore.load(runtimeLocalWorkspace.context);
       const localToolRuntime =
         runtimeLocalWorkspace === null
           ? createEmptyLocalToolRuntime()
@@ -144,24 +195,88 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
       const embedder = yield* loadConfiguredSemanticSearchEmbedder(
         loadedConfig?.config,
       );
+      const cachedWorkspaceCatalog =
+        runtimeLocalWorkspace === null || loadedWorkspaceState === null
+          ? undefined
+          : workspaceCatalogCache.get(
+              workspaceCatalogCacheKey({
+                stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
+                workspaceId,
+                accountId,
+              }),
+            );
+      const nextWorkspaceCatalogSignature =
+        runtimeLocalWorkspace === null || loadedWorkspaceState === null
+          ? null
+          : workspaceCatalogIndexSignature({
+              workspaceState: loadedWorkspaceState,
+              embedder,
+            });
       const sqliteCatalogReady =
         runtimeLocalWorkspace === null
           ? false
-          : yield* indexWorkspaceToolsIntoSqlite({
+          : cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature
+            ? cachedWorkspaceCatalog.sqliteCatalogReady
+            : yield* indexWorkspaceToolsIntoSqlite({
+                workspaceId,
+                accountId,
+                sourceCatalogStore: input.sourceCatalogStore,
+                workspaceConfigStore: input.workspaceConfigStore,
+                workspaceStateStore: input.workspaceStateStore,
+                sourceArtifactStore: input.sourceArtifactStore,
+                runtimeLocalWorkspace,
+                embedder,
+              });
+      const sourceCatalog =
+        runtimeLocalWorkspace === null
+          ? createWorkspaceSourceCatalog({
+              workspaceId,
+              accountId,
+              sourceCatalogStore: input.sourceCatalogStore,
+              workspaceConfigStore: input.workspaceConfigStore,
+              workspaceStateStore: input.workspaceStateStore,
+              sourceArtifactStore: input.sourceArtifactStore,
+              runtimeLocalWorkspace,
+              embedder,
+              sqliteCatalogReady,
+            })
+          : cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature
+            ? cachedWorkspaceCatalog.sourceCatalog
+            : createWorkspaceSourceCatalog({
+                workspaceId,
+                accountId,
+                sourceCatalogStore: input.sourceCatalogStore,
+                workspaceConfigStore: input.workspaceConfigStore,
+                workspaceStateStore: input.workspaceStateStore,
+                sourceArtifactStore: input.sourceArtifactStore,
+                runtimeLocalWorkspace,
+                embedder,
+                sqliteCatalogReady,
+              });
+
+      if (
+        runtimeLocalWorkspace !== null &&
+        nextWorkspaceCatalogSignature !== null
+      ) {
+        workspaceCatalogCache.set(
+          workspaceCatalogCacheKey({
+            stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
             workspaceId,
             accountId,
-            sourceCatalogStore: input.sourceCatalogStore,
-            workspaceConfigStore: input.workspaceConfigStore,
-            workspaceStateStore: input.workspaceStateStore,
-            sourceArtifactStore: input.sourceArtifactStore,
-            runtimeLocalWorkspace,
-            embedder,
-          });
+          }),
+          {
+            indexSignature: nextWorkspaceCatalogSignature,
+            sqliteCatalogReady,
+            sourceCatalog,
+          },
+        );
+      }
 
       const { catalog, toolInvoker } = createWorkspaceToolInvoker({
         workspaceId,
         accountId,
         sourceCatalogStore: input.sourceCatalogStore,
+        sourceCatalog,
         workspaceConfigStore: input.workspaceConfigStore,
         workspaceStateStore: input.workspaceStateStore,
         sourceArtifactStore: input.sourceArtifactStore,

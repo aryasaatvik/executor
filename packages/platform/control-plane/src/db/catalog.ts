@@ -100,6 +100,12 @@ const lexicalScoreFromBm25 = (bm25Score: number): number => {
   return magnitude / (1 + magnitude)
 }
 
+const withSearchMode = (
+  hits: readonly SearchHit[],
+  searchMode: "fts" | "semantic" | "hybrid",
+): readonly SearchHit[] =>
+  Object.assign([...hits], { searchMode }) as readonly SearchHit[]
+
 // ---------------------------------------------------------------------------
 // SQLite-backed ToolCatalog
 // ---------------------------------------------------------------------------
@@ -155,7 +161,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // -----------------------------------------------------------------
           const trimmedQuery = query.trim()
           if (trimmedQuery.length === 0) {
-            return [] as readonly SearchHit[]
+            return withSearchMode([], "fts")
           }
 
           const ftsQuery = buildFtsQuery(trimmedQuery)
@@ -198,7 +204,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           // -----------------------------------------------------------------
           // Step 2: If no embedder, return FTS-only results
           // -----------------------------------------------------------------
-          if (!embedder) return ftsResults.slice(0, limit)
+          if (!embedder) return withSearchMode(ftsResults.slice(0, limit), "fts")
 
           // -----------------------------------------------------------------
           // Step 3: Strong signal skip — if FTS top score is dominant, skip vec
@@ -207,7 +213,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             const gap = ftsResults.length > 1
               ? ftsResults[0].score - ftsResults[1].score
               : ftsResults[0].score
-            if (gap >= 0.15) return ftsResults.slice(0, limit)
+            if (gap >= 0.15) return withSearchMode(ftsResults.slice(0, limit), "fts")
           }
 
           // -----------------------------------------------------------------
@@ -217,7 +223,9 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             embedder.embed(trimmedQuery, "query"),
           ).pipe(Effect.catchAll(() => Effect.succeed(null)))
 
-          if (!queryEmbedding) return ftsResults.slice(0, limit) // embedding failed, FTS fallback
+          if (!queryEmbedding) {
+            return withSearchMode(ftsResults.slice(0, limit), "fts")
+          } // embedding failed, FTS fallback
 
           const vecResults = yield* searchVec({
             queryEmbedding,
@@ -244,7 +252,10 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             limit,
           )
 
-          return hybridResults as readonly SearchHit[]
+          return withSearchMode(
+            hybridResults as readonly SearchHit[],
+            ftsResults.length === 0 ? "semantic" : "hybrid",
+          )
         }),
       ),
 

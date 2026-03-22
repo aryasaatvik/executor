@@ -4,6 +4,8 @@ import * as Effect from "effect/Effect";
 const createEmbedderMock = vi.fn();
 const createWorkspaceToolInvokerMock = vi.fn();
 const indexWorkspaceToolsIntoSqliteMock = vi.fn();
+const createWorkspaceSourceCatalogMock = vi.fn();
+const getRuntimeLocalWorkspaceOptionMock = vi.fn();
 
 vi.mock("../../../db/embedder", () => ({
   createEmbedder: createEmbedderMock,
@@ -15,6 +17,11 @@ vi.mock("./tool-invoker", () => ({
 
 vi.mock("./source-catalog", () => ({
   indexWorkspaceToolsIntoSqlite: indexWorkspaceToolsIntoSqliteMock,
+  createWorkspaceSourceCatalog: createWorkspaceSourceCatalogMock,
+}));
+
+vi.mock("../../local/runtime-context", () => ({
+  getRuntimeLocalWorkspaceOption: getRuntimeLocalWorkspaceOptionMock,
 }));
 
 describe("loadConfiguredSemanticSearchEmbedder", () => {
@@ -22,8 +29,10 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     createEmbedderMock.mockReset();
     createWorkspaceToolInvokerMock.mockReset();
     indexWorkspaceToolsIntoSqliteMock.mockReset();
+    createWorkspaceSourceCatalogMock.mockReset();
+    getRuntimeLocalWorkspaceOptionMock.mockReset();
     const environmentModule = await import("./environment");
-    environmentModule.clearSemanticSearchEmbedderCacheForTests();
+    environmentModule.clearWorkspaceExecutionCachesForTests();
   });
 
   it("reuses the same embedder for repeated identical configs", async () => {
@@ -124,5 +133,189 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     );
 
     expect(createEmbedderMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createWorkspaceExecutionEnvironmentResolver", () => {
+  it("reuses the SQLite index and source catalog when workspace state is unchanged", async () => {
+    const environmentModule = await import("./environment");
+    const runtimeLocalWorkspace = {
+      context: {
+        stateDirectory: "/tmp/executor-tests",
+      },
+    };
+    const sourceCatalog = {
+      searchTools: vi.fn(),
+      listTools: vi.fn(),
+      listNamespaces: vi.fn(),
+      getToolByPath: vi.fn(),
+    };
+
+    getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
+    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.succeed(true));
+    createWorkspaceSourceCatalogMock.mockReturnValue(sourceCatalog);
+    createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
+      catalog: sourceCatalog,
+      toolInvoker: { invoke: vi.fn() },
+    }));
+
+    const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
+      sourceAuthMaterialService: {} as never,
+      sourceAuthService: {} as never,
+      sourceCatalogStore: {} as never,
+      localToolRuntimeLoader: {
+        load: () =>
+          Effect.succeed({
+            tools: {},
+            catalog: {},
+            toolInvoker: {},
+            toolPaths: new Set<string>(),
+          } as never),
+      },
+      workspaceConfigStore: {
+        load: () => Effect.succeed({ config: null }),
+      } as never,
+      workspaceStateStore: {
+        load: () =>
+          Effect.succeed({
+            version: 1,
+            sources: {
+              github: {
+                status: "connected",
+                lastError: null,
+                sourceHash: "hash-1",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            },
+            policies: {},
+            catalog: {
+              semanticSearchSignature: null,
+            },
+          }),
+      } as never,
+      sourceArtifactStore: {} as never,
+    });
+
+    await Effect.runPromise(
+      resolver({
+        workspaceId: "workspace-1" as never,
+        accountId: "account-1" as never,
+      } as never),
+    );
+    await Effect.runPromise(
+      resolver({
+        workspaceId: "workspace-1" as never,
+        accountId: "account-1" as never,
+      } as never),
+    );
+
+    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(1);
+    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
+    expect(createWorkspaceToolInvokerMock).toHaveBeenCalledTimes(2);
+    expect(createWorkspaceToolInvokerMock.mock.calls[0]?.[0]?.sourceCatalog).toBe(sourceCatalog);
+    expect(createWorkspaceToolInvokerMock.mock.calls[1]?.[0]?.sourceCatalog).toBe(sourceCatalog);
+  });
+
+  it("rebuilds the SQLite index and source catalog when workspace state changes", async () => {
+    const environmentModule = await import("./environment");
+    const runtimeLocalWorkspace = {
+      context: {
+        stateDirectory: "/tmp/executor-tests",
+      },
+    };
+
+    getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
+    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.succeed(true));
+    createWorkspaceSourceCatalogMock
+      .mockReturnValueOnce({
+        searchTools: vi.fn(),
+        listTools: vi.fn(),
+        listNamespaces: vi.fn(),
+        getToolByPath: vi.fn(),
+      })
+      .mockReturnValueOnce({
+        searchTools: vi.fn(),
+        listTools: vi.fn(),
+        listNamespaces: vi.fn(),
+        getToolByPath: vi.fn(),
+      });
+    createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
+      catalog: sourceCatalog,
+      toolInvoker: { invoke: vi.fn() },
+    }));
+
+    const workspaceStates = [
+      {
+        version: 1,
+        sources: {
+          github: {
+            status: "connected",
+            lastError: null,
+            sourceHash: "hash-1",
+            createdAt: 1,
+            updatedAt: 2,
+          },
+        },
+        policies: {},
+        catalog: {
+          semanticSearchSignature: null,
+        },
+      },
+      {
+        version: 1,
+        sources: {
+          github: {
+            status: "connected",
+            lastError: null,
+            sourceHash: "hash-2",
+            createdAt: 1,
+            updatedAt: 3,
+          },
+        },
+        policies: {},
+        catalog: {
+          semanticSearchSignature: null,
+        },
+      },
+    ];
+
+    const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
+      sourceAuthMaterialService: {} as never,
+      sourceAuthService: {} as never,
+      sourceCatalogStore: {} as never,
+      localToolRuntimeLoader: {
+        load: () =>
+          Effect.succeed({
+            tools: {},
+            catalog: {},
+            toolInvoker: {},
+            toolPaths: new Set<string>(),
+          } as never),
+      },
+      workspaceConfigStore: {
+        load: () => Effect.succeed({ config: null }),
+      } as never,
+      workspaceStateStore: {
+        load: vi.fn(() => Effect.succeed(workspaceStates.shift()!)),
+      } as never,
+      sourceArtifactStore: {} as never,
+    });
+
+    await Effect.runPromise(
+      resolver({
+        workspaceId: "workspace-1" as never,
+        accountId: "account-1" as never,
+      } as never),
+    );
+    await Effect.runPromise(
+      resolver({
+        workspaceId: "workspace-1" as never,
+        accountId: "account-1" as never,
+      } as never),
+    );
+
+    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(2);
+    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(2);
   });
 });

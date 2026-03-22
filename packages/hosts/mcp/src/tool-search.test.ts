@@ -212,4 +212,23 @@ describe("tool_search", () => {
     expect(result.results).toHaveLength(1);
     expect(result.results[0]?.path).toBe(githubIssueTool.path);
   });
+
+  it("propagates the actual search mode from the catalog", async () => {
+    const searchHits = Object.assign(
+      [
+        { path: githubIssueTool.path, score: 0.9 },
+      ] as const,
+      { searchMode: "hybrid" as const },
+    );
+
+    const result = await Effect.runPromise(
+      handleToolSearch(makeCatalog({
+        searchHits,
+      }), {
+        query: "create github issue",
+      }),
+    );
+
+    expect(result.meta.search_mode).toBe("hybrid");
+  });
 });
