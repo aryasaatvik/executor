@@ -1,6 +1,5 @@
-import {
-  createToolCatalogFromEntries,
-  type ToolCatalog,
+import type {
+  ToolCatalog,
 } from "@executor/codemode-core";
 import type { AccountId, Source } from "#schema";
 import * as Effect from "effect/Effect";
@@ -8,7 +7,6 @@ import * as Effect from "effect/Effect";
 import {
   RuntimeSourceCatalogStoreService,
   type LoadedSourceCatalogToolIndexEntry,
-  catalogToolCatalogEntry,
 } from "../../catalog/source/runtime";
 import type { RuntimeLocalWorkspaceState } from "../../local/runtime-context";
 import {
@@ -19,59 +17,93 @@ import {
   type WorkspaceStorageServices,
 } from "../../local/storage";
 import { provideRuntimeLocalWorkspace } from "./local";
+import { createSqliteToolCatalog } from "../../../db/catalog";
+import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+import {
+  indexSource,
+  removeSourceTools,
+  syncSourceLifecycle,
+} from "../../../db/indexer";
+import type { SourceToIndex, ToolToIndex } from "../../../db/indexer";
+import type { Embedder } from "../../../db/embedder";
+import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-indexer";
+import { catalog_tool } from "../../../db/schema";
+import { join } from "node:path";
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 
-const tokenize = (value: string): string[] =>
-  value
-    .trim()
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
+// ---------------------------------------------------------------------------
+// DB path resolution
+// ---------------------------------------------------------------------------
 
-const LOW_SIGNAL_QUERY_TOKENS = new Set([
-  "a",
-  "an",
-  "the",
-  "am",
-  "as",
-  "for",
-  "from",
-  "get",
-  "i",
-  "in",
-  "is",
-  "list",
-  "me",
-  "my",
-  "of",
-  "on",
-  "or",
-  "signed",
-  "to",
-  "who",
-]);
+const WORKSPACE_CATALOG_DB_FILENAME = "catalog.db";
 
-const singularizeToken = (value: string): string =>
-  value.length > 3 && value.endsWith("s") ? value.slice(0, -1) : value;
-
-const tokenEquals = (left: string, right: string): boolean =>
-  left === right || singularizeToken(left) === singularizeToken(right);
-
-const hasTokenMatch = (
-  tokens: readonly string[],
-  queryToken: string,
-): boolean => tokens.some((token) => tokenEquals(token, queryToken));
-
-const hasSubstringMatch = (value: string, queryToken: string): boolean => {
-  if (value.includes(queryToken)) {
-    return true;
+const resolveWorkspaceCatalogDbPath = (
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null,
+): string | null => {
+  if (!runtimeLocalWorkspace) {
+    return null;
   }
-
-  const singular = singularizeToken(queryToken);
-  return singular !== queryToken && value.includes(singular);
+  return join(
+    runtimeLocalWorkspace.context.stateDirectory,
+    WORKSPACE_CATALOG_DB_FILENAME,
+  );
 };
 
-const queryTokenWeight = (token: string): number =>
-  LOW_SIGNAL_QUERY_TOKENS.has(token) ? 0.25 : 1;
+// ---------------------------------------------------------------------------
+// Tool conversion: LoadedSourceCatalogToolIndexEntry -> ToolToIndex
+// ---------------------------------------------------------------------------
+
+export const toToolToIndex = (
+  tool: LoadedSourceCatalogToolIndexEntry,
+): ToolToIndex => ({
+  toolId: tool.path,
+  path: tool.path,
+  sourceId: tool.source.id,
+  sourceKey: tool.descriptor.sourceKey,
+  namespace: tool.searchNamespace,
+  searchText: tool.searchText,
+  title: tool.capability.surface.title ?? undefined,
+  description:
+    tool.capability.surface.summary
+    ?? tool.capability.surface.description
+    ?? undefined,
+  inputSchemaJson: tool.descriptor.contract?.inputSchema ?? undefined,
+  outputSchemaJson: tool.descriptor.contract?.outputSchema ?? undefined,
+  inputTypePreview: tool.descriptor.contract?.inputTypePreview ?? undefined,
+  outputTypePreview: tool.descriptor.contract?.outputTypePreview ?? undefined,
+  interaction: tool.descriptor.interaction ?? "auto",
+  providerKind: tool.descriptor.providerKind ?? undefined,
+});
+
+export const toSourceToIndex = (
+  source: LoadedSourceCatalogToolIndexEntry["source"],
+): SourceToIndex => ({
+  sourceId: source.id,
+  workspaceId: source.workspaceId,
+  name: source.name,
+  kind: source.kind,
+  endpoint: source.endpoint,
+  status: source.status,
+  enabled: source.enabled,
+  namespace: source.namespace,
+  createdAt: source.createdAt,
+  updatedAt: source.updatedAt,
+});
+
+const semanticSearchSignature = (
+  embedder?: Embedder,
+): string | null =>
+  embedder
+    ? JSON.stringify({
+      provider: embedder.provider,
+      model: embedder.model,
+      dimensions: embedder.dimensions,
+    })
+    : null;
+
+// ---------------------------------------------------------------------------
+// Existing helper: load tools from JSON artifacts (kept for indexing + invocation)
+// ---------------------------------------------------------------------------
 
 export const loadWorkspaceCatalogTools = (input: {
   workspaceId: Source["workspaceId"];
@@ -119,131 +151,154 @@ export const loadWorkspaceCatalogToolByPath = (input: {
     ),
   );
 
-const scoreCatalogTool = (
-  queryTokens: readonly string[],
-  tool: LoadedSourceCatalogToolIndexEntry,
-): number => {
-  const pathText = tool.path.toLowerCase();
-  const namespaceText = tool.searchNamespace.toLowerCase();
-  const toolIdText = tool.path.split(".").at(-1)?.toLowerCase() ?? "";
-  const titleText = tool.capability.surface.title?.toLowerCase() ?? "";
-  const descriptionText =
-    tool.capability.surface.summary?.toLowerCase()
-    ?? tool.capability.surface.description?.toLowerCase()
-    ?? "";
-  const templateText = [
-    tool.executable.display?.pathTemplate,
-    tool.executable.display?.operationId,
-    tool.executable.display?.leaf,
-  ]
-    .filter((part): part is string => typeof part === "string" && part.length > 0)
-    .join(" ")
-    .toLowerCase();
+// ---------------------------------------------------------------------------
+// Index workspace tools into SQLite
+// ---------------------------------------------------------------------------
 
-  const pathTokens = tokenize(`${tool.path} ${toolIdText}`);
-  const namespaceTokens = tokenize(tool.searchNamespace);
-  const titleTokens = tokenize(tool.capability.surface.title ?? "");
-  const templateTokens = tokenize(templateText);
-
-  let score = 0;
-  let structuralHits = 0;
-  let namespaceHits = 0;
-  let pathHits = 0;
-
-  for (const token of queryTokens) {
-    const weight = queryTokenWeight(token);
-
-    if (hasTokenMatch(pathTokens, token)) {
-      score += 12 * weight;
-      structuralHits += 1;
-      pathHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(namespaceTokens, token)) {
-      score += 11 * weight;
-      structuralHits += 1;
-      namespaceHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(titleTokens, token)) {
-      score += 9 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (hasTokenMatch(templateTokens, token)) {
-      score += 8 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (
-      hasSubstringMatch(pathText, token) ||
-      hasSubstringMatch(toolIdText, token)
-    ) {
-      score += 6 * weight;
-      structuralHits += 1;
-      pathHits += 1;
-      continue;
-    }
-
-    if (hasSubstringMatch(namespaceText, token)) {
-      score += 5 * weight;
-      structuralHits += 1;
-      namespaceHits += 1;
-      continue;
-    }
-
-    if (
-      hasSubstringMatch(titleText, token) ||
-      hasSubstringMatch(templateText, token)
-    ) {
-      score += 4 * weight;
-      structuralHits += 1;
-      continue;
-    }
-
-    if (hasSubstringMatch(descriptionText, token)) {
-      score += 0.5 * weight;
-    }
+/**
+ * Load all tools from the JSON artifact store and index them into
+ * the SQLite catalog. Called during workspace environment setup to
+ * ensure the DB is populated before queries hit it.
+ */
+export const indexWorkspaceToolsIntoSqlite = (input: {
+  workspaceId: Source["workspaceId"];
+  accountId: AccountId;
+  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  workspaceConfigStore: WorkspaceConfigStoreShape;
+  workspaceStateStore: WorkspaceStateStoreShape;
+  sourceArtifactStore: SourceArtifactStoreShape;
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
+  embedder?: Embedder;
+}): Effect.Effect<void, unknown, never> => {
+  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
+  if (!dbPath) {
+    return Effect.fail(new Error("Workspace catalog DB path is unavailable."));
   }
 
-  const strongTokens = queryTokens.filter(
-    (token) => queryTokenWeight(token) >= 1,
-  );
-  if (strongTokens.length >= 2) {
-    for (let index = 0; index < strongTokens.length - 1; index += 1) {
-      const current = strongTokens[index]!;
-      const next = strongTokens[index + 1]!;
-      const phrases = [
-        `${current}-${next}`,
-        `${current}.${next}`,
-        `${current}/${next}`,
-      ];
+  const workspaceStorageLayer = makeWorkspaceStorageLayer({
+    workspaceConfigStore: input.workspaceConfigStore,
+    workspaceStateStore: input.workspaceStateStore,
+    sourceArtifactStore: input.sourceArtifactStore,
+  });
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
+    ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
+  });
 
-      if (
-        phrases.some(
-          (phrase) =>
-            pathText.includes(phrase) || templateText.includes(phrase),
-        )
-      ) {
-        score += 10;
+  return input.sourceCatalogStore.loadWorkspaceSourceCatalogToolIndex({
+    workspaceId: input.workspaceId,
+    actorAccountId: input.accountId,
+    includeSchemas: true,
+  }).pipe(
+    Effect.flatMap((allTools) => {
+      const activeSourceIds = new Set<string>();
+      const nextSemanticSearchSignature = semanticSearchSignature(input.embedder);
+
+      // Group tools by source for indexing
+      const toolsBySource = new Map<string, {
+        sourceId: string;
+        sourceKey: string;
+        source: SourceToIndex;
+        tools: ToolToIndex[];
+      }>();
+
+      for (const tool of allTools) {
+        const sourceId = tool.source.id;
+        activeSourceIds.add(sourceId);
+        if (!toolsBySource.has(sourceId)) {
+          toolsBySource.set(sourceId, {
+            sourceId,
+            sourceKey: tool.descriptor.sourceKey,
+            source: toSourceToIndex(tool.source),
+            tools: [],
+          });
+        }
+        if (tool.source.enabled && tool.source.status === "connected") {
+          toolsBySource.get(sourceId)!.tools.push(toToolToIndex(tool));
+        }
       }
-    }
-  }
 
-  if (namespaceHits > 0 && pathHits > 0) {
-    score += 8;
-  }
+      return Effect.gen(function* () {
+        const db = yield* SqliteDrizzle;
+        const workspaceState = yield* input.workspaceStateStore.load(
+          input.runtimeLocalWorkspace.context,
+        );
+        const previousSemanticSearchSignature =
+          workspaceState.catalog?.semanticSearchSignature ?? null;
+        const shouldRebuildEmbeddings =
+          previousSemanticSearchSignature !== nextSemanticSearchSignature;
+        const indexedSources = yield* db
+          .selectDistinct({
+            sourceId: catalog_tool.source_id,
+            sourceKey: catalog_tool.source_key,
+          })
+          .from(catalog_tool);
 
-  if (structuralHits === 0 && score > 0) {
-    score *= 0.25;
-  }
+        for (const indexedSource of indexedSources) {
+          if (activeSourceIds.has(indexedSource.sourceId)) {
+            continue;
+          }
 
-  return score;
+          yield* removeSourceTools(indexedSource.sourceId);
+          yield* removeSourceEmbeddings(indexedSource.sourceKey);
+        }
+
+        yield* Effect.forEach(
+          [...toolsBySource.values()],
+          (group) =>
+            Effect.gen(function* () {
+              if (!group.source.enabled || group.source.status !== "connected") {
+                yield* syncSourceLifecycle({
+                  sourceId: group.sourceId,
+                  source: group.source,
+                });
+                return;
+              }
+
+              const result = yield* indexSource({
+                sourceId: group.sourceId,
+                sourceKey: group.sourceKey,
+                source: group.source,
+                tools: group.tools,
+              });
+
+              const toolsToEmbed = shouldRebuildEmbeddings
+                ? group.tools
+                : result.changedTools;
+
+              if (input.embedder && toolsToEmbed.length > 0) {
+                yield* embedSourceTools({
+                  embedder: input.embedder,
+                  tools: toolsToEmbed,
+                  sourceKey: group.sourceKey,
+                });
+              }
+            }),
+          { concurrency: 1 },
+        );
+
+        if (previousSemanticSearchSignature !== nextSemanticSearchSignature) {
+          yield* input.workspaceStateStore.write({
+            context: input.runtimeLocalWorkspace.context,
+            state: {
+              ...workspaceState,
+              catalog: {
+                ...(workspaceState.catalog ?? {}),
+                semanticSearchSignature: nextSemanticSearchSignature,
+              },
+            },
+          });
+        }
+      });
+    }),
+    Effect.provide(workspaceStorageLayer),
+    Effect.provide(dbLayer),
+    Effect.asVoid,
+  );
 };
+
+// ---------------------------------------------------------------------------
+// SQLite-backed workspace source catalog
+// ---------------------------------------------------------------------------
 
 export const createWorkspaceSourceCatalog = (input: {
   workspaceId: Source["workspaceId"];
@@ -253,46 +308,43 @@ export const createWorkspaceSourceCatalog = (input: {
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
+  embedder?: Embedder;
 }): ToolCatalog => {
-  const workspaceStorageLayer = makeWorkspaceStorageLayer({
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
+  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
+
+  if (!dbPath) {
+    return createEmptySourceCatalog();
+  }
+
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
+    ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
   });
-  const provideWorkspaceStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(Effect.provide(workspaceStorageLayer));
 
-  const createSharedCatalog = (includeSchemas: boolean): Effect.Effect<ToolCatalog, Error, never> =>
-    provideWorkspaceStorage(Effect.gen(function* () {
-      const catalogTools = yield* loadWorkspaceCatalogTools({
-        workspaceId: input.workspaceId,
-        accountId: input.accountId,
-        sourceCatalogStore: input.sourceCatalogStore,
-        includeSchemas,
-      });
-
-      return createToolCatalogFromEntries({
-        entries: catalogTools.map((tool) =>
-          catalogToolCatalogEntry({
-            tool,
-            score: (queryTokens) => scoreCatalogTool(queryTokens, tool),
-          }),
-        ),
-      });
-    }));
+  const sqliteCatalogEffect = Effect.runSync(
+    Effect.cached(
+      createSqliteToolCatalog(input.embedder).pipe(
+        Effect.provide(dbLayer),
+      ),
+    ),
+  );
 
   return {
-    listNamespaces: ({ limit }) =>
+    searchTools: ({ query, namespace, sourceKey, limit }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(false), (catalog) =>
-          catalog.listNamespaces({ limit }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.searchTools({
+            query,
+            ...(namespace !== undefined ? { namespace } : {}),
+            ...(sourceKey !== undefined ? { sourceKey } : {}),
+            limit,
+          }),
         ),
         input.runtimeLocalWorkspace,
       ),
 
     listTools: ({ namespace, query, limit, includeSchemas = false }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(includeSchemas), (catalog) =>
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
           catalog.listTools({
             ...(namespace !== undefined ? { namespace } : {}),
             ...(query !== undefined ? { query } : {}),
@@ -303,24 +355,38 @@ export const createWorkspaceSourceCatalog = (input: {
         input.runtimeLocalWorkspace,
       ),
 
-    getToolByPath: ({ path, includeSchemas }) =>
+    listNamespaces: ({ limit }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(includeSchemas), (catalog) =>
-          catalog.getToolByPath({ path, includeSchemas }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.listNamespaces({ limit }),
         ),
         input.runtimeLocalWorkspace,
       ),
 
-    searchTools: ({ query, namespace, limit }) =>
+    getToolByPath: ({ path, includeSchemas }) =>
       provideRuntimeLocalWorkspace(
-        Effect.flatMap(createSharedCatalog(false), (catalog) =>
-          catalog.searchTools({
-            query,
-            ...(namespace !== undefined ? { namespace } : {}),
-            limit,
-          }),
+        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
+          catalog.getToolByPath({ path, includeSchemas }),
         ),
         input.runtimeLocalWorkspace,
       ),
   } satisfies ToolCatalog;
 };
+
+// ---------------------------------------------------------------------------
+// Empty catalog fallback (no local workspace)
+// ---------------------------------------------------------------------------
+
+const createEmptySourceCatalog = (): ToolCatalog => ({
+  searchTools: () => Effect.succeed([]),
+  listTools: () => Effect.succeed([]),
+  listNamespaces: () => Effect.succeed([]),
+  getToolByPath: () => Effect.succeed(null),
+});
+
+// ---------------------------------------------------------------------------
+// Re-export indexer functions for use in sync flow
+// ---------------------------------------------------------------------------
+
+export { indexSource, removeSourceTools } from "../../../db/indexer";
+export type { ToolToIndex } from "../../../db/indexer";

@@ -27,13 +27,13 @@ import {
 } from "../../sources/source-auth-service";
 import { createExecutorToolMap } from "../../sources/executor-tools";
 import { invokeIrTool } from "../ir-execution";
+import type { Embedder } from "../../../db/embedder";
 import {
   authorizePersistedToolInvocation,
   toSecretResolutionContext,
 } from "./authorization";
 import { provideRuntimeLocalWorkspace } from "./local";
 import {
-  createWorkspaceSourceCatalog,
   loadWorkspaceCatalogToolByPath,
 } from "./source-catalog";
 import { runtimeEffectError } from "../../effect-errors";
@@ -42,6 +42,7 @@ export const createWorkspaceToolInvoker = (input: {
   workspaceId: Source["workspaceId"];
   accountId: AccountId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  sourceCatalog: ToolCatalog;
   workspaceConfigStore: WorkspaceConfigStoreShape;
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
@@ -49,6 +50,7 @@ export const createWorkspaceToolInvoker = (input: {
   sourceAuthService: RuntimeSourceAuthService;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;
+  embedder?: Embedder;
   onElicitation?: Parameters<
     typeof makeToolInvokerFromTools
   >[0]["onElicitation"];
@@ -70,15 +72,6 @@ export const createWorkspaceToolInvoker = (input: {
     sourceAuthService: input.sourceAuthService,
     runtimeLocalWorkspace: input.runtimeLocalWorkspace,
   });
-  const sourceCatalog = createWorkspaceSourceCatalog({
-    workspaceId: input.workspaceId,
-    accountId: input.accountId,
-    sourceCatalogStore: input.sourceCatalogStore,
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-    runtimeLocalWorkspace: input.runtimeLocalWorkspace,
-  });
   let catalog: ToolCatalog | null = null;
   const systemTools = createSystemToolMap({
     getCatalog: () => {
@@ -98,7 +91,7 @@ export const createWorkspaceToolInvoker = (input: {
     tools: authoredTools,
   });
   catalog = mergeToolCatalogs({
-    catalogs: [authoredCatalog, sourceCatalog],
+    catalogs: [authoredCatalog, input.sourceCatalog],
   });
   const authoredToolPaths = new Set(Object.keys(authoredTools));
   const authoredInvoker = makeToolInvokerFromTools({

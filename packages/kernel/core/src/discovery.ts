@@ -241,13 +241,14 @@ export function createToolCatalogFromEntries(input: {
             })
           : null,
       ),
-    searchTools: ({ query, namespace, limit }) => {
+    searchTools: ({ query, namespace, sourceKey, limit }) => {
       const queryTokens = tokenize(query);
 
       return Effect.succeed(
         entries
           .filter((entry) =>
-            !namespace || namespaceFromCatalogEntry(entry) === namespace,
+            (!namespace || namespaceFromCatalogEntry(entry) === namespace)
+            && (!sourceKey || entry.descriptor.sourceKey === sourceKey),
           )
           .map((entry) => ({
             path: entry.descriptor.path,
@@ -307,7 +308,7 @@ export function mergeToolCatalogs(input: {
         return null;
       }),
 
-    searchTools: ({ query, namespace, limit }) =>
+    searchTools: ({ query, namespace, sourceKey, limit }) =>
       Effect.gen(function* () {
         const groups = yield* Effect.forEach(
           catalogs,
@@ -315,6 +316,7 @@ export function mergeToolCatalogs(input: {
             catalog.searchTools({
               query,
               ...(namespace !== undefined ? { namespace } : {}),
+              ...(sourceKey !== undefined ? { sourceKey } : {}),
               limit: Math.max(limit, limit * catalogs.length),
             }),
           { concurrency: "unbounded" },
@@ -373,13 +375,14 @@ export function createDiscoveryPrimitivesFromToolCatalog(input: {
 
   const discover: DiscoverPrimitive = ({
     query,
-    sourceKey: _sourceKey,
+    sourceKey,
     limit = 12,
     includeSchemas = false,
   }) =>
     Effect.gen(function* () {
       const hits = yield* catalog.searchTools({
         query,
+        ...(sourceKey !== undefined ? { sourceKey } : {}),
         limit,
       });
 

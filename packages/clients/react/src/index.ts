@@ -884,6 +884,13 @@ export const useLocalInstallation = (): Loadable<LocalInstallation> =>
 export const useInstanceConfig = (): Loadable<InstanceConfig> =>
   useLoadableAtom(instanceConfigAtom(apiBaseUrl));
 
+export const useRefreshInstanceConfig = (): (() => void) => {
+  const registry = React.useContext(RegistryContext);
+  return React.useCallback(() => {
+    registry.refresh(instanceConfigAtom(apiBaseUrl));
+  }, [registry]);
+};
+
 export const useSecrets = (): Loadable<ReadonlyArray<SecretListItem>> =>
   useLoadableAtom(secretsAtom(apiBaseUrl));
 
@@ -899,6 +906,12 @@ type SecretMutationState<T> = {
   data: T | null;
   error: Error | null;
 };
+
+type UpdateInstanceConfigPayload = {
+  semanticSearch: InstanceConfig["semanticSearch"];
+};
+
+type UpdateInstanceConfigResult = InstanceConfig;
 
 const useSecretMutation = <TInput, TOutput>(
   execute: (input: TInput) => Promise<TOutput>,
@@ -982,6 +995,51 @@ export const useDeleteSecret = () =>
       [],
     ),
   );
+
+export const useUpdateInstanceConfig = () => {
+  const registry = React.useContext(RegistryContext);
+  const [state, setState] = React.useState<SecretMutationState<UpdateInstanceConfigResult>>({
+    status: "idle",
+    data: null,
+    error: null,
+  });
+
+  const mutateAsync = React.useCallback(async (payload: UpdateInstanceConfigPayload) => {
+    setState((current) => ({
+      status: "pending",
+      data: current.data,
+      error: null,
+    }));
+
+    try {
+      const data = await runControlPlane({
+        execute: (client) => client.local.updateConfig({
+          payload,
+        }),
+      });
+      registry.refresh(instanceConfigAtom(apiBaseUrl));
+      setState({ status: "success", data, error: null });
+      return data;
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      setState({ status: "error", data: null, error });
+      throw error;
+    }
+  }, [registry]);
+
+  const reset = React.useCallback(() => {
+    setState({ status: "idle", data: null, error: null });
+  }, []);
+
+  return React.useMemo(
+    () => ({
+      ...state,
+      mutateAsync,
+      reset,
+    }),
+    [mutateAsync, reset, state],
+  );
+};
 
 export const useSources = (): Loadable<ReadonlyArray<Source>> => {
   const workspace = useWorkspaceRequestContext();

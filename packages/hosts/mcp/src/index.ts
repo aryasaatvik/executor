@@ -21,6 +21,7 @@ import {
   buildPausedResultText,
   parseInteractionPayload,
 } from "./paused-result";
+import { handleToolSearch, type ToolSearchInput } from "./tool-search";
 
 const pollingIntervalMs = 200;
 
@@ -36,6 +37,13 @@ const resumeInputSchema = {
     action: z.enum(["accept", "decline", "cancel"]),
     content: z.record(z.string(), z.unknown()).optional(),
   }).optional(),
+};
+
+const toolSearchInputSchema = {
+  query: z.string().trim().min(1),
+  max_results: z.number().finite().optional(),
+  source: z.string().optional(),
+  include_schemas: z.boolean().optional(),
 };
 
 type ResumePayload = {
@@ -476,6 +484,48 @@ const createExecutorMcpServer = async (config: {
       });
 
       return buildToolResult(resumed);
+    },
+  );
+
+  server.registerTool(
+    "tool_search",
+    {
+      description: [
+        "Search for tools in the workspace catalog.",
+        "Use natural language queries to find tools by intent (e.g., 'create github issue').",
+        "Prefix with + for exact path lookup (e.g., '+github.issues.create').",
+        "Returns tool paths, descriptions, and optional schemas.",
+      ].join(" "),
+      inputSchema: toolSearchInputSchema,
+    },
+    async (input: ToolSearchInput) => {
+      const result = await runControlPlane(
+        config.runtime,
+        Effect.gen(function* () {
+          const resolveExecutionEnvironment = yield* RuntimeExecutionResolverService;
+          const environment = yield* resolveExecutionEnvironment({
+            workspaceId: workspaceId as never,
+            accountId: accountId as never,
+            executionId: ExecutionIdSchema.make("exec_mcp_tool_search"),
+          });
+
+          if (!environment.catalog) {
+            return yield* Effect.fail(
+              new Error("Workspace tool catalog is unavailable."),
+            );
+          }
+
+          return yield* handleToolSearch(environment.catalog, input);
+        }),
+      );
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
+        }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
     },
   );
 

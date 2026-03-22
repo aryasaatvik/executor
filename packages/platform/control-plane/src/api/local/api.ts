@@ -1,5 +1,9 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform";
-import { LocalInstallationSchema, SecretMaterialPurposeSchema } from "#schema";
+import {
+  LocalConfigSemanticSearchSchema,
+  LocalInstallationSchema,
+  SecretMaterialPurposeSchema,
+} from "#schema";
 import * as Schema from "effect/Schema";
 
 import {
@@ -18,10 +22,19 @@ export const InstanceConfigSchema = Schema.Struct({
   platform: Schema.String,
   secretProviders: Schema.Array(SecretProviderSchema),
   defaultSecretStoreProvider: Schema.String,
+  semanticSearch: Schema.NullOr(LocalConfigSemanticSearchSchema),
 });
 
 export type SecretProvider = typeof SecretProviderSchema.Type;
 export type InstanceConfig = typeof InstanceConfigSchema.Type;
+
+export const UpdateInstanceConfigPayloadSchema = Schema.Struct({
+  semanticSearch: Schema.NullOr(LocalConfigSemanticSearchSchema),
+});
+
+export type UpdateInstanceConfigPayload =
+  typeof UpdateInstanceConfigPayloadSchema.Type;
+export type UpdateInstanceConfigResult = InstanceConfig;
 
 // -- Secrets CRUD schemas ---------------------------------------------------
 
@@ -100,7 +113,15 @@ export class LocalApi extends HttpApiGroup.make("local")
   )
   .add(
     HttpApiEndpoint.get("config")`/local/config`
-      .addSuccess(InstanceConfigSchema),
+      .addSuccess(InstanceConfigSchema)
+      .addError(ControlPlaneStorageError),
+  )
+  .add(
+    HttpApiEndpoint.patch("updateConfig")`/local/config`
+      .setPayload(UpdateInstanceConfigPayloadSchema)
+      .addSuccess(InstanceConfigSchema)
+      .addError(ControlPlaneBadRequestError)
+      .addError(ControlPlaneStorageError),
   )
   .add(
     HttpApiEndpoint.get("listSecrets")`/local/secrets`

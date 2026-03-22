@@ -9,6 +9,7 @@ import {
   getLocalInstallation,
 } from "../../runtime/local/operations";
 import { requireRuntimeLocalWorkspace } from "../../runtime/local/runtime-context";
+import { WorkspaceConfigStore } from "../../runtime/local/storage";
 import {
   createDefaultSecretMaterialDeleter,
   createDefaultSecretMaterialStorer,
@@ -25,8 +26,10 @@ import type {
   CreateSecretResult,
   InstanceConfig,
   SecretProvider,
+  UpdateInstanceConfigPayload,
   UpdateSecretResult,
 } from "./api";
+import { validateSemanticSearchConfigForWrite } from "./semantic-search-config";
 
 import { ControlPlaneApi } from "../api";
 import {
@@ -36,8 +39,9 @@ import {
 } from "../errors";
 
 const SECRET_STORE_PROVIDER_ENV = "EXECUTOR_SECRET_STORE_PROVIDER";
-
-const getInstanceConfig = (): Effect.Effect<InstanceConfig> => {
+const getInstanceConfig = (
+  semanticSearch: InstanceConfig["semanticSearch"],
+): Effect.Effect<InstanceConfig> => {
   const explicitDefaultStoreProvider =
     parseSecretStoreProviderId(process.env[SECRET_STORE_PROVIDER_ENV]);
   const providers: SecretProvider[] = [
@@ -71,15 +75,97 @@ const getInstanceConfig = (): Effect.Effect<InstanceConfig> => {
       platform: process.platform,
       secretProviders: providers,
       defaultSecretStoreProvider: resolvedDefaultStoreProvider,
+      semanticSearch,
     })),
   );
 };
 
-const storageError = (message: string) =>
+const storageError = (operation: string, message: string) =>
   new ControlPlaneStorageError({
-    operation: "secrets",
+    operation,
     message,
     details: message,
+  });
+
+const loadInstanceConfig = () =>
+  Effect.gen(function* () {
+    const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace().pipe(
+      Effect.mapError(() =>
+        storageError("local.config", "Failed resolving local workspace."),
+      ),
+    );
+    const workspaceConfigStore = yield* WorkspaceConfigStore;
+    const loadedConfig = yield* workspaceConfigStore.load(
+      runtimeLocalWorkspace.context,
+    ).pipe(
+      Effect.mapError((cause) =>
+        storageError(
+          "local.config",
+          cause instanceof Error
+            ? cause.message
+            : "Failed loading local config.",
+        ),
+      ),
+    );
+
+    return yield* getInstanceConfig(loadedConfig.config?.semanticSearch ?? null);
+  });
+
+const writeInstanceConfig = (
+  payload: UpdateInstanceConfigPayload,
+) =>
+  Effect.gen(function* () {
+    const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace().pipe(
+      Effect.mapError(() =>
+        storageError("local.config.update", "Failed resolving local workspace."),
+      ),
+    );
+    const workspaceConfigStore = yield* WorkspaceConfigStore;
+    const loadedConfig = yield* workspaceConfigStore.load(
+      runtimeLocalWorkspace.context,
+    ).pipe(
+      Effect.mapError((cause) =>
+        storageError(
+          "local.config.update",
+          cause instanceof Error
+            ? cause.message
+            : "Failed loading local config.",
+        ),
+      ),
+    );
+
+    const semanticSearchValidationError = validateSemanticSearchConfigForWrite(
+      payload.semanticSearch,
+    );
+    if (semanticSearchValidationError) {
+      return yield* new ControlPlaneBadRequestError({
+        operation: "local.config.update",
+        message: semanticSearchValidationError,
+        details: semanticSearchValidationError,
+      });
+    }
+
+    const currentProjectConfig = loadedConfig.projectConfig ?? {};
+    const nextProjectConfig = {
+      ...currentProjectConfig,
+      semanticSearch: payload.semanticSearch,
+    };
+
+    yield* workspaceConfigStore.writeProject({
+      context: runtimeLocalWorkspace.context,
+      config: nextProjectConfig,
+    }).pipe(
+      Effect.mapError((cause) =>
+        storageError(
+          "local.config.update",
+          cause instanceof Error
+            ? cause.message
+            : "Failed writing local config.",
+        ),
+      ),
+    );
+
+    return yield* loadInstanceConfig();
   });
 
 export const ControlPlaneLocalLive = HttpApiBuilder.group(
@@ -91,17 +177,24 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
         getLocalInstallation(),
       )
       .handle("config", () =>
-        getInstanceConfig(),
+        loadInstanceConfig(),
+      )
+      .handle("updateConfig", ({ payload }) =>
+        writeInstanceConfig(payload),
       )
         .handle("listSecrets", () =>
           Effect.gen(function* () {
             const store = yield* ControlPlaneStore;
             const sourceStore = yield* RuntimeSourceStoreService;
             const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace().pipe(
-              Effect.mapError(() => storageError("Failed resolving local workspace.")),
+              Effect.mapError(() =>
+                storageError("secrets", "Failed resolving local workspace."),
+              ),
             );
             const rows = yield* store.secretMaterials.listAll().pipe(
-              Effect.mapError(() => storageError("Failed listing secrets.")),
+              Effect.mapError(() =>
+                storageError("secrets", "Failed listing secrets."),
+              ),
             );
             const linkedSourcesMap = yield* sourceStore.listLinkedSecretSourcesInWorkspace(
               runtimeLocalWorkspace.installation.workspaceId,
@@ -109,7 +202,9 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
                 actorAccountId: runtimeLocalWorkspace.installation.accountId,
               },
             ).pipe(
-              Effect.mapError(() => storageError("Failed loading linked sources.")),
+              Effect.mapError(() =>
+                storageError("secrets", "Failed loading linked sources."),
+              ),
             );
             return rows.map((row) => ({
               ...row,
@@ -152,16 +247,22 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
             value,
           }).pipe(
             Effect.mapError((cause) => storageError(
+              "secrets.create",
               cause instanceof Error ? cause.message : "Failed creating secret.",
             )),
           );
           const secretId = SecretMaterialIdSchema.make(ref.handle);
           const created = yield* store.secretMaterials.getById(secretId).pipe(
-            Effect.mapError(() => storageError("Failed loading created secret.")),
+            Effect.mapError(() =>
+              storageError("secrets.create", "Failed loading created secret."),
+            ),
           );
 
           if (Option.isNone(created)) {
-            return yield* storageError(`Created secret not found: ${ref.handle}`);
+            return yield* storageError(
+              "secrets.create",
+              `Created secret not found: ${ref.handle}`,
+            );
           }
 
           return {
@@ -180,7 +281,9 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
           const store = yield* ControlPlaneStore;
 
           const existing = yield* store.secretMaterials.getById(secretId).pipe(
-            Effect.mapError(() => storageError("Failed looking up secret.")),
+            Effect.mapError(() =>
+              storageError("secrets.update", "Failed looking up secret."),
+            ),
           );
 
           if (Option.isNone(existing)) {
@@ -205,7 +308,9 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
             },
             ...update,
           }).pipe(
-            Effect.mapError(() => storageError("Failed updating secret.")),
+            Effect.mapError(() =>
+              storageError("secrets.update", "Failed updating secret."),
+            ),
           );
 
           return {
@@ -224,7 +329,9 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
           const store = yield* ControlPlaneStore;
 
           const existing = yield* store.secretMaterials.getById(secretId).pipe(
-            Effect.mapError(() => storageError("Failed looking up secret.")),
+            Effect.mapError(() =>
+              storageError("secrets.delete", "Failed looking up secret."),
+            ),
           );
 
           if (Option.isNone(existing)) {
@@ -242,11 +349,16 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
             providerId: existing.value.providerId,
             handle: existing.value.id,
           }).pipe(
-            Effect.mapError(() => storageError("Failed removing secret.")),
+            Effect.mapError(() =>
+              storageError("secrets.delete", "Failed removing secret."),
+            ),
           );
 
           if (!removed) {
-            return yield* storageError(`Failed removing secret: ${path.secretId}`);
+            return yield* storageError(
+              "secrets.delete",
+              `Failed removing secret: ${path.secretId}`,
+            );
           }
 
           return { removed: true };
