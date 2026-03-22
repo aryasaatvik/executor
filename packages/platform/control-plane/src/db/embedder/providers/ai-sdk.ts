@@ -16,7 +16,7 @@ const DEFAULT_MODELS: Record<string, string> = {
 }
 
 const DEFAULT_DIMENSIONS: Record<string, number> = {
-  google: 768,
+  google: 3072,
   openai: 1536,
   cohere: 1024,
 }
@@ -189,7 +189,7 @@ function buildModelSettings(
  * Create an embedder using Vercel AI SDK.
  * Supports Google, OpenAI, Cohere, Mistral, Anthropic, and other AI SDK providers.
  *
- * Default for Google: gemini-embedding-2-preview, 768 dims.
+ * Default for Google: gemini-embedding-2-preview, 3072 dims.
  */
 export async function createAiSdkEmbedder(
   config: EmbedderConfig,

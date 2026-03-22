@@ -64,7 +64,7 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     const embedder = {
       provider: "google",
       model: "gemini-embedding-2-preview",
-      dimensions: 768,
+      dimensions: 3072,
       embed,
       embedBatch: async () => [[1, 2, 3]],
     };

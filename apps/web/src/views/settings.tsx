@@ -35,7 +35,7 @@ const defaultModelByProvider: Record<ConfiguredSemanticProvider, string> = {
 };
 
 const defaultDimensionsByProvider: Partial<Record<ConfiguredSemanticProvider, number>> = {
-  google: 768,
+  google: 3072,
 };
 
 const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
