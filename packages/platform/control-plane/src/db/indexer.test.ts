@@ -50,6 +50,7 @@ const baseTool: ToolToIndex = {
   sourceId: "source-github",
   sourceKey: "github",
   namespace: "github.issues",
+  searchText: "github github.issues GitHub Create Issue streamable-http oauth",
   description: "Create a GitHub issue",
 };
 
@@ -134,6 +135,20 @@ const makeSql = {
 };
 
 describe("indexSource", () => {
+  it("preserves the richer runtime search document in SQLite FTS text", () => {
+    const tool: ToolToIndex = {
+      ...baseTool,
+      inputSchemaJson: {
+        properties: {
+          owner: { type: "string" },
+        },
+      },
+    };
+
+    expect(buildSearchText(tool)).toContain(`search: ${tool.searchText}`);
+    expect(buildSearchText(tool)).toContain("params: owner (string)");
+  });
+
   it.effect("does not rewrite unchanged active rows", () =>
     Effect.gen(function* () {
       const unchangedHash = computeContentHash(baseTool);

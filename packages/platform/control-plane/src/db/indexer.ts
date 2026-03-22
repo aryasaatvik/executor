@@ -20,6 +20,7 @@ export interface ToolToIndex {
   sourceId: string
   sourceKey: string
   namespace: string
+  searchText?: string
   title?: string
   description?: string
   inputSchemaJson?: unknown
@@ -66,6 +67,10 @@ export const buildSearchText = (tool: ToolToIndex): string => {
   lines.push(`path: ${tool.path}`)
   lines.push(`source: ${tool.sourceKey}`)
   lines.push(`namespace: ${tool.namespace}`)
+
+  if (tool.searchText) {
+    lines.push(`search: ${tool.searchText}`)
+  }
 
   if (tool.title) {
     lines.push(`title: ${tool.title}`)

@@ -69,10 +69,51 @@ export const removeSourceEmbeddings = (sourceKey: string) =>
  * Build the text to embed for a tool.
  * Simple format -- one embedding per tool, no chunking needed.
  */
-function buildEmbeddingText(tool: ToolToIndex): string {
+export function buildEmbeddingText(tool: ToolToIndex): string {
   const parts: string[] = []
-  if (tool.title) parts.push(tool.title)
-  if (tool.description) parts.push(tool.description)
-  parts.push(tool.path)
+  if (tool.searchText) {
+    parts.push(tool.searchText)
+  } else {
+    if (tool.title) parts.push(tool.title)
+    if (tool.description) parts.push(tool.description)
+    parts.push(tool.path)
+  }
+  const params = extractParams(tool.inputSchemaJson)
+  if (params.length > 0) {
+    parts.push(`params: ${params.join(" ")}`)
+  }
   return parts.join("\n")
+}
+
+const extractParams = (schema: unknown): string[] => {
+  if (
+    schema === null ||
+    schema === undefined ||
+    typeof schema !== "object"
+  ) {
+    return []
+  }
+
+  const obj = schema as Record<string, unknown>
+  const properties = obj.properties
+  if (
+    properties === null ||
+    properties === undefined ||
+    typeof properties !== "object"
+  ) {
+    return []
+  }
+
+  const props = properties as Record<string, unknown>
+  return Object.entries(props).map(([name, def]) => {
+    const typeName =
+      def !== null &&
+      def !== undefined &&
+      typeof def === "object" &&
+      "type" in def &&
+      typeof (def as Record<string, unknown>).type === "string"
+        ? ` (${(def as Record<string, unknown>).type as string})`
+        : ""
+    return `${name}${typeName}`
+  })
 }

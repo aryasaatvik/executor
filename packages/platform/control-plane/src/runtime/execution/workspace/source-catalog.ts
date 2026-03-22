@@ -58,6 +58,7 @@ export const toToolToIndex = (
   sourceId: tool.source.id,
   sourceKey: tool.descriptor.sourceKey,
   namespace: tool.searchNamespace,
+  searchText: tool.searchText,
   title: tool.capability.surface.title ?? undefined,
   description:
     tool.capability.surface.summary
