@@ -332,7 +332,7 @@ describe("sqlite catalog searchTools", () => {
       let capturedParams: ReadonlyArray<unknown> | null = null
       const catalog = yield* makeSearchCatalog({
         rows: [
-          { path: "github.issues.create", raw_score: 0.25 },
+          { path: "github.issues.create", raw_score: -0.25 },
         ],
         onUnsafe: (_query, params) => {
           capturedParams = params
@@ -400,8 +400,8 @@ describe("sqlite catalog searchTools", () => {
 
       const catalog = yield* makeSearchCatalog({
         rows: [
-          { path: "github.issues.create", raw_score: 0.000001 },
-          { path: "github.issues.update", raw_score: 0.5 },
+          { path: "github.issues.create", raw_score: -10 },
+          { path: "github.issues.update", raw_score: -0.5 },
         ],
         embedder,
       })
@@ -413,7 +413,29 @@ describe("sqlite catalog searchTools", () => {
 
       expect(results.map((result) => result.path)).toEqual(["github.issues.create", "github.issues.update"])
       expect(searchVecMock).not.toHaveBeenCalled()
-      expect(results[0]!.score).toBeGreaterThan(0.99)
+      expect(results[0]!.score).toBeGreaterThan(results[1]!.score)
+      expect(results[0]!.score).toBeGreaterThan(0.85)
+    }),
+  )
+
+  it.effect("uses direct bm25 ordering instead of abs() inversion", () =>
+    Effect.gen(function* () {
+      let capturedQuery: string | null = null
+      const catalog = yield* makeSearchCatalog({
+        rows: [],
+        onUnsafe: (query) => {
+          capturedQuery = query
+        },
+      })
+
+      yield* catalog.searchTools({
+        query: "github issues create",
+        limit: 5,
+      })
+
+      expect(capturedQuery).toContain("bm25(catalog_tool_fts, 10.0, 8.0, 2.0, 1.0) as raw_score")
+      expect(capturedQuery).toContain("ORDER BY raw_score ASC")
+      expect(capturedQuery).not.toContain("abs(bm25")
     }),
   )
 })

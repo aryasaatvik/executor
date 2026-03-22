@@ -95,6 +95,11 @@ const descriptorColumns = {
   provider_kind: catalog_tool.provider_kind,
 } as const
 
+const lexicalScoreFromBm25 = (bm25Score: number): number => {
+  const magnitude = Math.max(0, -bm25Score)
+  return magnitude / (1 + magnitude)
+}
+
 // ---------------------------------------------------------------------------
 // SQLite-backed ToolCatalog
 // ---------------------------------------------------------------------------
@@ -172,7 +177,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
                 raw_score: number
               }>(
                 `SELECT t.path,
-                        abs(bm25(catalog_tool_fts, 10.0, 8.0, 2.0, 1.0)) as raw_score
+                        bm25(catalog_tool_fts, 10.0, 8.0, 2.0, 1.0) as raw_score
                  FROM catalog_tool_fts
                  JOIN catalog_tool t ON t.rowid = catalog_tool_fts.rowid
                  WHERE catalog_tool_fts MATCH ?
@@ -187,7 +192,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
 
           const ftsResults: readonly SearchHit[] = rows.map((row) => ({
             path: row.path as ToolPath,
-            score: 1 / (1 + row.raw_score),
+            score: lexicalScoreFromBm25(row.raw_score),
           }))
 
           // -----------------------------------------------------------------

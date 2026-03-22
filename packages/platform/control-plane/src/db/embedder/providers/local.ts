@@ -6,6 +6,24 @@ const DEFAULT_MODEL_URI =
 const DEFAULT_DIMENSIONS = 1024
 const MODEL_CACHE_DIR = "~/.executor/models"
 
+const resolveConfiguredModel = (model: string | undefined): {
+  modelName: string
+  modelUri: string
+} => {
+  const configuredModel = model?.trim()
+  if (!configuredModel || configuredModel === DEFAULT_MODEL) {
+    return {
+      modelName: DEFAULT_MODEL,
+      modelUri: DEFAULT_MODEL_URI,
+    }
+  }
+
+  return {
+    modelName: configuredModel,
+    modelUri: configuredModel,
+  }
+}
+
 /**
  * Format text for embedding based on the hint.
  * Qwen3-Embedding uses an instruct prefix for queries, raw text for documents.
@@ -29,10 +47,7 @@ function formatText(text: string, hint?: EmbedHint): string {
 export async function createLocalEmbedder(
   config: EmbedderConfig,
 ): Promise<Embedder> {
-  const modelName = config.model ?? DEFAULT_MODEL
-  const modelUri = config.model
-    ? `hf:Qwen/Qwen3-Embedding-0.6B-GGUF/${config.model}.gguf`
-    : DEFAULT_MODEL_URI
+  const { modelName, modelUri } = resolveConfiguredModel(config.model)
 
   // Resolve cache directory (expand ~)
   const cacheDir = MODEL_CACHE_DIR.replace(/^~/, process.env.HOME ?? "")
