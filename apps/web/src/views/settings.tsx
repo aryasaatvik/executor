@@ -16,6 +16,13 @@ type SemanticProvider =
 
 type ConfiguredSemanticProvider = Exclude<SemanticProvider, "">;
 
+type SemanticFormState = {
+  provider: SemanticProvider;
+  model: string;
+  dimensions: string;
+  apiKey: string;
+};
+
 const semanticProviders: ReadonlyArray<ConfiguredSemanticProvider> = [
   "local",
   "google",
@@ -34,8 +41,10 @@ const defaultModelByProvider: Record<ConfiguredSemanticProvider, string> = {
   openai: "text-embedding-3-small",
 };
 
-const defaultDimensionsByProvider: Partial<Record<ConfiguredSemanticProvider, number>> = {
+const defaultDimensionsByProvider: Record<ConfiguredSemanticProvider, number> = {
+  local: 1024,
   google: 3072,
+  openai: 1536,
 };
 
 const apiKeyPlaceholderByProvider: Partial<Record<ConfiguredSemanticProvider, string>> = {
@@ -51,14 +60,72 @@ const isConfiguredProvider = (
 const defaultModelForProvider = (provider: ConfiguredSemanticProvider): string =>
   defaultModelByProvider[provider];
 
-const readProvider = (
-  semanticSearch: InstanceConfig["semanticSearch"],
-): SemanticProvider =>
-  isConfiguredProvider(semanticSearch?.provider)
-    ? semanticSearch.provider
-    : "";
+const defaultDimensionsForProvider = (
+  provider: ConfiguredSemanticProvider,
+): number => defaultDimensionsByProvider[provider];
 
-const statusToneClass = (provider: SemanticProvider): string => {
+const buildSemanticFormState = (
+  semanticSearch: InstanceConfig["semanticSearch"],
+): SemanticFormState => {
+  if (!semanticSearch || !isConfiguredProvider(semanticSearch.provider)) {
+    return {
+      provider: "",
+      model: "",
+      dimensions: "",
+      apiKey: "",
+    };
+  }
+
+  return {
+    provider: semanticSearch.provider,
+    model: semanticSearch.model ?? defaultModelForProvider(semanticSearch.provider),
+    dimensions: String(
+      semanticSearch.dimensions ?? defaultDimensionsForProvider(semanticSearch.provider),
+    ),
+    apiKey:
+      semanticSearch.provider === "local"
+        ? ""
+        : semanticSearch.apiKey ?? "",
+  };
+};
+
+const buildCanonicalSemanticSearch = (
+  form: SemanticFormState,
+): InstanceConfig["semanticSearch"] => {
+  if (form.provider === "") {
+    return null;
+  }
+
+  const provider = form.provider;
+  const normalizedModel = form.model.trim() || defaultModelForProvider(provider);
+  const parsedDimensions = Number.parseInt(form.dimensions.trim(), 10);
+  const normalizedDimensions = Number.isFinite(parsedDimensions) && parsedDimensions > 0
+    ? parsedDimensions
+    : defaultDimensionsForProvider(provider);
+  const trimmedApiKey = form.apiKey.trim();
+
+  return {
+    provider,
+    model: normalizedModel,
+    dimensions: normalizedDimensions,
+    ...(provider !== "local" && trimmedApiKey.length > 0
+      ? { apiKey: trimmedApiKey }
+      : {}),
+  };
+};
+
+const semanticSearchFingerprint = (
+  semanticSearch: InstanceConfig["semanticSearch"],
+): string => JSON.stringify(semanticSearch ?? null);
+
+const statusToneClass = (
+  provider: SemanticProvider,
+  unsupportedConfig: InstanceConfig["semanticSearch"],
+): string => {
+  if (unsupportedConfig) {
+    return "bg-destructive/80";
+  }
+
   switch (provider) {
     case "local":
       return "bg-emerald-500/80";
@@ -72,37 +139,19 @@ const statusToneClass = (provider: SemanticProvider): string => {
 };
 
 const statusText = (
-  semanticSearch: InstanceConfig["semanticSearch"],
-  provider: SemanticProvider,
+  form: SemanticFormState,
+  unsupportedConfig: InstanceConfig["semanticSearch"],
 ): string => {
-  if (provider === "") {
+  if (unsupportedConfig) {
+    return `Unsupported semantic-search config (${unsupportedConfig.provider})`;
+  }
+
+  if (form.provider === "") {
     return "Full-text search only";
   }
 
-  const model =
-    semanticSearch?.provider === provider
-      ? semanticSearch.model ?? defaultModelForProvider(provider)
-      : defaultModelForProvider(provider);
-
-  switch (provider) {
-    case "local":
-      return `Configured: ${providerLabel.local} (${model})`;
-    case "google":
-      return `Configured: ${providerLabel.google} (${model})`;
-    case "openai":
-      return `Configured: ${providerLabel.openai} (${model})`;
-  }
+  return `Configured: ${providerLabel[form.provider]} (${form.model.trim() || defaultModelForProvider(form.provider)})`;
 };
-
-const readApiKey = (
-  semanticSearch: InstanceConfig["semanticSearch"],
-  provider: SemanticProvider = readProvider(semanticSearch),
-): string =>
-  provider !== "" && provider !== "local"
-    ? semanticSearch?.provider === provider
-      ? semanticSearch.apiKey ?? ""
-      : ""
-    : "";
 
 export function SettingsPage() {
   const instanceConfig = useInstanceConfig();
@@ -131,24 +180,40 @@ function SemanticSearchSettingsCard(props: {
   config: InstanceConfig;
 }) {
   const updateConfig = useUpdateInstanceConfig();
-  const initialProvider = readProvider(props.config.semanticSearch);
-  const [provider, setProvider] = useState<SemanticProvider>(initialProvider);
-  const [apiKey, setApiKey] = useState(readApiKey(props.config.semanticSearch));
+  const unsupportedConfig = useMemo(
+    () =>
+      props.config.semanticSearch && !isConfiguredProvider(props.config.semanticSearch.provider)
+        ? props.config.semanticSearch
+        : null,
+    [props.config.semanticSearch],
+  );
+  const [form, setForm] = useState<SemanticFormState>(() =>
+    buildSemanticFormState(props.config.semanticSearch),
+  );
+  const [hasEdited, setHasEdited] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    setProvider(readProvider(props.config.semanticSearch));
-    setApiKey(readApiKey(props.config.semanticSearch));
+    setForm(buildSemanticFormState(props.config.semanticSearch));
+    setHasEdited(false);
+    setSaveMessage(null);
+    setSaveError(null);
   }, [props.config.semanticSearch]);
 
-  const cloudProvider = provider !== "" && provider !== "local";
-  const trimmedApiKey = apiKey.trim();
+  const cloudProvider = form.provider !== "" && form.provider !== "local";
+  const nextSemanticSearch = useMemo(
+    () => buildCanonicalSemanticSearch(form),
+    [form],
+  );
   const dirty = useMemo(() => {
-    const currentProvider = readProvider(props.config.semanticSearch);
-    const currentApiKey = props.config.semanticSearch?.apiKey ?? "";
-    return provider !== currentProvider || trimmedApiKey !== currentApiKey.trim();
-  }, [apiKey, props.config.semanticSearch, provider, trimmedApiKey]);
+    if (unsupportedConfig && !hasEdited) {
+      return false;
+    }
+
+    return semanticSearchFingerprint(nextSemanticSearch)
+      !== semanticSearchFingerprint(props.config.semanticSearch);
+  }, [hasEdited, nextSemanticSearch, props.config.semanticSearch, unsupportedConfig]);
 
   const handleSave = async () => {
     setSaveMessage(null);
@@ -156,25 +221,7 @@ function SemanticSearchSettingsCard(props: {
 
     try {
       await updateConfig.mutateAsync({
-        semanticSearch:
-          provider === ""
-            ? null
-            : {
-                provider,
-                model:
-                  props.config.semanticSearch?.provider === provider
-                    ? props.config.semanticSearch.model
-                    : defaultModelForProvider(provider),
-                ...(props.config.semanticSearch?.provider === provider
-                  && props.config.semanticSearch.dimensions !== undefined
-                  ? { dimensions: props.config.semanticSearch.dimensions }
-                  : defaultDimensionsByProvider[provider] !== undefined
-                    ? { dimensions: defaultDimensionsByProvider[provider] }
-                  : {}),
-                ...(cloudProvider && trimmedApiKey.length > 0
-                  ? { apiKey: trimmedApiKey }
-                  : {}),
-              },
+        semanticSearch: nextSemanticSearch,
       });
       setSaveMessage("Settings saved.");
     } catch (cause) {
@@ -184,11 +231,33 @@ function SemanticSearchSettingsCard(props: {
     }
   };
 
-  const handleProviderChange = (nextProvider: SemanticProvider) => {
-    setProvider(nextProvider);
+  const updateForm = (next: Partial<SemanticFormState>) => {
+    setHasEdited(true);
     setSaveMessage(null);
     setSaveError(null);
-    setApiKey(readApiKey(props.config.semanticSearch, nextProvider));
+    setForm((current) => ({
+      ...current,
+      ...next,
+    }));
+  };
+
+  const handleProviderChange = (nextProvider: SemanticProvider) => {
+    if (nextProvider === "") {
+      updateForm({
+        provider: "",
+        model: "",
+        dimensions: "",
+        apiKey: "",
+      });
+      return;
+    }
+
+    updateForm({
+      provider: nextProvider,
+      model: defaultModelForProvider(nextProvider),
+      dimensions: String(defaultDimensionsForProvider(nextProvider)),
+      apiKey: "",
+    });
   };
 
   return (
@@ -196,18 +265,29 @@ function SemanticSearchSettingsCard(props: {
       <div>
         <h2 className="text-sm font-semibold text-foreground">Semantic Search</h2>
         <p className="mt-1 text-[13px] text-muted-foreground">
-          Configure embedding providers for semantic tool discovery. When
-          enabled, search understands intent &mdash; &ldquo;create
-          ticket&rdquo; finds tools like{" "}
-          <code className="rounded bg-muted px-1 py-0.5 text-[12px] font-mono text-foreground/80">
-            github.issues.create
-          </code>{" "}
-          even without exact keyword matches.
+          Configure embedding providers for semantic tool discovery. The UI now
+          writes a canonical semantic-search block, so changing providers will
+          replace stale provider-specific fields instead of preserving them.
         </p>
       </div>
 
       <div className="overflow-hidden rounded-xl border border-border bg-card/80 divide-y divide-border">
         <div className="space-y-4 p-5">
+          {unsupportedConfig && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/8 px-4 py-3 text-[13px] text-amber-800 dark:text-amber-200">
+              <div className="font-medium">
+                Unsupported semantic-search config loaded from the workspace.
+              </div>
+              <p className="mt-1 text-[12px] text-amber-700/90 dark:text-amber-200/80">
+                This UI cannot represent provider <code className="rounded bg-black/5 px-1 py-0.5 dark:bg-white/10">{unsupportedConfig.provider}</code> directly.
+                Choose a supported provider below or disable semantic search to replace it.
+              </p>
+              <pre className="mt-2 overflow-x-auto rounded-md bg-black/5 p-3 text-[11px] text-amber-900/90 dark:bg-white/10 dark:text-amber-100/90">
+                {JSON.stringify(unsupportedConfig, null, 2)}
+              </pre>
+            </div>
+          )}
+
           {saveError && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-2.5 text-[13px] text-destructive">
               {saveError}
@@ -224,21 +304,55 @@ function SemanticSearchSettingsCard(props: {
               Provider
             </span>
             <select
-              value={provider}
+              value={form.provider}
               onChange={(event) =>
                 handleProviderChange(event.target.value as SemanticProvider)}
               className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25"
               disabled={updateConfig.status === "pending"}
             >
               <option value="">Disabled (full-text search only)</option>
-              <option value="local">Local (Qwen3-Embedding-0.6B)</option>
-              <option value="google">Google (gemini-embedding-2-preview)</option>
-              <option value="openai">OpenAI (text-embedding-3-small)</option>
+              <option value="local">Local</option>
+              <option value="google">Google</option>
+              <option value="openai">OpenAI</option>
             </select>
-            <p className="text-[11px] text-muted-foreground/60">
-              Local runs offline after a ~600 MB model download. Cloud
-              providers require an API key.
-            </p>
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Model
+            </span>
+            <input
+              type="text"
+              value={form.model}
+              onChange={(event) => updateForm({ model: event.target.value })}
+              placeholder={
+                form.provider === ""
+                  ? "Select a provider first"
+                  : defaultModelForProvider(form.provider)
+              }
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={form.provider === "" || updateConfig.status === "pending"}
+            />
+          </label>
+
+          <label className="block space-y-1">
+            <span className="text-[11px] font-medium text-muted-foreground">
+              Dimensions
+            </span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={form.dimensions}
+              onChange={(event) => updateForm({ dimensions: event.target.value })}
+              placeholder={
+                form.provider === ""
+                  ? "Select a provider first"
+                  : String(defaultDimensionsForProvider(form.provider))
+              }
+              className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={form.provider === "" || updateConfig.status === "pending"}
+            />
           </label>
 
           <label className="block space-y-1">
@@ -247,18 +361,18 @@ function SemanticSearchSettingsCard(props: {
             </span>
             <input
               type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
+              value={form.apiKey}
+              onChange={(event) => updateForm({ apiKey: event.target.value })}
               placeholder={
                 cloudProvider
-                  ? apiKeyPlaceholderByProvider[provider] ?? "API key"
+                  ? apiKeyPlaceholderByProvider[form.provider as ConfiguredSemanticProvider] ?? "API key"
                   : "Not required for local provider"
               }
               className="h-9 w-full rounded-lg border border-input bg-background px-3 font-mono text-[12px] text-foreground outline-none transition-colors placeholder:text-muted-foreground/35 focus:border-ring focus:ring-1 focus:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={!cloudProvider || updateConfig.status === "pending"}
             />
             <p className="text-[11px] text-muted-foreground/60">
-              Optional. Leave blank to rely on environment variables such as
+              Leave blank to rely on environment variables such as
               GEMINI_API_KEY or OPENAI_API_KEY.
             </p>
           </label>
@@ -278,9 +392,11 @@ function SemanticSearchSettingsCard(props: {
         </div>
 
         <div className="flex items-center gap-2 px-5 py-3.5">
-          <span className={`size-2 shrink-0 rounded-full ${statusToneClass(provider)}`} />
+          <span
+            className={`size-2 shrink-0 rounded-full ${statusToneClass(form.provider, unsupportedConfig)}`}
+          />
           <span className="text-[12px] text-muted-foreground/60">
-            {statusText(props.config.semanticSearch, provider)}
+            {statusText(form, unsupportedConfig)}
           </span>
         </div>
       </div>
