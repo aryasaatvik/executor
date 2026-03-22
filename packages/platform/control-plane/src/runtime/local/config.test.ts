@@ -158,4 +158,20 @@ describe("local-config", () => {
     expect(merged?.semanticSearch?.provider).toBe("openai");
     expect(merged?.semanticSearch?.model).toBe("text-embedding-3-small");
   });
+
+  it("lets project config explicitly disable semantic search", () => {
+    const merged = mergeLocalExecutorConfigs(
+      {
+        semanticSearch: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
+      },
+      {
+        semanticSearch: null,
+      },
+    );
+
+    expect(merged?.semanticSearch).toBeNull();
+  });
 });

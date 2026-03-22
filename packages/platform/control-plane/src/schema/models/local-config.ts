@@ -149,7 +149,7 @@ export const LocalConfigSemanticSearchSchema = Schema.Struct({
 export const LocalExecutorConfigSchema = Schema.Struct({
   runtime: Schema.optional(LocalExecutorRuntimeSchema),
   workspace: Schema.optional(LocalConfigWorkspaceSchema),
-  semanticSearch: Schema.optional(LocalConfigSemanticSearchSchema),
+  semanticSearch: Schema.optional(Schema.NullOr(LocalConfigSemanticSearchSchema)),
   sources: Schema.optional(
     Schema.Record({
       key: Schema.String,

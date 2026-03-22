@@ -234,6 +234,14 @@ const mergeSecretProviderMaps = (
   };
 };
 
+const hasOwn = <T extends object, TKey extends PropertyKey>(
+  value: T | null | undefined,
+  key: TKey,
+): value is T & Record<TKey, unknown> =>
+  value !== null
+  && value !== undefined
+  && Object.prototype.hasOwnProperty.call(value, key);
+
 export const mergeLocalExecutorConfigs = (
   base: LocalExecutorConfig | null,
   extra: LocalExecutorConfig | null,
@@ -248,7 +256,11 @@ export const mergeLocalExecutorConfigs = (
       ...base?.workspace,
       ...extra?.workspace,
     },
-    semanticSearch: extra?.semanticSearch ?? base?.semanticSearch,
+    ...(hasOwn(extra, "semanticSearch")
+      ? { semanticSearch: extra.semanticSearch }
+      : hasOwn(base, "semanticSearch")
+        ? { semanticSearch: base.semanticSearch }
+        : {}),
     sources: mergeSourceMaps(base?.sources, extra?.sources),
     policies: mergePolicyMaps(base?.policies, extra?.policies),
     secrets: {

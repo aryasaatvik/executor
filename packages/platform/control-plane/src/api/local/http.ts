@@ -135,19 +135,10 @@ const writeInstanceConfig = (
     );
 
     const currentProjectConfig = loadedConfig.projectConfig ?? {};
-    const nextProjectConfig =
-      payload.semanticSearch === null
-        ? (() => {
-            const {
-              semanticSearch: _semanticSearch,
-              ...rest
-            } = currentProjectConfig;
-            return rest;
-          })()
-        : {
-            ...currentProjectConfig,
-            semanticSearch: payload.semanticSearch,
-          };
+    const nextProjectConfig = {
+      ...currentProjectConfig,
+      semanticSearch: payload.semanticSearch,
+    };
 
     yield* workspaceConfigStore.writeProject({
       context: runtimeLocalWorkspace.context,

@@ -54,6 +54,16 @@ const statusText = (
   }
 };
 
+const readApiKey = (
+  semanticSearch: InstanceConfig["semanticSearch"],
+  provider: SemanticProvider = readProvider(semanticSearch),
+): string =>
+  provider === "google" || provider === "openai"
+    ? semanticSearch?.provider === provider
+      ? semanticSearch.apiKey ?? ""
+      : ""
+    : "";
+
 export function SettingsPage() {
   const instanceConfig = useInstanceConfig();
 
@@ -83,13 +93,13 @@ function SemanticSearchSettingsCard(props: {
   const updateConfig = useUpdateInstanceConfig();
   const initialProvider = readProvider(props.config.semanticSearch);
   const [provider, setProvider] = useState<SemanticProvider>(initialProvider);
-  const [apiKey, setApiKey] = useState(props.config.semanticSearch?.apiKey ?? "");
+  const [apiKey, setApiKey] = useState(readApiKey(props.config.semanticSearch));
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setProvider(readProvider(props.config.semanticSearch));
-    setApiKey(props.config.semanticSearch?.apiKey ?? "");
+    setApiKey(readApiKey(props.config.semanticSearch));
   }, [props.config.semanticSearch]);
 
   const cloudProvider = provider === "google" || provider === "openai";
@@ -132,6 +142,13 @@ function SemanticSearchSettingsCard(props: {
     }
   };
 
+  const handleProviderChange = (nextProvider: SemanticProvider) => {
+    setProvider(nextProvider);
+    setSaveMessage(null);
+    setSaveError(null);
+    setApiKey(readApiKey(props.config.semanticSearch, nextProvider));
+  };
+
   return (
     <section className="flex flex-col gap-4">
       <div>
@@ -166,7 +183,8 @@ function SemanticSearchSettingsCard(props: {
             </span>
             <select
               value={provider}
-              onChange={(event) => setProvider(event.target.value as SemanticProvider)}
+              onChange={(event) =>
+                handleProviderChange(event.target.value as SemanticProvider)}
               className="h-9 w-full rounded-lg border border-input bg-background px-3 text-[13px] text-foreground outline-none transition-colors focus:border-ring focus:ring-1 focus:ring-ring/25"
               disabled={updateConfig.status === "pending"}
             >
