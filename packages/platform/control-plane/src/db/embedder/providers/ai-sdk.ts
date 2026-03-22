@@ -21,6 +21,23 @@ const DEFAULT_DIMENSIONS: Record<string, number> = {
   cohere: 1024,
 }
 
+const resolveDefaultDimensions = (
+  providerName: string,
+  model: string,
+): number | undefined => {
+  if (providerName === "openai") {
+    if (model === "text-embedding-3-large") {
+      return 3072
+    }
+    if (model === "text-embedding-3-small") {
+      return 1536
+    }
+    return undefined
+  }
+
+  return DEFAULT_DIMENSIONS[providerName]
+}
+
 const ENV_KEYS: Record<string, string[]> = {
   google: ["GOOGLE_GENERATIVE_AI_API_KEY", "GEMINI_API_KEY"],
   openai: ["OPENAI_API_KEY"],
@@ -198,7 +215,7 @@ export async function createAiSdkEmbedder(
 
   const providerName = config.provider
   const model = config.model ?? DEFAULT_MODELS[providerName] ?? providerName
-  const dimensions = config.dimensions ?? DEFAULT_DIMENSIONS[providerName]
+  const dimensions = config.dimensions ?? resolveDefaultDimensions(providerName, model)
 
   // Resolve API key
   const apiKey = resolveApiKey(config)

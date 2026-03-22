@@ -52,6 +52,21 @@ describe("createAiSdkEmbedder", () => {
     expect(embedding).toEqual([0.1, 0.2, 0.3]);
   });
 
+  it("preserves the large OpenAI embedding dimensions by default", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    const { createAiSdkEmbedder } = await import("./ai-sdk");
+
+    await createAiSdkEmbedder({
+      provider: "openai",
+      model: "text-embedding-3-large",
+    });
+
+    expect(textEmbeddingModelMock).toHaveBeenCalledWith(
+      "text-embedding-3-large",
+      { dimensions: 3072 },
+    );
+  });
+
   it("fails fast for unknown providers", async () => {
     const { createAiSdkEmbedder } = await import("./ai-sdk");
 
