@@ -147,12 +147,36 @@ const readBindingTransport = (
     : undefined;
 };
 
-type DirectRefreshAuth = Extract<Source["auth"], { kind: "none" }>;
+const refreshableHttpAuth = (
+  auth: Source["auth"],
+): Extract<ConnectSourcePayload, { kind: "openapi" }>["auth"] | undefined => {
+  switch (auth.kind) {
+    case "none":
+      return { kind: "none" };
+    case "bearer":
+      return {
+        kind: "bearer",
+        headerName: auth.headerName,
+        prefix: auth.prefix,
+        tokenRef: auth.token,
+      };
+    case "oauth2":
+      return {
+        kind: "oauth2",
+        headerName: auth.headerName,
+        prefix: auth.prefix,
+        accessTokenRef: auth.accessToken,
+        refreshTokenRef: auth.refreshToken,
+      };
+    default:
+      return undefined;
+  }
+};
 
 const supportsDirectRefreshAuth = (
   auth: Source["auth"],
-): auth is DirectRefreshAuth =>
-  auth.kind === "none";
+): boolean =>
+  refreshableHttpAuth(auth) !== undefined;
 
 const refreshPayloadFromSource = (
   source: Source,
@@ -194,8 +218,8 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: source.importAuth,
-        auth: source.auth,
+        importAuth: refreshableHttpAuth(source.importAuth),
+        auth: refreshableHttpAuth(source.auth),
       };
     }
     case "graphql":
@@ -212,8 +236,8 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: source.importAuth,
-        auth: source.auth,
+        importAuth: refreshableHttpAuth(source.importAuth),
+        auth: refreshableHttpAuth(source.auth),
       };
     case "google_discovery": {
       const service = readBindingString(source, "service");
@@ -239,8 +263,8 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: source.importAuth,
-        auth: source.auth,
+        importAuth: refreshableHttpAuth(source.importAuth),
+        auth: refreshableHttpAuth(source.auth),
       };
     }
     default:

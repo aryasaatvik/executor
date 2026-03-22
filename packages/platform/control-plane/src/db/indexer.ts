@@ -335,6 +335,51 @@ export const deactivateSourceTools = (sourceId: string) =>
       .where(eq(catalog_tool.source_id, sourceId))
   })
 
+/**
+ * Sync source metadata and lifecycle flags without treating missing tools as removal.
+ * Used for sources that still exist but are currently disabled or disconnected.
+ */
+export const syncSourceLifecycle = (input: {
+  sourceId: string
+  source: SourceToIndex
+}) =>
+  Effect.gen(function* () {
+    const db = yield* SqliteDrizzle
+
+    yield* db.insert(source).values({
+      id: input.source.sourceId,
+      workspace_id: input.source.workspaceId,
+      name: input.source.name,
+      kind: input.source.kind,
+      endpoint: input.source.endpoint,
+      status: input.source.status,
+      enabled: input.source.enabled,
+      namespace: input.source.namespace,
+      time_created: input.source.createdAt,
+      time_updated: input.source.updatedAt,
+    }).onConflictDoUpdate({
+      target: source.id,
+      set: {
+        workspace_id: input.source.workspaceId,
+        name: input.source.name,
+        kind: input.source.kind,
+        endpoint: input.source.endpoint,
+        status: input.source.status,
+        enabled: input.source.enabled,
+        namespace: input.source.namespace,
+        time_updated: input.source.updatedAt,
+      },
+    })
+
+    yield* db
+      .update(catalog_tool)
+      .set({
+        source_enabled: input.source.enabled,
+        source_status: input.source.status,
+      })
+      .where(eq(catalog_tool.source_id, input.sourceId))
+  })
+
 // ---------------------------------------------------------------------------
 // Remove source tools
 // ---------------------------------------------------------------------------

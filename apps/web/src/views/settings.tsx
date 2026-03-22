@@ -80,9 +80,10 @@ const buildSemanticFormState = (
   return {
     provider: semanticSearch.provider,
     model: semanticSearch.model ?? defaultModelForProvider(semanticSearch.provider),
-    dimensions: String(
-      semanticSearch.dimensions ?? defaultDimensionsForProvider(semanticSearch.provider),
-    ),
+    dimensions:
+      semanticSearch.dimensions !== undefined
+        ? String(semanticSearch.dimensions)
+        : "",
     apiKeyProviderId: semanticSearch.apiKeyRef?.providerId ?? "",
     apiKeyHandle: semanticSearch.apiKeyRef?.handle ?? "",
   };
@@ -100,14 +101,16 @@ const buildCanonicalSemanticSearch = (
   const parsedDimensions = Number.parseInt(form.dimensions.trim(), 10);
   const normalizedDimensions = Number.isFinite(parsedDimensions) && parsedDimensions > 0
     ? parsedDimensions
-    : defaultDimensionsForProvider(provider);
+    : undefined;
   const apiKeyProviderId = form.apiKeyProviderId.trim();
   const apiKeyHandle = form.apiKeyHandle.trim();
 
   return {
     provider,
     model: normalizedModel,
-    dimensions: normalizedDimensions,
+    ...(normalizedDimensions !== undefined
+      ? { dimensions: normalizedDimensions }
+      : {}),
     ...(provider !== "local" && apiKeyProviderId.length > 0 && apiKeyHandle.length > 0
       ? {
           apiKeyRef: {
@@ -436,7 +439,7 @@ function SemanticSearchSettingsCard(props: {
     updateForm({
       provider: nextProvider,
       model: defaultModelForProvider(nextProvider),
-      dimensions: String(defaultDimensionsForProvider(nextProvider)),
+      dimensions: "",
       apiKeyProviderId: "",
       apiKeyHandle: "",
     });

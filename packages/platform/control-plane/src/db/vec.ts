@@ -85,7 +85,7 @@ export const searchVec = (input: {
     const namespaceClause = input.namespaceFilter ? ` AND namespace = ?` : ``
     const params: Array<Float32Array | number | string> = [
       embedding,
-      input.limit * 2,
+      input.limit,
       ...(input.sourceFilter ? [input.sourceFilter] : []),
       ...(input.namespaceFilter ? [input.namespaceFilter] : []),
     ]

@@ -19,7 +19,11 @@ import {
 import { provideRuntimeLocalWorkspace } from "./local";
 import { createSqliteToolCatalog } from "../../../db/catalog";
 import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
-import { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
+import {
+  indexSource,
+  removeSourceTools,
+  syncSourceLifecycle,
+} from "../../../db/indexer";
 import type { SourceToIndex, ToolToIndex } from "../../../db/indexer";
 import type { Embedder } from "../../../db/embedder";
 import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-indexer";
@@ -180,13 +184,12 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
   });
 
-  return loadWorkspaceCatalogTools({
+  return input.sourceCatalogStore.loadWorkspaceSourceCatalogToolIndex({
     workspaceId: input.workspaceId,
-    accountId: input.accountId,
-    sourceCatalogStore: input.sourceCatalogStore,
+    actorAccountId: input.accountId,
     includeSchemas: true,
   }).pipe(
-    Effect.flatMap((tools) => {
+    Effect.flatMap((allTools) => {
       const activeSourceIds = new Set<string>();
       const nextSemanticSearchSignature = semanticSearchSignature(input.embedder);
 
@@ -198,7 +201,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
         tools: ToolToIndex[];
       }>();
 
-      for (const tool of tools) {
+      for (const tool of allTools) {
         const sourceId = tool.source.id;
         activeSourceIds.add(sourceId);
         if (!toolsBySource.has(sourceId)) {
@@ -209,7 +212,9 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
             tools: [],
           });
         }
-        toolsBySource.get(sourceId)!.tools.push(toToolToIndex(tool));
+        if (tool.source.enabled && tool.source.status === "connected") {
+          toolsBySource.get(sourceId)!.tools.push(toToolToIndex(tool));
+        }
       }
 
       return Effect.gen(function* () {
@@ -241,6 +246,14 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
           [...toolsBySource.values()],
           (group) =>
             Effect.gen(function* () {
+              if (!group.source.enabled || group.source.status !== "connected") {
+                yield* syncSourceLifecycle({
+                  sourceId: group.sourceId,
+                  source: group.source,
+                });
+                return;
+              }
+
               const result = yield* indexSource({
                 sourceId: group.sourceId,
                 sourceKey: group.sourceKey,
@@ -375,5 +388,5 @@ const createEmptySourceCatalog = (): ToolCatalog => ({
 // Re-export indexer functions for use in sync flow
 // ---------------------------------------------------------------------------
 
-export { indexSource, deactivateSourceTools, removeSourceTools } from "../../../db/indexer";
+export { indexSource, removeSourceTools } from "../../../db/indexer";
 export type { ToolToIndex } from "../../../db/indexer";

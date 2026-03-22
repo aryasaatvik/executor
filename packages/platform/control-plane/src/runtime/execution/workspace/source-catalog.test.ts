@@ -7,9 +7,15 @@ import { createSqliteToolCatalog } from "../../../db/catalog";
 const {
   indexSourceMock,
   embedSourceToolsMock,
+  removeSourceToolsMock,
+  removeSourceEmbeddingsMock,
+  syncSourceLifecycleMock,
 } = vi.hoisted(() => ({
   indexSourceMock: vi.fn(),
   embedSourceToolsMock: vi.fn(),
+  removeSourceToolsMock: vi.fn(),
+  removeSourceEmbeddingsMock: vi.fn(),
+  syncSourceLifecycleMock: vi.fn(),
 }));
 
 vi.mock("../../../db/catalog", () => ({
@@ -23,12 +29,13 @@ vi.mock("../../../db/setup", () => ({
 vi.mock("../../../db/indexer", () => ({
   indexSource: indexSourceMock,
   deactivateSourceTools: vi.fn(),
-  removeSourceTools: vi.fn(() => Effect.void),
+  removeSourceTools: removeSourceToolsMock,
+  syncSourceLifecycle: syncSourceLifecycleMock,
 }));
 
 vi.mock("../../../db/embed-indexer", () => ({
   embedSourceTools: embedSourceToolsMock,
-  removeSourceEmbeddings: vi.fn(() => Effect.void),
+  removeSourceEmbeddings: removeSourceEmbeddingsMock,
 }));
 
 import {
@@ -67,6 +74,12 @@ describe("createWorkspaceSourceCatalog", () => {
     vi.mocked(createSqliteToolCatalog).mockReset();
     indexSourceMock.mockReset();
     embedSourceToolsMock.mockReset();
+    removeSourceToolsMock.mockReset();
+    removeSourceEmbeddingsMock.mockReset();
+    syncSourceLifecycleMock.mockReset();
+    removeSourceToolsMock.mockReturnValue(Effect.void);
+    removeSourceEmbeddingsMock.mockReturnValue(Effect.void);
+    syncSourceLifecycleMock.mockReturnValue(Effect.void);
   });
 
   it("indexes tools with the canonical descriptor sourceKey", () => {
@@ -273,5 +286,98 @@ describe("createWorkspaceSourceCatalog", () => {
         dimensions: 1536,
       }),
     );
+  });
+
+  it("keeps disconnected sources indexed instead of purging them", async () => {
+    indexSourceMock.mockReset();
+    embedSourceToolsMock.mockReset();
+    syncSourceLifecycleMock.mockReset();
+    removeSourceToolsMock.mockReset();
+    removeSourceEmbeddingsMock.mockReset();
+    indexSourceMock.mockReturnValue(Effect.succeed({ changedTools: [] }));
+    embedSourceToolsMock.mockReturnValue(Effect.void);
+    syncSourceLifecycleMock.mockReturnValue(Effect.void);
+    removeSourceToolsMock.mockReturnValue(Effect.void);
+    removeSourceEmbeddingsMock.mockReturnValue(Effect.void);
+
+    const connectedTool = makeTool({
+      path: "github.issues.create",
+      sourceKey: "src_connected",
+      namespace: "github.issues",
+    });
+    const disconnectedTool = makeTool({
+      path: "slack.messages.send",
+      sourceKey: "src_disconnected",
+      namespace: "slack.messages",
+    });
+    disconnectedTool.source.enabled = true;
+    disconnectedTool.source.status = "error";
+
+    const fakeDb = {
+      selectDistinct: () => ({
+        from: () =>
+          Effect.succeed([
+            {
+              sourceId: connectedTool.source.id,
+              sourceKey: connectedTool.descriptor.sourceKey,
+            },
+            {
+              sourceId: disconnectedTool.source.id,
+              sourceKey: disconnectedTool.descriptor.sourceKey,
+            },
+          ]),
+      }),
+    };
+
+    await Effect.runPromise(
+      indexWorkspaceToolsIntoSqlite({
+        workspaceId: "workspace-1" as never,
+        accountId: "account-1" as never,
+        sourceCatalogStore: {
+          loadWorkspaceSourceCatalogToolIndex: () =>
+            Effect.succeed([connectedTool, disconnectedTool]),
+        } as never,
+        workspaceConfigStore: {} as never,
+        workspaceStateStore: {
+          load: () =>
+            Effect.succeed({
+              version: 1,
+              sources: {},
+              policies: {},
+              catalog: {
+                semanticSearchSignature: null,
+              },
+            }),
+          write: vi.fn(() => Effect.void),
+        } as never,
+        sourceArtifactStore: {} as never,
+        runtimeLocalWorkspace: {
+          context: {
+            stateDirectory: "/tmp/executor-tests",
+          },
+        } as never,
+        embedder: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          dimensions: 1536,
+          embed: async () => [1, 2, 3],
+          embedBatch: async () => [[1, 2, 3]],
+        },
+      }).pipe(
+        Effect.provide(Layer.succeed(SqliteDrizzle, fakeDb as never)),
+      ),
+    );
+
+    expect(removeSourceToolsMock).not.toHaveBeenCalledWith(disconnectedTool.source.id);
+    expect(removeSourceEmbeddingsMock).not.toHaveBeenCalledWith(
+      disconnectedTool.descriptor.sourceKey,
+    );
+    expect(indexSourceMock).toHaveBeenCalledTimes(1);
+    expect(indexSourceMock.mock.calls[0]?.[0]?.sourceId).toBe(connectedTool.source.id);
+    expect(syncSourceLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(syncSourceLifecycleMock.mock.calls[0]?.[0]?.sourceId).toBe(
+      disconnectedTool.source.id,
+    );
+    expect(embedSourceToolsMock).toHaveBeenCalledTimes(1);
   });
 });
