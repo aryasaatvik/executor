@@ -5,13 +5,12 @@ import type { Embedder, EmbedderConfig } from "./types"
 
 /**
  * Create an embedder from configuration.
- * Dispatches to the appropriate provider implementation.
- *
- * Returns null if the config is invalid or the provider can't be loaded.
+ * Dispatches to the appropriate provider implementation and fails on
+ * unsupported or misconfigured providers.
  */
 export async function createEmbedder(
   config: EmbedderConfig,
-): Promise<Embedder | null> {
+): Promise<Embedder> {
   switch (config.provider) {
     case "local": {
       // Dynamic import to avoid loading node-llama-cpp unless needed

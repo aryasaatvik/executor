@@ -133,6 +133,23 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
 
     expect(createEmbedderMock).toHaveBeenCalledTimes(2);
   });
+
+  it("fails when semantic search is configured and embedder initialization errors", async () => {
+    createEmbedderMock.mockRejectedValue(new Error("missing provider package"));
+
+    const environmentModule = await import("./environment");
+
+    await expect(
+      Effect.runPromise(
+        environmentModule.loadConfiguredSemanticSearchEmbedder({
+          semanticSearch: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        } as never),
+      ),
+    ).rejects.toThrow("missing provider package");
+  });
 });
 
 describe("createWorkspaceExecutionEnvironmentResolver", () => {

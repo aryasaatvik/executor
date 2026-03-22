@@ -151,19 +151,18 @@ const workspaceCatalogIndexSignature = (input: {
 
 export const loadConfiguredSemanticSearchEmbedder = (
   config: LocalExecutorConfig | null | undefined,
-): Effect.Effect<Embedder | undefined, never, never> => {
+): Effect.Effect<Embedder | undefined, unknown, never> => {
   const semanticSearchConfig = config?.semanticSearch;
   if (!semanticSearchConfig) {
     return Effect.succeed(undefined);
   }
 
-  return Effect.tryPromise(() => getCachedSemanticSearchEmbedder(semanticSearchConfig)).pipe(
+  return Effect.tryPromise({
+    try: () => getCachedSemanticSearchEmbedder(semanticSearchConfig),
+    catch: (cause) =>
+      cause instanceof Error ? cause : new Error(String(cause)),
+  }).pipe(
     Effect.map((embedder) => embedder ?? undefined),
-    Effect.catchAll((error) =>
-      Effect.logWarning(
-        `Failed to initialize semantic search embedder: ${error instanceof Error ? error.message : String(error)}`,
-      ).pipe(Effect.as(undefined)),
-    ),
   );
 };
 
