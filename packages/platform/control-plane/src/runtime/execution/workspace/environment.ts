@@ -96,9 +96,9 @@ const getCachedSemanticSearchEmbedder = (
       return undefined
     }
 
-    // Prime embedders without explicit dimensions once so the actual output
-    // width is known before SQLite provisions the vec table shape.
-    if (config.dimensions == null) {
+    // Local embedders may only know their true output width after the first
+    // embedding call. Remote AI SDK embedders already report concrete defaults.
+    if (config.provider === "local" && config.dimensions == null) {
       await embedder.embed("__executor_dimension_probe__", "document")
     }
 
@@ -212,10 +212,13 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
               workspaceState: loadedWorkspaceState,
               embedder,
             });
+      const canReuseCachedSqliteCatalog =
+        cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature &&
+        cachedWorkspaceCatalog.sqliteCatalogReady;
       const sqliteCatalogReady =
         runtimeLocalWorkspace === null
           ? false
-          : cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature
+          : canReuseCachedSqliteCatalog
             ? cachedWorkspaceCatalog.sqliteCatalogReady
             : yield* indexWorkspaceToolsIntoSqlite({
                 workspaceId,
@@ -240,7 +243,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
               embedder,
               sqliteCatalogReady,
             })
-          : cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature
+          : canReuseCachedSqliteCatalog
             ? cachedWorkspaceCatalog.sourceCatalog
             : createWorkspaceSourceCatalog({
                 workspaceId,
@@ -256,7 +259,8 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
 
       if (
         runtimeLocalWorkspace !== null &&
-        nextWorkspaceCatalogSignature !== null
+        nextWorkspaceCatalogSignature !== null &&
+        sqliteCatalogReady
       ) {
         workspaceCatalogCache.set(
           workspaceCatalogCacheKey({
@@ -269,6 +273,14 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
             sqliteCatalogReady,
             sourceCatalog,
           },
+        );
+      } else if (runtimeLocalWorkspace !== null) {
+        workspaceCatalogCache.delete(
+          workspaceCatalogCacheKey({
+            stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
+            workspaceId,
+            accountId,
+          }),
         );
       }
 
