@@ -26,7 +26,6 @@ import { describe, expect, it } from "@effect/vitest";
 import type {
   Source,
   StoredSourceCatalogRevisionRecord,
-  StoredSourceRecord,
 } from "#schema";
 import {
   SourceCatalogIdSchema,
@@ -105,24 +104,6 @@ const makeLoadedCatalog = (input: {
   const revisionId = SourceCatalogRevisionIdSchema.make(
     `catalog_revision_${input.source.id}`,
   );
-  const sourceRecord = {
-    id: input.source.id,
-    workspaceId: input.source.workspaceId,
-    catalogId,
-    catalogRevisionId: revisionId,
-    name: input.source.name,
-    kind: input.source.kind,
-    endpoint: input.source.endpoint,
-    status: input.source.status,
-    enabled: input.source.enabled,
-    namespace: input.source.namespace,
-    importAuthPolicy: input.source.importAuthPolicy,
-    bindingConfigJson: JSON.stringify(input.source.binding),
-    sourceHash: input.source.sourceHash,
-    lastError: input.source.lastError,
-    createdAt: input.source.createdAt,
-    updatedAt: input.source.updatedAt,
-  } satisfies StoredSourceRecord;
   const revision = {
     id: revisionId,
     catalogId,
@@ -144,7 +125,6 @@ const makeLoadedCatalog = (input: {
 
   return {
     source: input.source,
-    sourceRecord,
     revision,
     snapshot: input.snapshot,
     catalog: input.snapshot.catalog,
