@@ -31,7 +31,6 @@ import {
   IconPencil,
   IconPlus,
   IconSpinner,
-  IconTrash,
 } from "../components/icons";
 import { cn } from "../lib/utils";
 import {
@@ -85,7 +84,7 @@ type SourceFormBase = {
   service: string;
   version: string;
   defaultHeadersText: string;
-  authKind: Source["auth"]["kind"];
+  authKind: "none" | "bearer" | "oauth2";
   authHeaderName: string;
   authPrefix: string;
   bearerProviderId: string;
@@ -94,10 +93,6 @@ type SourceFormBase = {
   oauthAccessHandle: string;
   oauthRefreshProviderId: string;
   oauthRefreshHandle: string;
-  managedAuth: Extract<
-    Source["auth"],
-    { kind: "provider_grant_ref" | "mcp_oauth" }
-  > | null;
 };
 
 type SourceFormState = SourceFormBase & McpTransportFields;
@@ -121,9 +116,26 @@ const authOptions: ReadonlyArray<Source["auth"]["kind"]> = [
   "none",
   "bearer",
   "oauth2",
-  "provider_grant_ref",
-  "mcp_oauth",
 ];
+
+const isEditableAuthKind = (
+  kind: Source["auth"]["kind"],
+): kind is SourceFormBase["authKind"] =>
+  kind === "none" || kind === "bearer" || kind === "oauth2";
+
+const isReconnectRequiredAuthKind = (
+  kind: Source["auth"]["kind"],
+): boolean => !isEditableAuthKind(kind);
+
+const sourceAuthKindForEditor = (source: Source): SourceFormBase["authKind"] => {
+  if (!isEditableAuthKind(source.auth.kind)) {
+    throw new Error(
+      "This source uses managed auth and must be reconnected before editing.",
+    );
+  }
+
+  return source.auth.kind;
+};
 
 const trimToNull = (value: string): string | null => {
   const trimmed = value.trim();
@@ -402,7 +414,6 @@ const defaultFormState = (template?: SourceTemplate): SourceFormState => ({
   oauthAccessHandle: "",
   oauthRefreshProviderId: "",
   oauthRefreshHandle: "",
-  managedAuth: null,
   ...(template?.kind === "mcp" && template.connectionType === "command"
     ? defaultMcpStdioTransportFields({
         command: template.command ?? "",
@@ -417,83 +428,78 @@ const defaultFormState = (template?: SourceTemplate): SourceFormState => ({
       )),
 });
 
-const formStateFromSource = (source: Source): SourceFormState => ({
-  name: source.name,
-  kind: source.kind,
-  endpoint: source.endpoint,
-  namespace: source.namespace ?? "",
-  iconUrl: (source as any).iconUrl ?? "",
-  enabled: source.enabled,
-  specUrl: readBindingString(source, "specUrl"),
-  service: readBindingString(source, "service"),
-  version: readBindingString(source, "version"),
-  defaultHeadersText: stringMapToEditor(
-    readBindingStringMap(source, "defaultHeaders"),
-  ),
-  authKind: source.auth.kind,
-  authHeaderName:
-    source.auth.kind === "none" || source.auth.kind === "mcp_oauth"
-      ? "Authorization"
-      : source.auth.headerName,
-  authPrefix:
-    source.auth.kind === "none" || source.auth.kind === "mcp_oauth"
-      ? "Bearer "
-      : source.auth.prefix,
-  bearerProviderId:
-    source.auth.kind === "bearer" ? source.auth.token.providerId : "",
-  bearerHandle: source.auth.kind === "bearer" ? source.auth.token.handle : "",
-  oauthAccessProviderId:
-    source.auth.kind === "oauth2" ? source.auth.accessToken.providerId : "",
-  oauthAccessHandle:
-    source.auth.kind === "oauth2" ? source.auth.accessToken.handle : "",
-  oauthRefreshProviderId:
-    source.auth.kind === "oauth2" && source.auth.refreshToken !== null
-      ? source.auth.refreshToken.providerId
-      : "",
-  oauthRefreshHandle:
-    source.auth.kind === "oauth2" && source.auth.refreshToken !== null
-      ? source.auth.refreshToken.handle
-      : "",
-  managedAuth:
-    source.auth.kind === "provider_grant_ref" ||
-    source.auth.kind === "mcp_oauth"
-      ? source.auth
-      : null,
-  ...(source.kind === "mcp" && readBindingTransport(source) === "stdio"
-    ? defaultMcpStdioTransportFields({
-        command: readBindingString(source, "command"),
-        argsText: stringArrayToEditor(readBindingStringArray(source, "args")),
-        envText: stringMapToEditor(readBindingStringMap(source, "env")),
-        cwd: readBindingString(source, "cwd"),
-      })
-    : defaultMcpRemoteTransportFields(
-        source.kind === "mcp"
-          ? asMcpRemoteTransportValue(readBindingTransport(source) || "auto")
-          : "",
-      )),
-  ...(source.kind === "mcp" && readBindingTransport(source) !== "stdio"
-    ? {
-        queryParamsText: stringMapToEditor(
-          readBindingStringMap(source, "queryParams"),
-        ),
-        headersText: stringMapToEditor(readBindingStringMap(source, "headers")),
-      }
-    : {}),
-});
+const formStateFromSource = (source: Source): SourceFormState => {
+  const authKind = sourceAuthKindForEditor(source);
+  const authHeaderName =
+    source.auth.kind === "bearer" || source.auth.kind === "oauth2"
+      ? source.auth.headerName
+      : "Authorization";
+  const authPrefix =
+    source.auth.kind === "bearer" || source.auth.kind === "oauth2"
+      ? source.auth.prefix
+      : "Bearer ";
+
+  return {
+    authKind,
+    authHeaderName,
+    authPrefix,
+    name: source.name,
+    kind: source.kind,
+    endpoint: source.endpoint,
+    namespace: source.namespace ?? "",
+    iconUrl: (source as any).iconUrl ?? "",
+    enabled: source.enabled,
+    specUrl: readBindingString(source, "specUrl"),
+    service: readBindingString(source, "service"),
+    version: readBindingString(source, "version"),
+    defaultHeadersText: stringMapToEditor(
+      readBindingStringMap(source, "defaultHeaders"),
+    ),
+    bearerProviderId:
+      source.auth.kind === "bearer" ? source.auth.token.providerId : "",
+    bearerHandle: source.auth.kind === "bearer" ? source.auth.token.handle : "",
+    oauthAccessProviderId:
+      source.auth.kind === "oauth2" ? source.auth.accessToken.providerId : "",
+    oauthAccessHandle:
+      source.auth.kind === "oauth2" ? source.auth.accessToken.handle : "",
+    oauthRefreshProviderId:
+      source.auth.kind === "oauth2" && source.auth.refreshToken !== null
+        ? source.auth.refreshToken.providerId
+        : "",
+    oauthRefreshHandle:
+      source.auth.kind === "oauth2" && source.auth.refreshToken !== null
+        ? source.auth.refreshToken.handle
+        : "",
+    ...(source.kind === "mcp" && readBindingTransport(source) === "stdio"
+      ? defaultMcpStdioTransportFields({
+          command: readBindingString(source, "command"),
+          argsText: stringArrayToEditor(readBindingStringArray(source, "args")),
+          envText: stringMapToEditor(readBindingStringMap(source, "env")),
+          cwd: readBindingString(source, "cwd"),
+        })
+      : defaultMcpRemoteTransportFields(
+          source.kind === "mcp"
+            ? asMcpRemoteTransportValue(readBindingTransport(source) || "auto")
+            : "",
+        )),
+    ...(source.kind === "mcp" && readBindingTransport(source) !== "stdio"
+      ? {
+          queryParamsText: stringMapToEditor(
+            readBindingStringMap(source, "queryParams"),
+          ),
+          headersText: stringMapToEditor(
+            readBindingStringMap(source, "headers"),
+          ),
+        }
+      : {}),
+  };
+};
 
 const buildAuthPayload = (
   state: SourceFormState,
 ): CreateSourcePayload["auth"] => {
   if (state.authKind === "none") {
     return { kind: "none" };
-  }
-
-  if (
-    (state.authKind === "provider_grant_ref" ||
-      state.authKind === "mcp_oauth") &&
-    state.managedAuth !== null
-  ) {
-    return state.managedAuth;
   }
 
   const headerName = state.authHeaderName.trim() || "Authorization";
@@ -738,14 +744,62 @@ export function EditSourcePage(props: { sourceId: string }) {
 
   return (
     <LoadableBlock loadable={source} loading="Loading source...">
-      {(loadedSource) => (
-        <SourceEditor
-          key={`${loadedSource.id}:${loadedSource.updatedAt}`}
-          mode="edit"
-          source={loadedSource}
-        />
-      )}
+      {(loadedSource) =>
+        isReconnectRequiredAuthKind(loadedSource.auth.kind) ? (
+          <SourceAuthReconnectRequiredState source={loadedSource} />
+        ) : (
+          <SourceEditor
+            key={`${loadedSource.id}:${loadedSource.updatedAt}`}
+            mode="edit"
+            source={loadedSource}
+          />
+        )
+      }
     </LoadableBlock>
+  );
+}
+
+function SourceAuthReconnectRequiredState(props: { source: Source }) {
+  return (
+    <div className="flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-2xl px-6 py-12">
+        <div className="rounded-2xl border border-border bg-card/80 px-6 py-8 text-center">
+          <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
+            <IconPencil className="size-5" />
+          </div>
+          <h1 className="text-xl font-semibold text-foreground">
+            Reconnect required
+          </h1>
+          <div className="mt-2 flex items-center justify-center gap-2">
+            <span className="text-sm text-muted-foreground">
+              {props.source.name}
+            </span>
+            <Badge variant="outline">{props.source.kind}</Badge>
+          </div>
+          <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
+            This source uses managed auth that cannot be edited here. Reconnect
+            it from the source details page, or create a new source with
+            explicit credentials.
+          </p>
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <Link
+              to="/sources/$sourceId"
+              params={{ sourceId: props.source.id }}
+              search={{ tab: "model" }}
+              className="inline-flex items-center justify-center rounded-md border border-input bg-transparent px-3 py-1.5 text-xs font-medium transition-all hover:bg-accent hover:text-accent-foreground"
+            >
+              View source
+            </Link>
+            <Link
+              to="/sources/add"
+              className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-all hover:bg-primary/90"
+            >
+              Add source
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -755,7 +809,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
   const startSourceOAuth = useStartSourceOAuth();
   const updateSource = useUpdateSource();
   const removeSource = useRemoveSource();
-  const removeProviderAuthGrant = useRemoveProviderAuthGrant();
   const instanceConfig = useInstanceConfig();
   const secrets = useSecrets();
   const refreshSecrets = useRefreshSecrets();
@@ -775,7 +828,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
   const isSubmitting =
     createSource.status === "pending" || updateSource.status === "pending";
   const isDeleting = removeSource.status === "pending";
-  const isRevokingGrant = removeProviderAuthGrant.status === "pending";
   const isOAuthSubmitting =
     startSourceOAuth.status === "pending" || oauthPopupBusy;
   const oauthSecretRefTarget =
@@ -903,7 +955,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
         oauthAccessHandle: auth.accessToken.handle,
         oauthRefreshProviderId: auth.refreshToken?.providerId ?? "",
         oauthRefreshHandle: auth.refreshToken?.handle ?? "",
-        managedAuth: null,
       }));
       setStatusBanner({
         tone: "success",
@@ -943,47 +994,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
         tone: "error",
         text:
           error instanceof Error ? error.message : "Failed removing source.",
-      });
-    }
-  };
-
-  const handleRevokeProviderGrant = async () => {
-    if (
-      !props.source ||
-      isRevokingGrant ||
-      formState.managedAuth?.kind !== "provider_grant_ref"
-    ) {
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Revoke the shared Google auth for "${props.source.name}"? This disconnects every source using the same shared grant.`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setStatusBanner(null);
-
-    try {
-      const result = await removeProviderAuthGrant.mutateAsync(
-        formState.managedAuth.grantId,
-      );
-      if (!result.removed) {
-        throw new Error("Shared provider grant was not removed.");
-      }
-
-      setStatusBanner({
-        tone: "success",
-        text: "Shared provider grant revoked. Linked sources now require authentication again.",
-      });
-    } catch (error) {
-      setStatusBanner({
-        tone: "error",
-        text:
-          error instanceof Error
-            ? error.message
-            : "Failed revoking shared provider grant.",
       });
     }
   };
@@ -1368,9 +1378,8 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                   <SelectInput
                     value={formState.authKind}
                     onChange={(value) =>
-                      setField("authKind", value as Source["auth"]["kind"])
+                      setField("authKind", value as SourceFormBase["authKind"])
                     }
-                    disabled={formState.managedAuth !== null}
                     options={authOptions.map((value) => ({
                       value,
                       label: value,
@@ -1378,83 +1387,7 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                   />
                 </Field>
               )}
-              {formState.managedAuth !== null &&
-                !(
-                  formState.kind === "mcp" && formState.transport === "stdio"
-                ) && (
-                  <div className="sm:col-span-2 rounded-xl border border-border bg-gradient-to-b from-muted/40 to-transparent overflow-hidden">
-                    <div className="flex items-start gap-3 px-4 py-3.5">
-                      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/8 text-primary mt-0.5">
-                        {formState.managedAuth.kind === "provider_grant_ref" ? (
-                          <svg
-                            className="size-4"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" />
-                            <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" />
-                          </svg>
-                        ) : (
-                          <svg
-                            className="size-4"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          >
-                            <rect
-                              x="3"
-                              y="11"
-                              width="18"
-                              height="11"
-                              rx="2"
-                              ry="2"
-                            />
-                            <path d="M7 11V7a5 5 0 0110 0v4" />
-                          </svg>
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0 space-y-1">
-                        <p className="text-[12px] font-medium text-foreground">
-                          {formState.managedAuth.kind === "provider_grant_ref"
-                            ? "Shared provider grant"
-                            : "Managed MCP OAuth"}
-                        </p>
-                        <p className="text-[11px] leading-relaxed text-muted-foreground">
-                          {formState.managedAuth.kind === "provider_grant_ref"
-                            ? "This source uses a shared Google auth grant. Reconnect from Add Source to change the linked account or scopes."
-                            : "Authenticated through a persisted MCP OAuth session. Reconnect the source to refresh or replace the binding."}
-                        </p>
-                      </div>
-                    </div>
-                    {formState.managedAuth.kind === "provider_grant_ref" &&
-                      props.mode === "edit" && (
-                        <div className="flex items-center justify-end border-t border-border/50 px-4 py-2.5">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="text-destructive/70 hover:text-destructive hover:bg-destructive/8"
-                            onClick={handleRevokeProviderGrant}
-                            disabled={isRevokingGrant}
-                          >
-                            <IconTrash className="size-3" />
-                            {isRevokingGrant
-                              ? "Revoking\u2026"
-                              : "Revoke shared auth"}
-                          </Button>
-                        </div>
-                      )}
-                  </div>
-                )}
               {formState.authKind !== "none" &&
-                formState.managedAuth === null &&
                 !(
                   formState.kind === "mcp" && formState.transport === "stdio"
                 ) && (
@@ -1477,7 +1410,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                 )}
 
               {formState.authKind === "bearer" &&
-                formState.managedAuth === null &&
                 !(
                   formState.kind === "mcp" && formState.transport === "stdio"
                 ) && (
@@ -1496,7 +1428,6 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                 )}
 
               {formState.authKind === "oauth2" &&
-                formState.managedAuth === null &&
                 !(
                   formState.kind === "mcp" && formState.transport === "stdio"
                 ) &&
@@ -1544,9 +1475,8 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
                 variant="outline"
                 className="border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
                 onClick={handleRemove}
-                disabled={isDeleting || isRevokingGrant}
+                disabled={isDeleting}
               >
-                <IconTrash className="size-3.5" />
                 {isDeleting ? "Removing\u2026" : "Remove source"}
               </Button>
             </Section>
@@ -1561,7 +1491,7 @@ function SourceEditor(props: { mode: "create" | "edit"; source?: Source }) {
             </Link>
             <Button
               onClick={handleSubmit}
-              disabled={isSubmitting || isRevokingGrant}
+              disabled={isSubmitting}
             >
               {props.mode === "edit" ? (
                 <IconPencil className="size-3.5" />

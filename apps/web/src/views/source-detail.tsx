@@ -147,9 +147,9 @@ const readBindingTransport = (
     : undefined;
 };
 
-const refreshableHttpAuth = (
+const directRefreshHttpAuth = (
   auth: Source["auth"],
-): Extract<ConnectSourcePayload, { kind: "openapi" }>["auth"] | undefined => {
+): Extract<ConnectSourcePayload, { kind: "openapi" }>["auth"] | null => {
   switch (auth.kind) {
     case "none":
       return { kind: "none" };
@@ -169,14 +169,29 @@ const refreshableHttpAuth = (
         refreshTokenRef: auth.refreshToken,
       };
     default:
-      return undefined;
+      return null;
   }
 };
 
-const supportsDirectRefreshAuth = (
-  auth: Source["auth"],
-): boolean =>
-  refreshableHttpAuth(auth) !== undefined;
+const refreshRequiresReconnect = (source: Source): boolean => {
+  if (
+    source.kind !== "openapi" &&
+    source.kind !== "graphql" &&
+    source.kind !== "google_discovery"
+  ) {
+    return false;
+  }
+
+  return (
+    directRefreshHttpAuth(source.importAuth) === null ||
+    directRefreshHttpAuth(source.auth) === null
+  );
+};
+
+const refreshUnavailableMessage = (source: Source): string =>
+  refreshRequiresReconnect(source)
+    ? "This source uses managed or unsupported auth. Reconnect it with supported credentials before refreshing it."
+    : "Refresh is unavailable until this source has complete connection details.";
 
 const refreshPayloadFromSource = (
   source: Source,
@@ -204,10 +219,9 @@ const refreshPayloadFromSource = (
         return null;
       }
 
-      if (
-        !supportsDirectRefreshAuth(source.importAuth) ||
-        !supportsDirectRefreshAuth(source.auth)
-      ) {
+      const importAuth = directRefreshHttpAuth(source.importAuth);
+      const auth = directRefreshHttpAuth(source.auth);
+      if (!importAuth || !auth) {
         return null;
       }
 
@@ -218,15 +232,14 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth,
+        auth,
       };
     }
-    case "graphql":
-      if (
-        !supportsDirectRefreshAuth(source.importAuth) ||
-        !supportsDirectRefreshAuth(source.auth)
-      ) {
+    case "graphql": {
+      const graphqlImportAuth = directRefreshHttpAuth(source.importAuth);
+      const graphqlAuth = directRefreshHttpAuth(source.auth);
+      if (!graphqlImportAuth || !graphqlAuth) {
         return null;
       }
 
@@ -236,9 +249,10 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth: graphqlImportAuth,
+        auth: graphqlAuth,
       };
+    }
     case "google_discovery": {
       const service = readBindingString(source, "service");
       const version = readBindingString(source, "version");
@@ -246,10 +260,9 @@ const refreshPayloadFromSource = (
         return null;
       }
 
-      if (
-        !supportsDirectRefreshAuth(source.importAuth) ||
-        !supportsDirectRefreshAuth(source.auth)
-      ) {
+      const importAuth = directRefreshHttpAuth(source.importAuth);
+      const auth = directRefreshHttpAuth(source.auth);
+      if (!importAuth || !auth) {
         return null;
       }
 
@@ -263,8 +276,8 @@ const refreshPayloadFromSource = (
         name: source.name,
         namespace: source.namespace,
         importAuthPolicy: source.importAuthPolicy,
-        importAuth: refreshableHttpAuth(source.importAuth),
-        auth: refreshableHttpAuth(source.auth),
+        importAuth,
+        auth,
       };
     }
     default:
@@ -323,7 +336,7 @@ export function SourceDetailPage(props: {
       if (!payload) {
         setRefreshFeedback({
           tone: "error",
-          text: "Refresh is unavailable until this source has complete connection details.",
+          text: refreshUnavailableMessage(currentSource),
         });
         return;
       }
@@ -377,7 +390,7 @@ export function SourceDetailPage(props: {
         refreshLabel="Refresh source"
         refreshTitle={
           refreshPayload === null
-            ? "Refresh is unavailable for this source configuration"
+            ? refreshUnavailableMessage(sourceDetailPageState.source)
             : "Reconnect and rebuild this source"
         }
         refreshDisabled={
@@ -459,7 +472,7 @@ export function SourceDetailPage(props: {
                   }
                   title={
                     refreshPayloadFromSource(bundle.source) === null
-                      ? "Refresh is unavailable for this source configuration"
+                      ? refreshUnavailableMessage(bundle.source)
                       : "Reconnect and resync this source"
                   }
                 >
