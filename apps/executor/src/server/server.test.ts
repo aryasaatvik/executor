@@ -21,15 +21,14 @@ import { makeToolInvokerFromTools, toTool } from "@executor/codemode-core";
 import {
   createControlPlaneClient,
   controlPlaneOpenApiSpec,
-  buildLocalSourceArtifact,
   catalogSyncResultFromMcpManifest,
   deriveLocalInstallation,
   type ResolveExecutionEnvironment,
   resolveLocalWorkspaceContext,
   SourceIdSchema,
-  writeLocalSourceArtifact,
   writeProjectLocalExecutorConfig,
 } from "@executor/control-plane";
+import { syncSourceToSqlite, makeWorkspaceCatalogDbLayer } from "@executor/control-plane/db";
 import { makeSesExecutor } from "@executor/runtime-ses";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -166,14 +165,12 @@ const writeConfiguredLocalMcpSource = (input: {
       },
     });
 
-    yield* writeLocalSourceArtifact({
-      context,
-      sourceId,
-      artifact: buildLocalSourceArtifact({
-        source,
-        syncResult,
-      }),
-    });
+    // Write catalog data to SQLite
+    const dbPath = `${context.stateDirectory}/catalog.db`;
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+    yield* syncSourceToSqlite({ source, syncResult }).pipe(
+      Effect.provide(dbLayer),
+    );
   }).pipe(Effect.provide(NodeFileSystem.layer));
 
 const makeServer = createIsolatedLocalExecutorServer({

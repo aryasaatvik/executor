@@ -20,6 +20,15 @@ const makeContext = (): Effect.Effect<string, never, FileSystem.FileSystem> =>
   });
 
 const makeSqlTag = () => {
+  const db = {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => Effect.succeed([]),
+        }),
+      }),
+    }),
+  };
   const sql = Object.assign(
     (_strings: TemplateStringsArray, ..._values: ReadonlyArray<unknown>) =>
       Effect.succeed([] as Array<{ value: string }>),
@@ -30,7 +39,7 @@ const makeSqlTag = () => {
 
   return Layer.mergeAll(
     Layer.succeed(SqlClient.SqlClient, sql as never),
-    Layer.succeed(SqliteDrizzle, {} as never),
+    Layer.succeed(SqliteDrizzle, db as never),
   );
 };
 
@@ -42,6 +51,38 @@ describe("migrateJsonToSqlite", () => {
       yield* migrateJsonToSqlite({
         controlPlaneStatePath: join(workspaceRoot, "control-plane-state.json"),
         workspaceStatePath: join(workspaceRoot, "workspace-state.json"),
+      }).pipe(
+        Effect.provide(makeSqlTag()),
+      );
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("succeeds when artifacts directory does not exist", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* makeContext();
+
+      yield* migrateJsonToSqlite({
+        controlPlaneStatePath: join(workspaceRoot, "control-plane-state.json"),
+        workspaceStatePath: join(workspaceRoot, "workspace-state.json"),
+        artifactsDirectory: join(workspaceRoot, "nonexistent-artifacts"),
+      }).pipe(
+        Effect.provide(makeSqlTag()),
+      );
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("succeeds when artifacts directory is empty", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* makeContext();
+      const artifactsDir = join(workspaceRoot, "artifacts");
+      const sourcesDir = join(artifactsDir, "sources");
+      yield* fs.makeDirectory(sourcesDir, { recursive: true });
+
+      yield* migrateJsonToSqlite({
+        controlPlaneStatePath: join(workspaceRoot, "control-plane-state.json"),
+        workspaceStatePath: join(workspaceRoot, "workspace-state.json"),
+        artifactsDirectory: artifactsDir,
       }).pipe(
         Effect.provide(makeSqlTag()),
       );
@@ -81,6 +122,45 @@ describe("migrateJsonToSqlite", () => {
 
       expect(error.message).toContain(
         "workspace-state.json policies cannot be migrated into SQLite without losing data",
+      );
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("fails when workspace-state source status cannot be attached to an existing source row", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* makeContext();
+      const controlPlaneStatePath = join(workspaceRoot, "control-plane-state.json");
+      const workspaceStatePath = join(workspaceRoot, "workspace-state.json");
+
+      yield* fs.writeFileString(
+        workspaceStatePath,
+        `${JSON.stringify({
+          version: 1,
+          sources: {
+            github: {
+              status: "draft",
+              lastError: null,
+              sourceHash: "hash-github",
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          },
+          policies: {},
+        })}\n`,
+      );
+
+      const error = yield* Effect.flip(
+        migrateJsonToSqlite({
+          controlPlaneStatePath,
+          workspaceStatePath,
+        }).pipe(
+          Effect.provide(makeSqlTag()),
+        ),
+      );
+
+      expect(error.message).toContain(
+        "workspace-state.json contains source state for github, but no source row exists to receive it",
       );
     }).pipe(Effect.provide(NodeFileSystem.layer)),
   );

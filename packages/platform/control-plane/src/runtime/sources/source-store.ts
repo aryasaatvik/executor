@@ -8,12 +8,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import {
-  SourceArtifactStore,
   type WorkspaceStorageServices,
   WorkspaceConfigStore,
-  WorkspaceStateStore,
 } from "../local/storage";
-import { RuntimeLocalWorkspaceService } from "../local/runtime-context";
+import { RuntimeLocalWorkspace } from "../local/runtime-context";
 import { ControlPlaneStore, type ControlPlaneStoreShape } from "../store";
 import {
   loadRuntimeSourceStoreDeps,
@@ -123,28 +121,24 @@ export const persistSource = (
     (deps) => persistSourceWithDeps(deps, source, options),
   );
 
-export class RuntimeSourceStoreService extends Context.Tag(
-  "#runtime/RuntimeSourceStoreService",
-)<RuntimeSourceStoreService, RuntimeSourceStoreShape>() {}
+export class SourceStore extends Context.Tag(
+  "#runtime/SourceStore",
+)<SourceStore, RuntimeSourceStoreShape>() {}
 
 export const RuntimeSourceStoreLive = Layer.effect(
-  RuntimeSourceStoreService,
+  SourceStore,
   Effect.gen(function* () {
     const rows = yield* ControlPlaneStore;
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
     const workspaceConfigStore = yield* WorkspaceConfigStore;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
 
     const deps: RuntimeSourceStoreDeps = {
       rows,
       runtimeLocalWorkspace,
       workspaceConfigStore,
-      workspaceStateStore,
-      sourceArtifactStore,
     };
 
-    return RuntimeSourceStoreService.of({
+    return SourceStore.of({
       loadSourcesInWorkspace: (workspaceId, options = {}) =>
         loadSourcesInWorkspaceWithDeps(deps, workspaceId, options),
       listLinkedSecretSourcesInWorkspace: (workspaceId, options = {}) =>

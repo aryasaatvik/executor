@@ -24,9 +24,9 @@ import {
   operationErrors,
 } from "../policy/operation-errors";
 import { ControlPlaneStore, type ControlPlaneStoreShape } from "../store";
-import { RuntimeSourceCatalogSyncService } from "../catalog/source/sync";
+import { SourceCatalogSync } from "../catalog/source/sync";
 import {
-  RuntimeSourceStoreService,
+  SourceStore,
 } from "./source-store";
 
 const sourceOps = {
@@ -42,7 +42,7 @@ const shouldAutoProbeSource = (source: Source): boolean =>
 
 const syncArtifactsForSource = (input: {
   store: ControlPlaneStoreShape;
-  sourceStore: Effect.Effect.Success<typeof RuntimeSourceStoreService>;
+  sourceStore: Effect.Effect.Success<typeof SourceStore>;
   source: Source;
   actorAccountId: AccountId;
   operation:
@@ -50,7 +50,7 @@ const syncArtifactsForSource = (input: {
     | typeof sourceOps.update;
 }) =>
   Effect.gen(function* () {
-    const catalogSyncService = yield* RuntimeSourceCatalogSyncService;
+    const catalogSyncService = yield* SourceCatalogSync;
 
     // For HTTP-backed source kinds that can validate themselves from a remote
     // document, automatically attempt to probe and connect. This mirrors the
@@ -132,7 +132,7 @@ export const listSources = (input: {
 }) =>
   Effect.flatMap(ControlPlaneStore, () =>
     Effect.gen(function* () {
-      const sourceStore = yield* RuntimeSourceStoreService;
+      const sourceStore = yield* SourceStore;
 
       return yield* sourceStore.loadSourcesInWorkspace(input.workspaceId, {
         actorAccountId: input.accountId,
@@ -153,7 +153,7 @@ export const createSource = (input: {
 }) =>
   Effect.flatMap(ControlPlaneStore, (store) =>
     Effect.gen(function* () {
-      const sourceStore = yield* RuntimeSourceStoreService;
+      const sourceStore = yield* SourceStore;
       const now = Date.now();
 
       const source = yield* createSourceFromPayload({
@@ -195,7 +195,7 @@ export const getSource = (input: {
 }) =>
   Effect.flatMap(ControlPlaneStore, () =>
     Effect.gen(function* () {
-      const sourceStore = yield* RuntimeSourceStoreService;
+      const sourceStore = yield* SourceStore;
 
       return yield* sourceStore.loadSourceById({
         workspaceId: input.workspaceId,
@@ -224,7 +224,7 @@ export const updateSource = (input: {
 }) =>
   Effect.flatMap(ControlPlaneStore, (store) =>
     Effect.gen(function* () {
-      const sourceStore = yield* RuntimeSourceStoreService;
+      const sourceStore = yield* SourceStore;
       const existingSource = yield* sourceStore.loadSourceById({
         workspaceId: input.workspaceId,
         sourceId: input.sourceId,
@@ -280,7 +280,7 @@ export const removeSource = (input: {
 }) =>
   Effect.flatMap(ControlPlaneStore, () =>
     Effect.gen(function* () {
-      const sourceStore = yield* RuntimeSourceStoreService;
+      const sourceStore = yield* SourceStore;
       const removed = yield* mapPersistenceError(
         sourceOps.remove.child("remove"),
         sourceStore.removeSourceById({

@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../db/client.js"
 import { createServer } from "node:http";
 import { join } from "node:path";
 
@@ -27,7 +28,7 @@ import { createGraphqlCatalogFragment } from "@executor/source-graphql";
 import {
   type ControlPlaneRuntime,
   createControlPlaneRuntime,
-  LiveExecutionManagerService,
+  ExecutionManager,
   provideControlPlaneRuntime,
 } from "./index";
 import { createSourceFromPayload } from "./sources/source-definitions";
@@ -41,12 +42,9 @@ import {
 } from "./local/config";
 import { writeLocalControlPlaneState } from "./local/control-plane-store";
 import { deriveLocalInstallation } from "./local/installation";
-import {
-  buildLocalSourceArtifact,
-  readLocalSourceArtifact,
-  writeLocalSourceArtifact,
-} from "./local/source-artifacts";
-import { writeLocalWorkspaceState } from "./local/workspace-state";
+import { syncSourceToSqlite, hasSourceCatalogData } from "../db/indexer";
+import { makeWorkspaceCatalogDbLayer } from "../db/setup";
+import { upsertSourceStatus } from "../db/source-state";
 
 const makeRuntime = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -596,7 +594,7 @@ describe("control-plane-runtime", () => {
       }).pipe((effect) => provideControlPlaneRuntime(effect, runtime), Effect.orDie);
 
       const interactionFiber = yield* Effect.gen(function* () {
-        const liveExecutionManager = yield* LiveExecutionManagerService;
+        const liveExecutionManager = yield* ExecutionManager;
         const onElicitation = liveExecutionManager.createOnElicitation({
           rows: runtime.persistence.rows,
           executionId,
@@ -774,74 +772,60 @@ describe("control-plane-runtime", () => {
         now,
       }).pipe(Effect.orDie);
 
-      const artifact = buildLocalSourceArtifact({
-        source,
-        syncResult: {
-          fragment: createGraphqlCatalogFragment({
-            source,
-            documents: [
-              {
-                documentKind: "graphql_introspection",
-                documentKey: source.endpoint,
-                contentText: '{"__schema":{}}',
-                fetchedAt: now,
-              },
-            ],
-            operations: [
-              {
-                toolId: "viewer",
-                title: "Viewer",
-                description: "Load the current viewer",
-                effect: "read",
-                inputSchema: { type: "object", properties: {} },
-                outputSchema: {
-                  type: "object",
-                  properties: { login: { type: "string" } },
-                },
-                providerData: {
-                  kind: "graphql",
-                  toolKind: "field",
-                  toolId: "viewer",
-                  rawToolId: "viewer",
-                  group: "query",
-                  leaf: "viewer",
-                  fieldName: "viewer",
-                  operationType: "query",
-                  operationName: "ViewerQuery",
-                  operationDocument: "query ViewerQuery { viewer { login } }",
-                  queryTypeName: "Query",
-                  mutationTypeName: null,
-                  subscriptionTypeName: null,
-                },
-              },
-            ],
-          }),
-          importMetadata: createCatalogImportMetadata({
-            source,
-            adapterKey: "graphql",
-          }),
-          sourceHash: source.sourceHash,
-        },
-      });
-
-      yield* writeLocalWorkspaceState({
-        context,
-        state: {
-          version: 1,
-          sources: {
-            [sourceId]: {
-              status: source.status,
-              lastError: source.lastError,
-              sourceHash: source.sourceHash,
-              createdAt: source.createdAt,
-              updatedAt: source.updatedAt,
+      const syncResult = {
+        fragment: createGraphqlCatalogFragment({
+          source,
+          documents: [
+            {
+              documentKind: "graphql_introspection",
+              documentKey: source.endpoint,
+              contentText: '{"__schema":{}}',
+              fetchedAt: now,
             },
-          },
-          catalog: {
-            semanticSearchSignature: null,
-          },
-        },
-      });
+          ],
+          operations: [
+            {
+              toolId: "viewer",
+              title: "Viewer",
+              description: "Load the current viewer",
+              effect: "read",
+              inputSchema: { type: "object", properties: {} },
+              outputSchema: {
+                type: "object",
+                properties: { login: { type: "string" } },
+              },
+              providerData: {
+                kind: "graphql",
+                toolKind: "field",
+                toolId: "viewer",
+                rawToolId: "viewer",
+                group: "query",
+                leaf: "viewer",
+                fieldName: "viewer",
+                operationType: "query",
+                operationName: "ViewerQuery",
+                operationDocument: "query ViewerQuery { viewer { login } }",
+                queryTypeName: "Query",
+                mutationTypeName: null,
+                subscriptionTypeName: null,
+              },
+            },
+          ],
+        }),
+        importMetadata: createCatalogImportMetadata({
+          source,
+          adapterKey: "graphql",
+        }),
+        sourceHash: source.sourceHash,
+      };
+
+      // Seed catalog data into SQLite
+      const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
+      const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+      yield* syncSourceToSqlite({ source, syncResult }).pipe(
+        Effect.provide(dbLayer),
+      );
+
       yield* writeLocalControlPlaneState({
         context,
         state: {
@@ -858,18 +842,6 @@ describe("control-plane-runtime", () => {
           executionSteps: [],
         },
       });
-      yield* writeLocalSourceArtifact({
-        context,
-        sourceId,
-        artifact,
-      });
-
-      const artifactPath = join(context.artifactsDirectory, "sources", `${sourceId}.json`);
-      const legacyArtifact = JSON.parse(
-        yield* fs.readFileString(artifactPath, "utf8"),
-      ) as Record<string, unknown>;
-      legacyArtifact.version = 3;
-      yield* fs.writeFileString(artifactPath, `${JSON.stringify(legacyArtifact)}\n`);
 
       const runtime = yield* Effect.acquireRelease(
         createControlPlaneRuntime({
@@ -955,24 +927,25 @@ describe("control-plane-runtime", () => {
           },
         },
       });
-      yield* writeLocalWorkspaceState({
-        context,
-        state: {
-          version: 1,
-          sources: {
-            [sourceId]: {
-              status: source.status,
-              lastError: source.lastError,
-              sourceHash: source.sourceHash,
-              createdAt: source.createdAt,
-              updatedAt: source.updatedAt,
-            },
-          },
-          catalog: {
-            semanticSearchSignature: null,
-          },
-        },
-      });
+      // Write source status to SQLite so the runtime can find it
+      const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
+      const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+      yield* upsertSourceStatus({
+        sourceId,
+        workspaceId: source.workspaceId,
+        name: source.name,
+        kind: source.kind,
+        endpoint: source.endpoint,
+        status: source.status,
+        enabled: source.enabled,
+        namespace: source.namespace,
+        lastError: source.lastError,
+        sourceHash: source.sourceHash,
+        createdAt: source.createdAt,
+        updatedAt: source.updatedAt,
+      }).pipe(
+        Effect.provide(dbLayer),
+      );
 
       const runtime = yield* Effect.acquireRelease(
         createControlPlaneRuntime({
@@ -983,11 +956,10 @@ describe("control-plane-runtime", () => {
         (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
       );
 
-      const rebuiltArtifact = yield* readLocalSourceArtifact({
-        context,
-        sourceId,
-      }).pipe(Effect.provide(NodeFileSystem.layer));
-      expect(rebuiltArtifact).not.toBeNull();
+      const hasCatalog = yield* hasSourceCatalogData(sourceId).pipe(
+        Effect.provide(dbLayer),
+      );
+      expect(hasCatalog).toBe(true);
 
       const inspection = yield* withControlPlaneClient(
         { runtime, accountId: installation.accountId },
@@ -1158,7 +1130,7 @@ describe("control-plane-runtime", () => {
       }).pipe((effect) => provideControlPlaneRuntime(effect, runtime), Effect.orDie);
 
       const interactionFiber = yield* Effect.gen(function* () {
-        const liveExecutionManager = yield* LiveExecutionManagerService;
+        const liveExecutionManager = yield* ExecutionManager;
         const onElicitation = liveExecutionManager.createOnElicitation({
           rows: runtime.persistence.rows,
           executionId,

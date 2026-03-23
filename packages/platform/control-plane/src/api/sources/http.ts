@@ -26,7 +26,7 @@ import {
 import { discoverSource } from "../../runtime/sources/source-discovery";
 import { sourceAdapterRequiresInteractiveConnect } from "../../runtime/sources/source-adapters";
 import {
-  RuntimeSourceAuthServiceTag,
+  SourceAuthService,
   type ExecutorAddSourceInput,
 } from "../../runtime/sources/source-auth-service";
 
@@ -683,7 +683,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
           Effect.flatMap((runtimeLocalWorkspace) =>
             Effect.gen(function* () {
               const request = yield* HttpServerRequest.HttpServerRequest;
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               const baseUrl = resolveRequestOrigin(request);
 
 	              if (isInteractiveConnectPayload(payload)) {
@@ -727,7 +727,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
           Effect.flatMap((runtimeLocalWorkspace) =>
             Effect.gen(function* () {
               const request = yield* HttpServerRequest.HttpServerRequest;
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               const baseUrl = resolveRequestOrigin(request);
 
               return yield* sourceAuthService.connectGoogleDiscoveryBatch({
@@ -751,7 +751,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
         resolveRequestedLocalWorkspace("sources.listWorkspaceOauthClients", path.workspaceId).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               return yield* sourceAuthService.listWorkspaceOauthClients({
                 workspaceId: path.workspaceId,
                 providerKey: urlParams.providerKey,
@@ -768,7 +768,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
         resolveRequestedLocalWorkspace("sources.createWorkspaceOauthClient", path.workspaceId).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               return yield* sourceAuthService.createWorkspaceOauthClient({
                 workspaceId: path.workspaceId,
                 providerKey: payload.providerKey,
@@ -787,7 +787,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
         resolveRequestedLocalWorkspace("sources.removeWorkspaceOauthClient", path.workspaceId).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               const removed = yield* sourceAuthService.removeWorkspaceOauthClient({
                 workspaceId: path.workspaceId,
                 oauthClientId: path.oauthClientId,
@@ -806,7 +806,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
         resolveRequestedLocalWorkspace("sources.removeProviderAuthGrant", path.workspaceId).pipe(
           Effect.flatMap(() =>
             Effect.gen(function* () {
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               const removed = yield* sourceAuthService.removeProviderAuthGrant({
                 workspaceId: path.workspaceId,
                 grantId: path.grantId,
@@ -1062,7 +1062,7 @@ export const ControlPlaneSourcesLive = HttpApiBuilder.group(
         resolveRequestedLocalWorkspace("sources.providerOauthComplete", path.workspaceId).pipe(
           Effect.flatMap((runtimeLocalWorkspace) =>
             Effect.gen(function* () {
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               const completed = yield* sourceAuthService.completeProviderOauthCallback({
                 workspaceId: path.workspaceId,
                 actorAccountId: runtimeLocalWorkspace.installation.accountId,

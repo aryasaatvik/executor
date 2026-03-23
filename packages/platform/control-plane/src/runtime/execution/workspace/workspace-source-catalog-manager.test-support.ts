@@ -1,14 +1,11 @@
 import type { ToolCatalog } from "@executor/codemode-core";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 
-import {
-  WorkspaceSourceCatalogManagerService,
-} from "./environment";
+import type { makeWorkspaceSourceCatalogManager } from "./environment";
 import type { ManagedWorkspaceSourceCatalog } from "./source-catalog";
 
 type WorkspaceSourceCatalogManager =
-  Effect.Effect.Success<typeof WorkspaceSourceCatalogManagerService>;
+  Effect.Effect.Success<ReturnType<typeof makeWorkspaceSourceCatalogManager>>;
 
 type WorkspaceSourceCatalogManagerInput = Parameters<
   WorkspaceSourceCatalogManager["getOrRefresh"]
@@ -69,10 +66,6 @@ export const makeWorkspaceSourceCatalogManagerTestHandle = (input: {
   };
 
   return {
-    layer: Layer.succeed(
-      WorkspaceSourceCatalogManagerService,
-      workspaceSourceCatalogManager,
-    ),
     workspaceSourceCatalogManager,
     managedSourceCatalog,
     calls,

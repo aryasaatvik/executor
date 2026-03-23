@@ -11,6 +11,7 @@ import {
   clearWorkspaceExecutionCachesForTests,
   createWorkspaceExecutionEnvironmentResolver,
   loadConfiguredSemanticSearchEmbedder,
+  makeWorkspaceSourceCatalogManager,
 } from "./environment";
 import {
   makeWorkspaceSourceCatalogManagerTestHandle,
@@ -27,7 +28,6 @@ const makeWorkspaceToolInvokerFake = (sourceCatalog: unknown) => ({
 
 const makeResolverInput = (input?: {
   workspaceConfigStore?: unknown;
-  workspaceStateStore?: unknown;
   localToolRuntimeLoader?: unknown;
   dependencies?: Record<string, unknown>;
 }) => {
@@ -45,27 +45,15 @@ const makeResolverInput = (input?: {
     input?.workspaceConfigStore ?? {
       load: () => Effect.succeed({ config: null }),
     };
-  const workspaceStateStore =
-    input?.workspaceStateStore ?? {
-      load: () =>
-        Effect.succeed({
-          version: 1,
-          sources: {},
-          catalog: {
-            semanticSearchSignature: null,
-          },
-        }),
-    };
 
   return createWorkspaceExecutionEnvironmentResolver({
     resolveSecretMaterial: resolveSecretMaterialMock as never,
     sourceAuthMaterialService: {} as never,
     sourceAuthService: {} as never,
     sourceCatalogStore: {} as never,
+    sourceStore: {} as never,
     localToolRuntimeLoader: localToolRuntimeLoader as never,
     workspaceConfigStore: workspaceConfigStore as never,
-    workspaceStateStore: workspaceStateStore as never,
-    sourceArtifactStore: {} as never,
     dependencies: input?.dependencies as never,
   });
 };
@@ -268,24 +256,6 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     );
 
     const resolver = makeResolverInput({
-      workspaceStateStore: {
-        load: () =>
-          Effect.succeed({
-            version: 1,
-            sources: {
-              github: {
-                status: "connected",
-                lastError: null,
-                sourceHash: "hash-1",
-                createdAt: 1,
-                updatedAt: 2,
-              },
-            },
-            catalog: {
-              semanticSearchSignature: null,
-            },
-          }),
-      },
       dependencies: {
         getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
         loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
@@ -371,9 +341,6 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
     ];
 
     const resolver = makeResolverInput({
-      workspaceStateStore: {
-        load: vi.fn(() => Effect.succeed(workspaceStates.shift()!)),
-      },
       dependencies: {
         getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
         loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
@@ -416,26 +383,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
       makeWorkspaceToolInvokerFake(sourceCatalog),
     );
 
-    const workspaceState = {
-      version: 1,
-      sources: {
-        github: {
-          status: "connected",
-          lastError: null,
-          sourceHash: "hash-1",
-          createdAt: 1,
-          updatedAt: 2,
-        },
-      },
-      catalog: {
-        semanticSearchSignature: null,
-      },
-    };
-
     const resolver = makeResolverInput({
-      workspaceStateStore: {
-        load: () => Effect.succeed(workspaceState),
-      },
       dependencies: {
         getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
         loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
@@ -462,5 +410,45 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
 
     expect(workspaceSourceCatalogManagerTest.calls.getOrRefresh).toHaveLength(2);
     expect(managedSourceCatalog.calls.close).toBe(0);
+  });
+
+  it("reuses the cached managed source catalog when the workspace signature is unchanged", async () => {
+    const acquiredCatalog = makeWorkspaceSourceCatalogManagerTestHandle();
+    const indexWorkspaceToolsIntoSqliteMock = vi.fn(() => Effect.void);
+    const acquireWorkspaceSourceCatalogMock = vi.fn(() =>
+      Effect.succeed(acquiredCatalog.managedSourceCatalog)
+    );
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const manager = yield* makeWorkspaceSourceCatalogManager({
+            indexWorkspaceToolsIntoSqlite:
+              indexWorkspaceToolsIntoSqliteMock as never,
+            acquireWorkspaceSourceCatalog:
+              acquireWorkspaceSourceCatalogMock as never,
+          });
+
+          const input = {
+            workspaceId: "workspace-1" as never,
+            accountId: "account-1" as never,
+            runtimeLocalWorkspace: {
+              context: { stateDirectory: "/tmp/executor-tests" },
+            } as never,
+            sourceCatalogStore: {} as never,
+            workspaceConfigStore: {} as never,
+            embedder: undefined,
+          };
+
+          const first = yield* manager.getOrRefresh(input);
+          const second = yield* manager.getOrRefresh(input);
+
+          expect(first).toBe(second);
+        }),
+      ),
+    );
+
+    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(1);
+    expect(acquireWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
   });
 });

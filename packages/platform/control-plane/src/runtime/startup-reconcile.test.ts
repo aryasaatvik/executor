@@ -8,25 +8,36 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
-vi.mock("../db/client", () => {
-  const fakeSql = Object.assign(
-    (strings: TemplateStringsArray, ..._values: ReadonlyArray<unknown>) =>
+const makeFakeSql = () =>
+  Object.assign(
+    (_strings: TemplateStringsArray, ..._values: ReadonlyArray<unknown>) =>
       Effect.void,
     {
-      unsafe: () => Effect.succeed([]),
+      unsafe: (..._args: unknown[]) => Effect.succeed([]),
       withTransaction: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect,
     },
   );
 
-  return {
-    makeDatabaseLive: () =>
-      Layer.mergeAll(
-        Layer.succeed(SqlClient.SqlClient, fakeSql as never),
-        Layer.succeed(SqliteDrizzle, {} as never),
-      ),
-    loadSqliteVecExtension: Effect.succeed(false),
-  };
-});
+const makeFakeDbLayer = () =>
+  Layer.mergeAll(
+    Layer.succeed(SqlClient.SqlClient, makeFakeSql() as never),
+    Layer.succeed(SqliteDrizzle, {} as never),
+  );
+
+vi.mock("../db/client", () => ({
+  makeDatabaseLive: () => makeFakeDbLayer(),
+  loadSqliteVecExtension: Effect.succeed(false),
+}));
+
+vi.mock("../db/setup", () => ({
+  makeWorkspaceCatalogDbLayer: () => makeFakeDbLayer(),
+  makeWorkspaceCatalogQueryDbLayer: () => makeFakeDbLayer(),
+}));
+
+vi.mock("./catalog/source/reconcile", () => ({
+  reconcileMissingSourceCatalogArtifacts: () =>
+    Effect.fail(new Error("reconcile failed")),
+}));
 
 import { createControlPlaneRuntime } from "./index";
 
@@ -45,10 +56,6 @@ describe("control-plane runtime startup", () => {
           workspaceRoot,
           homeConfigPath,
           homeStateDirectory,
-          dependencies: {
-            reconcileMissingSourceCatalogArtifacts: () =>
-              Effect.fail(new Error("reconcile failed")),
-          },
         }),
       );
 

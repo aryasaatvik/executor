@@ -22,13 +22,13 @@ export type RuntimeLocalWorkspaceState = {
   loadedConfig: LoadedLocalExecutorConfig;
 };
 
-export class RuntimeLocalWorkspaceService extends Context.Tag(
-  "#runtime/RuntimeLocalWorkspaceService",
-)<RuntimeLocalWorkspaceService, RuntimeLocalWorkspaceState>() {}
+export class RuntimeLocalWorkspace extends Context.Tag(
+  "#runtime/RuntimeLocalWorkspace",
+)<RuntimeLocalWorkspace, RuntimeLocalWorkspaceState>() {}
 
 export const RuntimeLocalWorkspaceLive = (
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState,
-) => Layer.succeed(RuntimeLocalWorkspaceService, runtimeLocalWorkspace);
+) => Layer.succeed(RuntimeLocalWorkspace, runtimeLocalWorkspace);
 
 export const provideOptionalRuntimeLocalWorkspace = <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -40,7 +40,7 @@ export const provideOptionalRuntimeLocalWorkspace = <A, E, R>(
 
 export const getRuntimeLocalWorkspaceOption = () =>
   Effect.contextWith((context) =>
-    Context.getOption(context, RuntimeLocalWorkspaceService),
+    Context.getOption(context, RuntimeLocalWorkspace),
   ).pipe(
     Effect.map((option) => (Option.isSome(option) ? option.value : null)),
   ) as Effect.Effect<RuntimeLocalWorkspaceState | null, never, never>;

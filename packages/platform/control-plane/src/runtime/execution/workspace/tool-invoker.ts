@@ -9,18 +9,18 @@ import {
 } from "@executor/codemode-core";
 import type { AccountId, Source } from "#schema";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { SourceStore } from "../../sources/source-store";
 
-import { RuntimeSourceAuthMaterialService } from "../../auth/source-auth-material";
-import { RuntimeSourceCatalogStoreService } from "../../catalog/source/runtime";
+import { SourceAuthMaterial } from "../../auth/source-auth-material";
+import { SourceCatalogStore } from "../../catalog/source/runtime";
 import type { RuntimeLocalWorkspaceState } from "../../local/runtime-context";
 import {
   type LocalToolRuntime,
 } from "../../local/tools";
 import {
-  makeWorkspaceStorageLayer,
-  type SourceArtifactStoreShape,
+  WorkspaceConfigStore as WorkspaceConfigStoreTag,
   type WorkspaceConfigStoreShape,
-  type WorkspaceStateStoreShape,
 } from "../../local/storage";
 import {
   RuntimeSourceAuthService,
@@ -35,18 +35,18 @@ import {
 import { provideRuntimeLocalWorkspace } from "./local";
 import {
   loadWorkspaceCatalogToolByPath,
+  loadWorkspaceCatalogToolByPathFromDb,
 } from "./source-catalog";
 import { runtimeEffectError } from "../../effect-errors";
 
 export const createWorkspaceToolInvoker = (input: {
   workspaceId: Source["workspaceId"];
   accountId: AccountId;
-  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  sourceCatalogStore: Effect.Effect.Success<typeof SourceCatalogStore>;
+  sourceStore: Effect.Effect.Success<typeof SourceStore>;
   sourceCatalog: ToolCatalog;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
-  sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
+  sourceAuthMaterialService: Effect.Effect.Success<typeof SourceAuthMaterial>;
   sourceAuthService: RuntimeSourceAuthService;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;
@@ -58,13 +58,12 @@ export const createWorkspaceToolInvoker = (input: {
   catalog: ToolCatalog;
   toolInvoker: ToolInvoker;
 } => {
-  const workspaceStorageLayer = makeWorkspaceStorageLayer({
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-  });
+  const workspaceConfigLayer = Layer.succeed(
+    WorkspaceConfigStoreTag,
+    input.workspaceConfigStore,
+  );
   const provideWorkspaceStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(Effect.provide(workspaceStorageLayer));
+    effect.pipe(Effect.provide(workspaceConfigLayer));
 
   const executorTools = createExecutorToolMap({
     workspaceId: input.workspaceId,
@@ -106,13 +105,22 @@ export const createWorkspaceToolInvoker = (input: {
   }) =>
     provideRuntimeLocalWorkspace(
       provideWorkspaceStorage(Effect.gen(function* () {
-        const catalogTool = yield* loadWorkspaceCatalogToolByPath({
-          workspaceId: input.workspaceId,
-          accountId: input.accountId,
-          sourceCatalogStore: input.sourceCatalogStore,
-          path: invocation.path,
-          includeSchemas: false,
-        });
+        // Prefer DB-backed loading when a local workspace is available
+        const catalogTool = input.runtimeLocalWorkspace
+          ? yield* loadWorkspaceCatalogToolByPathFromDb({
+              workspaceId: input.workspaceId,
+              accountId: input.accountId,
+              path: invocation.path,
+              runtimeLocalWorkspace: input.runtimeLocalWorkspace,
+              sourceStore: input.sourceStore,
+            })
+          : yield* loadWorkspaceCatalogToolByPath({
+              workspaceId: input.workspaceId,
+              accountId: input.accountId,
+              sourceCatalogStore: input.sourceCatalogStore,
+              path: invocation.path,
+              includeSchemas: false,
+            });
         if (!catalogTool) {
           return yield* runtimeEffectError("execution/workspace/tool-invoker", `Unknown tool path: ${invocation.path}`);
         }
@@ -152,7 +160,7 @@ export const createWorkspaceToolInvoker = (input: {
             ? authoredInvoker.invoke({ path, args, context })
             : invokePersistedTool({ path, args, context }),
           input.runtimeLocalWorkspace,
-        ),
+        ) as Effect.Effect<unknown, unknown, never>,
     },
   };
 };

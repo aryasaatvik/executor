@@ -69,8 +69,6 @@ describe("createWorkspaceSourceCatalog", () => {
         loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
       } as never,
       workspaceConfigStore: {} as never,
-      workspaceStateStore: {} as never,
-      sourceArtifactStore: {} as never,
       runtimeLocalWorkspace: null,
     });
 
@@ -88,8 +86,6 @@ describe("createWorkspaceSourceCatalog", () => {
         loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
       } as never,
       workspaceConfigStore: {} as never,
-      workspaceStateStore: {} as never,
-      sourceArtifactStore: {} as never,
       runtimeLocalWorkspace: {
         context: {
           stateDirectory: "/tmp/executor-tests",
@@ -153,8 +149,6 @@ describe("createWorkspaceSourceCatalog", () => {
         loadWorkspaceSourceCatalogToolByPath: () => Effect.succeed(null),
       } as never,
       workspaceConfigStore: {} as never,
-      workspaceStateStore: {} as never,
-      sourceArtifactStore: {} as never,
       runtimeLocalWorkspace: {
         context: {
           stateDirectory: "/tmp/executor-tests",
@@ -182,7 +176,6 @@ describe("createWorkspaceSourceCatalog", () => {
   it("re-embeds all tools when the semantic-search signature changes", async () => {
     const indexSourceMock = vi.fn(() => Effect.succeed({ changedTools: [] }));
     const embedSourceToolsMock = vi.fn(() => Effect.void);
-    const write = vi.fn(() => Effect.void);
     const tools = [
       makeTool({
         path: "github.issues.create",
@@ -194,6 +187,18 @@ describe("createWorkspaceSourceCatalog", () => {
       selectDistinct: () => ({
         from: () => Effect.succeed([]),
       }),
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Effect.succeed([]),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: () => Effect.succeed(undefined),
+        }),
+      }),
     };
 
     const result = await Effect.runPromise(
@@ -204,18 +209,6 @@ describe("createWorkspaceSourceCatalog", () => {
           loadWorkspaceSourceCatalogToolIndex: () => Effect.succeed(tools),
         } as never,
         workspaceConfigStore: {} as never,
-        workspaceStateStore: {
-          load: () =>
-            Effect.succeed({
-              version: 1,
-              sources: {},
-              catalog: {
-                semanticSearchSignature: "old-signature",
-              },
-            }),
-          write,
-        } as never,
-        sourceArtifactStore: {} as never,
         runtimeLocalWorkspace: {
           context: {
             stateDirectory: "/tmp/executor-tests",
@@ -240,14 +233,6 @@ describe("createWorkspaceSourceCatalog", () => {
     expect(indexSourceMock).toHaveBeenCalledTimes(1);
     expect(embedSourceToolsMock).toHaveBeenCalledTimes(1);
     expect(embedSourceToolsMock.mock.calls[0]?.[0]?.tools).toHaveLength(1);
-    expect(write).toHaveBeenCalledOnce();
-    expect(write.mock.calls[0]?.[0]?.state.catalog.semanticSearchSignature).toBe(
-      JSON.stringify({
-        provider: "openai",
-        model: "text-embedding-3-small",
-        dimensions: 1536,
-      }),
-    );
   });
 
   it("keeps disconnected sources indexed instead of purging them", async () => {
@@ -284,6 +269,18 @@ describe("createWorkspaceSourceCatalog", () => {
             },
           ]),
       }),
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: () => Effect.succeed([]),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
+          onConflictDoUpdate: () => Effect.succeed(undefined),
+        }),
+      }),
     };
 
     await Effect.runPromise(
@@ -295,18 +292,6 @@ describe("createWorkspaceSourceCatalog", () => {
             Effect.succeed([connectedTool, disconnectedTool]),
         } as never,
         workspaceConfigStore: {} as never,
-        workspaceStateStore: {
-          load: () =>
-            Effect.succeed({
-              version: 1,
-              sources: {},
-              catalog: {
-                semanticSearchSignature: null,
-              },
-            }),
-          write: vi.fn(() => Effect.void),
-        } as never,
-        sourceArtifactStore: {} as never,
         runtimeLocalWorkspace: {
           context: {
             stateDirectory: "/tmp/executor-tests",

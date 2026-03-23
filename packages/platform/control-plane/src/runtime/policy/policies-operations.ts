@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 import { and, asc, eq } from "drizzle-orm";
 import * as Effect from "effect/Effect";
@@ -8,7 +7,6 @@ import type {
   CreatePolicyPayload,
   UpdatePolicyPayload,
 } from "../../api/policies/api";
-import { makeWorkspaceCatalogDbLayer } from "../../db/setup";
 import { policy } from "../../db/schema";
 import {
   ControlPlaneBadRequestError,
@@ -17,12 +15,12 @@ import {
 } from "../../api/errors";
 import { PolicyIdSchema, type LocalWorkspacePolicy, type PolicyId, type WorkspaceId } from "#schema";
 import { requireRuntimeLocalWorkspace } from "../local/runtime-context";
+import { WorkspaceDatabase } from "../local/workspace-database";
 import {
   type OperationErrors,
   operationErrors,
 } from "./operation-errors";
 
-const WORKSPACE_DB_FILENAME = "catalog.db";
 
 const policyOps = {
   list: operationErrors("policies.list"),
@@ -36,9 +34,6 @@ const defaultPolicyResourcePattern = "*";
 const defaultPolicyEffect = "allow" as const;
 const defaultPolicyApprovalMode = "auto" as const;
 const defaultPolicyPriority = 0;
-
-const policyDbPath = (stateDirectory: string): string =>
-  join(stateDirectory, WORKSPACE_DB_FILENAME);
 
 const basePolicySlug = (input: {
   resourcePattern: string;
@@ -101,17 +96,16 @@ const withWorkspacePolicyDb = <A, E>(
   },
 ) =>
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* loadWorkspacePolicyContext(
+    yield* loadWorkspacePolicyContext(
       input.operation,
       input.workspaceId,
     );
-    const dbPath = policyDbPath(runtimeLocalWorkspace.context.stateDirectory);
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
-    return yield* Effect.gen(function* () {
+    return yield* workspaceDatabase.provideWrite(Effect.gen(function* () {
       const db = yield* SqliteDrizzle;
       return yield* input.run(db);
-    }).pipe(
-      Effect.provide(makeWorkspaceCatalogDbLayer(dbPath)),
+    })).pipe(
       Effect.mapError((cause) =>
         isHandledPolicyError(cause)
           ? cause

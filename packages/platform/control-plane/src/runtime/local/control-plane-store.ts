@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../../db/client.js"
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { FileSystem } from "@effect/platform";
@@ -31,7 +32,6 @@ import {
 import { makeWorkspaceCatalogDbLayer } from "../../db/setup";
 import type { ResolvedLocalWorkspaceContext } from "./config";
 import { deriveLocalInstallation } from "./installation";
-import { localWorkspaceStatePath } from "./workspace-state";
 import {
   LocalFileSystemError,
   unknownLocalErrorDetails,
@@ -64,7 +64,6 @@ import {
 
 const LOCAL_CONTROL_PLANE_STATE_VERSION = 1 as const;
 const LOCAL_CONTROL_PLANE_STATE_BASENAME = "control-plane-state.json";
-const WORKSPACE_DB_FILENAME = "catalog.db";
 
 const LocalControlPlaneStateSchema = Schema.Struct({
   version: Schema.Literal(LOCAL_CONTROL_PLANE_STATE_VERSION),
@@ -133,13 +132,7 @@ const localControlPlaneStatePath = (
   );
 
 const workspaceDbPath = (context: ResolvedLocalWorkspaceContext): string =>
-  join(context.stateDirectory, WORKSPACE_DB_FILENAME);
-
-const bindFileSystem = <A, E>(
-  fileSystem: FileSystem.FileSystem,
-  effect: Effect.Effect<A, E, FileSystem.FileSystem>,
-): Effect.Effect<A, E, never> =>
-  effect.pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+  join(context.stateDirectory, EXECUTOR_DB_FILENAME);
 
 const bindNodeFileSystem = <A, E>(
   effect: Effect.Effect<A, E, FileSystem.FileSystem>,
@@ -309,28 +302,6 @@ const toExecutionStep = (
   argsJson: jsonString(row.argsJson),
   resultJson: jsonStringOrNull(row.resultJson),
 }) as ExecutionStep;
-
-const removeLegacyControlPlaneState = (
-  context: ResolvedLocalWorkspaceContext,
-  fileSystem: FileSystem.FileSystem,
-) =>
-  bindFileSystem(
-    fileSystem,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = localControlPlaneStatePath(context);
-      const exists = yield* fs.exists(path).pipe(
-        Effect.mapError(mapFileSystemError(path, "check control plane state path")),
-      );
-      if (!exists) {
-        return;
-      }
-
-      yield* fs.remove(path, { force: true }).pipe(
-        Effect.mapError(mapFileSystemError(path, "remove legacy control plane state")),
-      );
-    }),
-  );
 
 const createSqliteControlPlaneStore = (
   runtime: ManagedRuntime.ManagedRuntime<any, any>,
@@ -1521,14 +1492,15 @@ export type LocalControlPlaneStore = ReturnType<typeof createSqliteControlPlaneS
 
 export const createLocalControlPlanePersistence = (
   context: ResolvedLocalWorkspaceContext,
-  fileSystem: FileSystem.FileSystem,
 ): Effect.Effect<LocalControlPlanePersistence, Error> =>
   Effect.gen(function* () {
     const runtime = ManagedRuntime.make(
       makeWorkspaceCatalogDbLayer(workspaceDbPath(context), {
         jsonPaths: {
           controlPlaneStatePath: localControlPlaneStatePath(context),
-          workspaceStatePath: localWorkspaceStatePath(context),
+          workspaceStatePath: join(context.stateDirectory, "workspace-state.json"),
+          artifactsDirectory: context.artifactsDirectory,
+          workspaceId: deriveLocalInstallation(context).workspaceId,
         },
       }),
     );
@@ -1536,10 +1508,10 @@ export const createLocalControlPlanePersistence = (
     yield* Effect.tryPromise({
       try: () => runtime.runPromise(SqlClient.SqlClient.pipe(Effect.asVoid)),
       catch: toError,
-    });
-
-    yield* removeLegacyControlPlaneState(context, fileSystem).pipe(
-      Effect.mapError(toError),
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.promise(() => runtime.dispose()).pipe(Effect.ignore),
+      ),
     );
 
     return {

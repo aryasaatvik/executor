@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../../db/client.js"
 import { dirname, join, resolve } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
@@ -18,7 +19,6 @@ import {
   releaseWorkspaceFixturesRoot,
   type ReleaseWorkspaceFixtureManifest,
 } from "./release-upgrade-fixtures";
-import { loadLocalWorkspaceState } from "./workspace-state";
 
 class CaptureReleaseWorkspaceFixtureError extends Data.TaggedError(
   "CaptureReleaseWorkspaceFixtureError",
@@ -243,33 +243,13 @@ const main = Effect.gen(function* () {
     );
   }
 
-  const workspaceState = yield* loadLocalWorkspaceState(context).pipe(
-    Effect.mapError((cause) =>
-      fail(
-        `Failed to load workspace state for ${workspaceRoot}: ${cause.message}`,
-      ),
-    ),
+  const catalogDbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
+  const catalogDbExists = yield* fs.exists(catalogDbPath).pipe(
+    Effect.mapError(mapFileSystemError(catalogDbPath, "check catalog database")),
   );
-  const sourceState = workspaceState.sources[args.sourceId];
-  if (!sourceState) {
+  if (!catalogDbExists) {
     return yield* Effect.fail(
-      fail(
-      `Source ${args.sourceId} was not found in ${context.stateDirectory}/workspace-state.json`,
-      ),
-    );
-  }
-
-  const sourceArtifactPath = join(
-    context.artifactsDirectory,
-    "sources",
-    `${args.sourceId}.json`,
-  );
-  const artifactExists = yield* fs.exists(sourceArtifactPath).pipe(
-    Effect.mapError(mapFileSystemError(sourceArtifactPath, "check source artifact")),
-  );
-  if (!artifactExists) {
-    return yield* Effect.fail(
-      fail(`Source artifact not found at ${sourceArtifactPath}`),
+      fail(`Catalog database not found at ${catalogDbPath}`),
     );
   }
 
@@ -309,16 +289,6 @@ const main = Effect.gen(function* () {
     },
   } satisfies LocalExecutorConfig;
 
-  const fixtureState = {
-    version: 1 as const,
-    sources: {
-      [args.sourceId]: sourceState,
-    },
-    catalog: {
-      semanticSearchSignature: null,
-    },
-  };
-
   const manifest = ReleaseWorkspaceFixtureManifestSchema.make({
     schemaVersion: 1,
     kind: "release-workspace",
@@ -349,25 +319,10 @@ const main = Effect.gen(function* () {
   ).pipe(
     Effect.mapError(mapFileSystemError(join(outputDirectory, ".executor", "executor.jsonc"), "write fixture config")),
   );
-  yield* fs.writeFileString(
-    join(outputDirectory, ".executor", "state", "workspace-state.json"),
-    `${JSON.stringify(fixtureState, null, 2)}\n`,
-  ).pipe(
-    Effect.mapError(
-      mapFileSystemError(
-        join(outputDirectory, ".executor", "state", "workspace-state.json"),
-        "write fixture workspace state",
-      ),
-    ),
-  );
 
   yield* copyRecursive(
-    sourceArtifactPath,
-    join(outputDirectory, ".executor", "artifacts", "sources", `${args.sourceId}.json`),
-  );
-  yield* copyRecursive(
-    join(context.artifactsDirectory, "sources", args.sourceId),
-    join(outputDirectory, ".executor", "artifacts", "sources", args.sourceId),
+    catalogDbPath,
+    join(outputDirectory, ".executor", "state", EXECUTOR_DB_FILENAME),
   );
 
   console.log(`Captured release workspace fixture at ${outputDirectory}`);

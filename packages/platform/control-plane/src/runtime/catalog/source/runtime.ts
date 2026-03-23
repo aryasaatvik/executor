@@ -5,6 +5,8 @@ import {
 import type {
   AccountId,
   Source,
+  SourceId,
+  SourceCatalogRevisionId,
   StoredSourceRecord,
   StoredSourceCatalogRevisionRecord,
   WorkspaceId,
@@ -13,9 +15,16 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Match from "effect/Match";
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
+import { eq } from "drizzle-orm";
+import {
+  catalog_tool,
+  catalog_revision,
+  catalog_document,
+  source as sourceTable,
+} from "../../../db/schema";
 
 import {
-  decodeCatalogSnapshotV1,
   projectCatalogForAgentSdk,
   type ProjectedCatalog,
 } from "@executor/ir/catalog";
@@ -38,16 +47,12 @@ import {
 } from "../catalog-typescript";
 import { formatWithPrettier } from "../prettier-format";
 import {
-  RuntimeLocalWorkspaceService,
+  RuntimeLocalWorkspace,
   type RuntimeLocalWorkspaceState,
 } from "../../local/runtime-context";
-import type { LocalSourceArtifact } from "../../local/source-artifacts";
+import { WorkspaceDatabase } from "../../local/workspace-database";
 import {
-  SourceArtifactStore,
-  type SourceArtifactStoreShape,
-} from "../../local/storage";
-import {
-  RuntimeSourceStoreService,
+  SourceStore,
   type RuntimeSourceStore,
 } from "../../sources/source-store";
 import { runtimeEffectError } from "../../effect-errors";
@@ -636,32 +641,6 @@ const loadedCatalogToolFromCapability = (input: {
   } satisfies LoadedSourceCatalogTool;
 };
 
-const sourceRecordFromCatalogArtifact = (input: {
-  source: Source;
-  artifact: {
-    catalogId: StoredSourceRecord["catalogId"];
-    revision: StoredSourceCatalogRevisionRecord;
-  };
-}): StoredSourceRecord => ({
-  id: input.source.id,
-  workspaceId: input.source.workspaceId,
-  catalogId: input.artifact.catalogId,
-  catalogRevisionId: input.artifact.revision.id,
-  name: input.source.name,
-  kind: input.source.kind,
-  endpoint: input.source.endpoint,
-  status: input.source.status,
-  enabled: input.source.enabled,
-  namespace: input.source.namespace,
-  iconUrl: input.source.iconUrl,
-  importAuthPolicy: input.source.importAuthPolicy,
-  bindingConfigJson: JSON.stringify(input.source.binding),
-  sourceHash: input.source.sourceHash,
-  lastError: input.source.lastError,
-  createdAt: input.source.createdAt,
-  updatedAt: input.source.updatedAt,
-});
-
 type RuntimeSourceCatalogStoreShape = {
   loadWorkspaceSourceCatalogs: (input: {
     workspaceId: WorkspaceId;
@@ -687,20 +666,21 @@ type RuntimeSourceCatalogStoreShape = {
 
 export type RuntimeSourceCatalogStore = RuntimeSourceCatalogStoreShape;
 
-export class RuntimeSourceCatalogStoreService extends Context.Tag(
-  "#runtime/RuntimeSourceCatalogStoreService",
-)<RuntimeSourceCatalogStoreService, RuntimeSourceCatalogStoreShape>() {}
+export class SourceCatalogStore extends Context.Tag(
+  "#runtime/SourceCatalogStore",
+)<SourceCatalogStore, RuntimeSourceCatalogStoreShape>() {}
+
 
 type RuntimeSourceCatalogStoreDeps = {
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   sourceStore: RuntimeSourceStore;
-  sourceArtifactStore: SourceArtifactStoreShape;
+  workspaceDatabase: Effect.Effect.Success<typeof WorkspaceDatabase>;
 };
 
 type SourceCatalogRuntimeServices =
-  | RuntimeLocalWorkspaceService
-  | RuntimeSourceStoreService
-  | SourceArtifactStore;
+  | RuntimeLocalWorkspace
+  | SourceStore
+  | WorkspaceDatabase;
 
 const ensureRuntimeCatalogWorkspace = (
   deps: RuntimeSourceCatalogStoreDeps,
@@ -708,7 +688,7 @@ const ensureRuntimeCatalogWorkspace = (
 ) => {
   if (deps.runtimeLocalWorkspace.installation.workspaceId !== workspaceId) {
     return Effect.fail(
-      runtimeEffectError("catalog/source/runtime", 
+      runtimeEffectError("catalog/source/runtime",
         `Runtime local workspace mismatch: expected ${workspaceId}, got ${deps.runtimeLocalWorkspace.installation.workspaceId}`,
       ),
     );
@@ -717,65 +697,27 @@ const ensureRuntimeCatalogWorkspace = (
   return Effect.succeed(deps.runtimeLocalWorkspace.context);
 };
 
-const buildSnapshotFromArtifact = (input: {
-  source: Source;
-  artifact: LocalSourceArtifact;
-}): CatalogSnapshotV1 => {
-  return decodeCatalogSnapshotV1(input.artifact.snapshot);
-};
-
 const loadWorkspaceSourceCatalogsWithDeps = (deps: RuntimeSourceCatalogStoreDeps, input: {
   workspaceId: WorkspaceId;
   actorAccountId?: AccountId | null;
 }): Effect.Effect<readonly LoadedSourceCatalog[], Error, never> =>
   Effect.gen(function* () {
-    const workspaceContext = yield* ensureRuntimeCatalogWorkspace(
-      deps,
-      input.workspaceId,
-    );
+    yield* ensureRuntimeCatalogWorkspace(deps, input.workspaceId);
     const sources = yield* deps.sourceStore.loadSourcesInWorkspace(
       input.workspaceId,
-      {
-        actorAccountId: input.actorAccountId,
-      },
+      { actorAccountId: input.actorAccountId },
     );
 
     const localCatalogs = yield* Effect.forEach(sources, (source) =>
-      Effect.gen(function* () {
-        const artifact = yield* deps.sourceArtifactStore.read({
-          context: workspaceContext,
-          sourceId: source.id,
-        });
-        if (artifact === null) {
-          return null;
-        }
-
-        const snapshot = buildSnapshotFromArtifact({
-          source,
-          artifact,
-        });
-        const projected = projectCatalogForAgentSdk({
-          catalog: snapshot.catalog,
-        });
-        const typeProjector = projectorForProjectedCatalog(projected);
-
-        return {
-          source,
-          sourceRecord: sourceRecordFromCatalogArtifact({
-            source,
-            artifact,
-          }),
-          revision: artifact.revision,
-          snapshot,
-          catalog: snapshot.catalog,
-          projected,
-          typeProjector,
-          importMetadata: snapshot.import,
-        } satisfies LoadedSourceCatalog;
-      }),
+      loadSourceWithCatalogFromDb({ sourceId: source.id }).pipe(
+        Effect.provide(deps.workspaceDatabase.queryLayer()),
+        Effect.provideService(SourceStore, deps.sourceStore),
+        Effect.map((catalog) => catalog as LoadedSourceCatalog | null),
+        Effect.catchAll(() => Effect.succeed(null as LoadedSourceCatalog | null)),
+      ),
     );
 
-    return localCatalogs.filter((catalogEntry): catalogEntry is LoadedSourceCatalog => catalogEntry !== null);
+    return localCatalogs.filter((entry): entry is LoadedSourceCatalog => entry !== null);
   });
 
 const loadSourceWithCatalogWithDeps = (deps: RuntimeSourceCatalogStoreDeps, input: {
@@ -784,48 +726,13 @@ const loadSourceWithCatalogWithDeps = (deps: RuntimeSourceCatalogStoreDeps, inpu
   actorAccountId?: AccountId | null;
 }): Effect.Effect<LoadedSourceCatalog, Error | LocalSourceArtifactMissingError, never> =>
   Effect.gen(function* () {
-    const workspaceContext = yield* ensureRuntimeCatalogWorkspace(
-      deps,
-      input.workspaceId,
+    yield* ensureRuntimeCatalogWorkspace(deps, input.workspaceId);
+
+    return yield* loadSourceWithCatalogFromDb({ sourceId: input.sourceId as SourceId }).pipe(
+      Effect.provide(deps.workspaceDatabase.queryLayer()),
+      Effect.provideService(SourceStore, deps.sourceStore),
+      Effect.mapError((e) => e instanceof Error ? e : new Error(String(e))),
     );
-    const source = yield* deps.sourceStore.loadSourceById({
-      workspaceId: input.workspaceId,
-      sourceId: input.sourceId,
-      actorAccountId: input.actorAccountId,
-    });
-    const artifact = yield* deps.sourceArtifactStore.read({
-      context: workspaceContext,
-      sourceId: source.id,
-    });
-    if (artifact === null) {
-      return yield* new LocalSourceArtifactMissingError({
-          message: `Catalog artifact missing for source ${input.sourceId}`,
-          sourceId: input.sourceId,
-        });
-    }
-
-    const snapshot = buildSnapshotFromArtifact({
-      source,
-      artifact,
-    });
-    const projected = projectCatalogForAgentSdk({
-      catalog: snapshot.catalog,
-    });
-    const typeProjector = projectorForProjectedCatalog(projected);
-
-    return {
-      source,
-      sourceRecord: sourceRecordFromCatalogArtifact({
-        source,
-        artifact,
-      }),
-      revision: artifact.revision,
-      snapshot,
-      catalog: snapshot.catalog,
-      projected,
-      typeProjector,
-      importMetadata: snapshot.import,
-    } satisfies LoadedSourceCatalog;
   });
 
 export const loadWorkspaceSourceCatalogs = (input: {
@@ -833,16 +740,12 @@ export const loadWorkspaceSourceCatalogs = (input: {
   actorAccountId?: AccountId | null;
 }): Effect.Effect<readonly LoadedSourceCatalog[], Error, SourceCatalogRuntimeServices> =>
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
-    const sourceArtifactStore = yield* SourceArtifactStore;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     return yield* loadWorkspaceSourceCatalogsWithDeps(
-      {
-        runtimeLocalWorkspace,
-        sourceStore,
-        sourceArtifactStore,
-      },
+      { runtimeLocalWorkspace, sourceStore, workspaceDatabase },
       input,
     );
   });
@@ -857,18 +760,205 @@ export const loadSourceWithCatalog = (input: {
   SourceCatalogRuntimeServices
 > =>
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
-    const sourceArtifactStore = yield* SourceArtifactStore;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     return yield* loadSourceWithCatalogWithDeps(
-      {
-        runtimeLocalWorkspace,
-        sourceStore,
-        sourceArtifactStore,
-      },
+      { runtimeLocalWorkspace, sourceStore, workspaceDatabase },
       input,
     );
+  });
+
+// ---------------------------------------------------------------------------
+// DB-backed catalog loading (reads from SQLite instead of file artifacts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reconstruct a LoadedSourceCatalog from SQLite tables.
+ *
+ * Reads catalog_tool (capability_json, executable_json), catalog_revision
+ * (snapshot_json), and catalog_document to rebuild a full CatalogV1 and its
+ * projection — the same shape that the file-based path produces.
+ */
+export const loadSourceWithCatalogFromDb = (input: {
+  sourceId: SourceId;
+}): Effect.Effect<
+  LoadedSourceCatalog,
+  Error | LocalSourceArtifactMissingError,
+  SqliteDrizzle | SourceStore
+> =>
+  Effect.gen(function* () {
+    const db = yield* SqliteDrizzle;
+    const sourceStore = yield* SourceStore;
+
+    // 1. Load the source row from the source store
+    //    (We need the workspaceId — look it up via the DB source table.)
+    const sourceRows = yield* db
+      .select()
+      .from(sourceTable)
+      .where(eq(sourceTable.id, input.sourceId))
+      .limit(1);
+    if (sourceRows.length === 0) {
+      return yield* new LocalSourceArtifactMissingError({
+        message: `Source not found in DB: ${input.sourceId}`,
+        sourceId: input.sourceId,
+      });
+    }
+    const sourceRow = sourceRows[0];
+    const source = yield* sourceStore.loadSourceById({
+      workspaceId: sourceRow.workspaceId,
+      sourceId: input.sourceId,
+    });
+
+    // 2. Find the latest catalog_revision for this source's catalog
+    const catalogId = sourceRow.catalogId;
+    const revisionId = sourceRow.catalogRevisionId;
+    if (!catalogId || !revisionId) {
+      return yield* new LocalSourceArtifactMissingError({
+        message: `Source ${input.sourceId} has no catalog revision in DB`,
+        sourceId: input.sourceId,
+      });
+    }
+
+    const revisionRows = yield* db
+      .select()
+      .from(catalog_revision)
+      .where(eq(catalog_revision.id, revisionId as SourceCatalogRevisionId))
+      .limit(1);
+    if (revisionRows.length === 0 || !revisionRows[0].snapshotJson) {
+      return yield* new LocalSourceArtifactMissingError({
+        message: `Catalog revision ${String(revisionId)} not found or has no snapshot_json`,
+        sourceId: input.sourceId,
+      });
+    }
+    const revisionRow = revisionRows[0];
+
+    // 3. Parse snapshot_json — contains symbols, scopes, responseSets, resources, diagnostics
+    const rawSnapshotJson = revisionRow.snapshotJson!;
+    const snapshotPartial = (typeof rawSnapshotJson === "string"
+      ? JSON.parse(rawSnapshotJson)
+      : rawSnapshotJson) as Record<string, unknown>;
+
+    // 4. Load all catalog_tool rows for this source
+    const toolRows = yield* db
+      .select()
+      .from(catalog_tool)
+      .where(eq(catalog_tool.sourceId, input.sourceId));
+
+    // 5. Reconstruct capabilities and executables from tool rows
+    const capabilities: Record<string, Capability> = {};
+    const executables: Record<string, Executable> = {};
+    for (const row of toolRows) {
+      if (row.capabilityJson) {
+        const capability = (typeof row.capabilityJson === "string"
+          ? JSON.parse(row.capabilityJson)
+          : row.capabilityJson) as Capability;
+        capabilities[capability.id] = capability;
+      }
+      if (row.executableJson) {
+        const executable = (typeof row.executableJson === "string"
+          ? JSON.parse(row.executableJson)
+          : row.executableJson) as Executable;
+        executables[executable.id] = executable;
+      }
+    }
+
+    // 6. Load documents from catalog_document
+    const docRows = yield* db
+      .select()
+      .from(catalog_document)
+      .where(eq(catalog_document.revisionId, revisionId as SourceCatalogRevisionId));
+
+    const documents: Record<string, unknown> = {};
+    for (const doc of docRows) {
+      try {
+        documents[doc.documentId] = JSON.parse(doc.content);
+      } catch {
+        documents[doc.documentId] = { content: doc.content };
+      }
+    }
+
+    // 7. Assemble the full CatalogV1
+    const catalogV1: CatalogV1 = {
+      version: "ir.v1",
+      documents: documents as CatalogV1["documents"],
+      resources: (snapshotPartial.resources ?? {}) as CatalogV1["resources"],
+      scopes: (snapshotPartial.scopes ?? {}) as CatalogV1["scopes"],
+      symbols: (snapshotPartial.symbols ?? {}) as CatalogV1["symbols"],
+      capabilities: capabilities as CatalogV1["capabilities"],
+      executables: executables as CatalogV1["executables"],
+      responseSets: (snapshotPartial.responseSets ?? {}) as CatalogV1["responseSets"],
+      diagnostics: (snapshotPartial.diagnostics ?? {}) as CatalogV1["diagnostics"],
+    };
+
+    // 8. Project the catalog (same as the file-based path)
+    const projected = projectCatalogForAgentSdk({ catalog: catalogV1 });
+    const typeProjector = projectorForProjectedCatalog(projected);
+
+    // 9. Build the revision record
+    const revision: StoredSourceCatalogRevisionRecord = {
+      id: revisionRow.id,
+      catalogId: revisionRow.catalogId,
+      revisionNumber: revisionRow.revisionNumber,
+      sourceConfigJson: revisionRow.sourceConfigJson
+        ? (typeof revisionRow.sourceConfigJson === "string"
+            ? revisionRow.sourceConfigJson
+            : JSON.stringify(revisionRow.sourceConfigJson))
+        : "{}",
+      importMetadataJson: revisionRow.importMetadataJson
+        ? (typeof revisionRow.importMetadataJson === "string"
+            ? revisionRow.importMetadataJson
+            : JSON.stringify(revisionRow.importMetadataJson))
+        : null,
+      importMetadataHash: revisionRow.importMetadataHash ?? null,
+      snapshotHash: revisionRow.snapshotHash ?? null,
+      createdAt: revisionRow.createdAt ?? Date.now(),
+      updatedAt: revisionRow.updatedAt ?? Date.now(),
+    };
+
+    // 10. Build a minimal import metadata
+    const importMetadata: CatalogImportMetadata = revisionRow.importMetadataJson
+      ? (typeof revisionRow.importMetadataJson === "string"
+          ? JSON.parse(revisionRow.importMetadataJson)
+          : revisionRow.importMetadataJson) as CatalogImportMetadata
+      : { capabilities: {} } as unknown as CatalogImportMetadata;
+
+    // 11. Build the source record
+    const sourceRecord: StoredSourceRecord = {
+      id: source.id,
+      workspaceId: source.workspaceId,
+      catalogId: catalogId as StoredSourceRecord["catalogId"],
+      catalogRevisionId: revision.id,
+      name: source.name,
+      kind: source.kind,
+      endpoint: source.endpoint,
+      status: source.status,
+      enabled: source.enabled,
+      namespace: source.namespace,
+      iconUrl: source.iconUrl,
+      importAuthPolicy: source.importAuthPolicy,
+      bindingConfigJson: JSON.stringify(source.binding),
+      sourceHash: source.sourceHash,
+      lastError: source.lastError,
+      createdAt: source.createdAt,
+      updatedAt: source.updatedAt,
+    };
+
+    return {
+      source,
+      sourceRecord,
+      revision,
+      snapshot: {
+        version: "ir.v1.snapshot",
+        import: importMetadata,
+        catalog: catalogV1,
+      } as CatalogSnapshotV1,
+      catalog: catalogV1,
+      projected,
+      typeProjector,
+      importMetadata,
+    } satisfies LoadedSourceCatalog;
   });
 
 export const expandCatalogTools = (input: {
@@ -1176,34 +1266,34 @@ export const loadWorkspaceSourceCatalogToolByPath = (input: {
   });
 
 export const RuntimeSourceCatalogStoreLive = Layer.effect(
-  RuntimeSourceCatalogStoreService,
+  SourceCatalogStore,
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
-    const sourceArtifactStore = yield* SourceArtifactStore;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     const deps: RuntimeSourceCatalogStoreDeps = {
       runtimeLocalWorkspace,
       sourceStore,
-      sourceArtifactStore,
+      workspaceDatabase,
     };
 
-    return RuntimeSourceCatalogStoreService.of({
+    return SourceCatalogStore.of({
       loadWorkspaceSourceCatalogs: (input) =>
         loadWorkspaceSourceCatalogsWithDeps(deps, input),
       loadSourceWithCatalog: (input) =>
         loadSourceWithCatalogWithDeps(deps, input),
       loadWorkspaceSourceCatalogToolIndex: (input) =>
         loadWorkspaceSourceCatalogToolIndex(input).pipe(
-          Effect.provideService(RuntimeLocalWorkspaceService, runtimeLocalWorkspace),
-          Effect.provideService(RuntimeSourceStoreService, sourceStore),
-          Effect.provideService(SourceArtifactStore, sourceArtifactStore),
+          Effect.provideService(RuntimeLocalWorkspace, runtimeLocalWorkspace),
+          Effect.provideService(SourceStore, sourceStore),
+          Effect.provideService(WorkspaceDatabase, workspaceDatabase),
         ),
       loadWorkspaceSourceCatalogToolByPath: (input) =>
         loadWorkspaceSourceCatalogToolByPath(input).pipe(
-          Effect.provideService(RuntimeLocalWorkspaceService, runtimeLocalWorkspace),
-          Effect.provideService(RuntimeSourceStoreService, sourceStore),
-          Effect.provideService(SourceArtifactStore, sourceArtifactStore),
+          Effect.provideService(RuntimeLocalWorkspace, runtimeLocalWorkspace),
+          Effect.provideService(SourceStore, sourceStore),
+          Effect.provideService(WorkspaceDatabase, workspaceDatabase),
         ),
     });
   }),

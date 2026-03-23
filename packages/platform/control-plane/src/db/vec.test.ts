@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "./client.js"
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqlClient } from "@effect/sql";
@@ -61,7 +62,7 @@ describe("workspace catalog sqlite-vec setup", () => {
       const workspaceRoot = yield* fs.makeTempDirectoryScoped({
         prefix: "executor-workspace-vec-required-",
       });
-      const dbPath = join(workspaceRoot, "catalog.db");
+      const dbPath = join(workspaceRoot, EXECUTOR_DB_FILENAME);
       let loadCalls = 0;
       const loadSqliteVecExtension = Effect.gen(function* () {
         loadCalls += 1;
@@ -90,7 +91,7 @@ describe("workspace catalog sqlite-vec setup", () => {
       const workspaceRoot = yield* fs.makeTempDirectoryScoped({
         prefix: "executor-workspace-vec-query-required-",
       });
-      const dbPath = join(workspaceRoot, "catalog.db");
+      const dbPath = join(workspaceRoot, EXECUTOR_DB_FILENAME);
       let loadCalls = 0;
       const loadSqliteVecExtension = Effect.gen(function* () {
         loadCalls += 1;
@@ -119,7 +120,7 @@ describe("workspace catalog sqlite-vec setup", () => {
       const workspaceRoot = yield* fs.makeTempDirectoryScoped({
         prefix: "executor-workspace-vec-optional-",
       });
-      const dbPath = join(workspaceRoot, "catalog.db");
+      const dbPath = join(workspaceRoot, EXECUTOR_DB_FILENAME);
       let loadCalls = 0;
       const loadSqliteVecExtension = Effect.gen(function* () {
         loadCalls += 1;

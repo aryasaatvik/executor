@@ -23,6 +23,8 @@ export const catalog_tool = sqliteTable("catalog_tool", {
   contentHash:       text("content_hash").notNull(),
   sourceEnabled:     integer("source_enabled", { mode: "boolean" }).notNull().default(true),
   sourceStatus:      text("source_status").default("connected"),
+  capabilityJson:    text("capability_json"),
+  executableJson:    text("executable_json"),
   ...Timestamps,
 }, (table) => [
   index("idx_tool_source").on(table.sourceId),

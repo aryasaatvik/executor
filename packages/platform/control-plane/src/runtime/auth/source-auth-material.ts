@@ -20,7 +20,7 @@ import type {
   ResolveSecretMaterial,
   SecretMaterialResolveContext,
 } from "../local/secret-material-providers";
-import { SecretMaterialResolverService } from "../local/secret-material-providers";
+import { SecretMaterialStore } from "../local/secret-material-providers";
 import { runtimeEffectError } from "../effect-errors";
 
 const authForSlot = (input: {
@@ -51,9 +51,9 @@ export type RuntimeSourceAuthMaterialShape = {
   }) => Effect.Effect<ResolvedSourceAuthMaterial, Error, never>;
 };
 
-export class RuntimeSourceAuthMaterialService extends Context.Tag(
-  "#runtime/RuntimeSourceAuthMaterialService",
-)<RuntimeSourceAuthMaterialService, RuntimeSourceAuthMaterialShape>() {}
+export class SourceAuthMaterial extends Context.Tag(
+  "#runtime/SourceAuthMaterial",
+)<SourceAuthMaterial, RuntimeSourceAuthMaterialShape>() {}
 
 export const resolveSourceAuthMaterialWithDeps = (input: {
   source: Source;
@@ -130,21 +130,21 @@ export const resolveSourceAuthMaterial = (input: {
   slot?: CredentialSlot;
   actorAccountId?: AccountId | null;
   context?: SecretMaterialResolveContext;
-}): Effect.Effect<ResolvedSourceAuthMaterial, Error, RuntimeSourceAuthMaterialService> =>
-  Effect.flatMap(RuntimeSourceAuthMaterialService, (service) => service.resolve(input));
+}): Effect.Effect<ResolvedSourceAuthMaterial, Error, SourceAuthMaterial> =>
+  Effect.flatMap(SourceAuthMaterial, (service) => service.resolve(input));
 
 export const RuntimeSourceAuthMaterialLive = Layer.effect(
-  RuntimeSourceAuthMaterialService,
+  SourceAuthMaterial,
   Effect.gen(function* () {
     const rows = yield* ControlPlaneStore;
-    const resolveSecretMaterial = yield* SecretMaterialResolverService;
+    const secretMaterialStore = yield* SecretMaterialStore;
 
-    return RuntimeSourceAuthMaterialService.of({
+    return SourceAuthMaterial.of({
       resolve: (input) =>
         resolveSourceAuthMaterialWithDeps({
           ...input,
           rows,
-          resolveSecretMaterial,
+          resolveSecretMaterial: secretMaterialStore.resolve,
         }),
     });
   }),

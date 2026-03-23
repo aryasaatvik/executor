@@ -8,6 +8,10 @@ import type {
 import { SourceIdSchema } from "#schema";
 import * as Effect from "effect/Effect";
 
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
+import { eq, and, desc } from "drizzle-orm";
+import type { CatalogSnapshotV1, CatalogV1, Capability, Executable } from "@executor/ir/model";
+
 import { sourceAuthFromAuthArtifact } from "../../auth/auth-artifacts";
 import { authArtifactSecretMaterialRefs } from "../../auth/auth-artifacts";
 import { refreshWorkspaceSourceTypeDeclarationsInBackground } from "../../catalog/source/type-declarations";
@@ -16,11 +20,9 @@ import {
   LocalConfiguredSourceNotFoundError,
   LocalExecutorConfigDecodeError,
   LocalFileSystemError,
-  LocalWorkspaceStateDecodeError,
   RuntimeLocalWorkspaceMismatchError,
   RuntimeLocalWorkspaceUnavailableError,
 } from "../../local/errors";
-import type { LocalWorkspaceState } from "../../local/workspace-state";
 import { getSourceAdapter } from "../source-adapters";
 import {
   resolveRuntimeLocalWorkspaceFromDeps,
@@ -33,11 +35,17 @@ import {
   sourceAuthFromConfigInput,
   trimOrNull,
 } from "./config";
+import { catalog_tool, catalog_revision } from "../../../db/schema";
+import { stableSourceCatalogId } from "../source-definitions";
+import { loadSourceStatus, type SourceStatusRecord } from "../../../db/source-state";
+import {
+  makeWorkspaceDatabase,
+} from "../../local/workspace-database";
 
 export const buildLocalSourceRecord = (input: {
   workspaceId: WorkspaceId;
   loadedConfig: LoadedLocalExecutorConfig;
-  workspaceState: LocalWorkspaceState;
+  sourceStatus: SourceStatusRecord | null;
   sourceId: SourceId;
   actorAccountId?: AccountId | null;
   authArtifacts: ReadonlyArray<AuthArtifact>;
@@ -58,7 +66,7 @@ export const buildLocalSourceRecord = (input: {
         });
     }
 
-    const existingState = input.workspaceState.sources[input.sourceId];
+    const existingState = input.sourceStatus;
     const adapter = getSourceAdapter(sourceConfig.kind);
     const baseSource = (yield* adapter.validateSource({
       id: SourceIdSchema.make(input.sourceId),
@@ -134,7 +142,6 @@ export const loadSourcesInWorkspaceWithDeps = (
   | RuntimeLocalWorkspaceMismatchError
   | LocalFileSystemError
   | LocalExecutorConfigDecodeError
-  | LocalWorkspaceStateDecodeError
   | LocalConfiguredSourceNotFoundError
   | Error,
   never
@@ -144,23 +151,30 @@ export const loadSourcesInWorkspaceWithDeps = (
       deps,
       workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const authArtifacts = yield* deps.rows.authArtifacts.listByWorkspaceId(
       workspaceId,
     );
+
     const sources = yield* Effect.forEach(
       Object.keys(localWorkspace.loadedConfig.config?.sources ?? {}),
       (sourceId) =>
-        Effect.map(
-          buildLocalSourceRecord({
+        Effect.gen(function* () {
+          const sid = SourceIdSchema.make(sourceId);
+          const sourceStatus = yield* loadSourceStatus(sid).pipe(
+            Effect.provide(workspaceDatabase.queryLayer()),
+            Effect.catchAll(() => Effect.succeed(null)),
+          );
+          const { source } = yield* buildLocalSourceRecord({
             workspaceId,
             loadedConfig: localWorkspace.loadedConfig,
-            workspaceState: localWorkspace.workspaceState,
-            sourceId: SourceIdSchema.make(sourceId),
+            sourceStatus,
+            sourceId: sid,
             actorAccountId: options.actorAccountId,
             authArtifacts,
-          }),
-          ({ source }) => source,
-        ),
+          });
+          return source;
+        }),
     );
     yield* Effect.annotateCurrentSpan("executor.source.count", sources.length);
     return sources;
@@ -171,6 +185,100 @@ export const loadSourcesInWorkspaceWithDeps = (
       },
     }),
   );
+
+
+/**
+ * Reconstruct a CatalogSnapshotV1 for a source by querying SQLite.
+ *
+ * Merges the symbol graph from catalog_revision.snapshot_json with
+ * per-tool capability/executable JSON from catalog_tool rows.
+ */
+const loadSourceSnapshotFromSqlite = (
+  source: Source,
+): Effect.Effect<CatalogSnapshotV1 | null, unknown, SqliteDrizzle> =>
+  Effect.gen(function* () {
+    const db = yield* SqliteDrizzle;
+
+    const catalogId = stableSourceCatalogId(source);
+
+    // --- Load latest revision's snapshot_json ---
+    const revisionRows = yield* db
+      .select({
+        snapshotJson: catalog_revision.snapshotJson,
+        importMetadataJson: catalog_revision.importMetadataJson,
+      })
+      .from(catalog_revision)
+      .where(eq(catalog_revision.catalogId, catalogId))
+      .orderBy(desc(catalog_revision.revisionNumber))
+      .limit(1);
+
+    if (revisionRows.length === 0 || revisionRows[0].snapshotJson == null) {
+      return null;
+    }
+
+    const snapshotData = typeof revisionRows[0].snapshotJson === "string"
+      ? JSON.parse(revisionRows[0].snapshotJson)
+      : revisionRows[0].snapshotJson;
+
+    const importData = revisionRows[0].importMetadataJson != null
+      ? (typeof revisionRows[0].importMetadataJson === "string"
+        ? JSON.parse(revisionRows[0].importMetadataJson as string)
+        : revisionRows[0].importMetadataJson)
+      : { provenance: [], version: "ir.v1" };
+
+    // --- Load capability + executable JSON from tool rows ---
+    const toolRows = yield* db
+      .select({
+        capabilityJson: catalog_tool.capabilityJson,
+        executableJson: catalog_tool.executableJson,
+      })
+      .from(catalog_tool)
+      .where(
+        and(
+          eq(catalog_tool.sourceId, source.id),
+          eq(catalog_tool.sourceEnabled, true),
+          eq(catalog_tool.sourceStatus, "connected"),
+        ),
+      );
+
+    const capabilities: Record<string, Capability> = {};
+    const executables: Record<string, Executable> = {};
+
+    for (const row of toolRows) {
+      if (row.capabilityJson != null) {
+        const capability: Capability = typeof row.capabilityJson === "string"
+          ? JSON.parse(row.capabilityJson)
+          : row.capabilityJson as Capability;
+        capabilities[capability.id] = capability;
+
+        // Also extract executables referenced by this capability
+        if (row.executableJson != null) {
+          const executable: Executable = typeof row.executableJson === "string"
+            ? JSON.parse(row.executableJson)
+            : row.executableJson as Executable;
+          executables[executable.id] = executable;
+        }
+      }
+    }
+
+    const catalog: CatalogV1 = {
+      version: "ir.v1",
+      documents: {},
+      resources: snapshotData.resources ?? {},
+      scopes: snapshotData.scopes ?? {},
+      symbols: snapshotData.symbols ?? {},
+      capabilities,
+      executables,
+      responseSets: snapshotData.responseSets ?? {},
+      diagnostics: snapshotData.diagnostics ?? {},
+    };
+
+    return {
+      version: "ir.v1.snapshot",
+      import: importData,
+      catalog,
+    } as CatalogSnapshotV1;
+  });
 
 export const syncWorkspaceSourceTypeDeclarationsWithDeps = (
   deps: RuntimeSourceStoreDeps,
@@ -184,24 +292,23 @@ export const syncWorkspaceSourceTypeDeclarationsWithDeps = (
       deps,
       workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const sources = yield* loadSourcesInWorkspaceWithDeps(
       deps,
       workspaceId,
       options,
     );
+
+    // Read snapshot data from SQLite instead of file artifacts
     const entries = yield* Effect.forEach(sources, (source) =>
-      Effect.map(
-        deps.sourceArtifactStore.read({
-          context: localWorkspace.context,
-          sourceId: source.id,
-        }),
-        (artifact) =>
-          artifact === null
+      loadSourceSnapshotFromSqlite(source).pipe(
+        Effect.provide(workspaceDatabase.queryLayer()),
+        Effect.map((snapshot) =>
+          snapshot === null
             ? null
-            : {
-                source,
-                snapshot: artifact.snapshot,
-              },
+            : { source, snapshot },
+        ),
+        Effect.catchAll(() => Effect.succeed(null)),
       ),
     );
 
@@ -239,7 +346,6 @@ export const listLinkedSecretSourcesInWorkspaceWithDeps = (
   | RuntimeLocalWorkspaceMismatchError
   | LocalFileSystemError
   | LocalExecutorConfigDecodeError
-  | LocalWorkspaceStateDecodeError
   | LocalConfiguredSourceNotFoundError
   | Error,
   never
@@ -298,7 +404,6 @@ export const loadSourceByIdWithDeps = (
   | RuntimeLocalWorkspaceMismatchError
   | LocalFileSystemError
   | LocalExecutorConfigDecodeError
-  | LocalWorkspaceStateDecodeError
   | LocalConfiguredSourceNotFoundError
   | Error,
   never
@@ -308,6 +413,7 @@ export const loadSourceByIdWithDeps = (
       deps,
       input.workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const authArtifacts = yield* deps.rows.authArtifacts.listByWorkspaceId(
       input.workspaceId,
     );
@@ -318,10 +424,15 @@ export const loadSourceByIdWithDeps = (
         });
     }
 
+    const sourceStatus = yield* loadSourceStatus(input.sourceId).pipe(
+      Effect.provide(workspaceDatabase.queryLayer()),
+      Effect.catchAll(() => Effect.succeed(null)),
+    );
+
     const localSource = yield* buildLocalSourceRecord({
       workspaceId: input.workspaceId,
       loadedConfig: localWorkspace.loadedConfig,
-      workspaceState: localWorkspace.workspaceState,
+      sourceStatus,
       sourceId: input.sourceId,
       actorAccountId: input.actorAccountId,
       authArtifacts,

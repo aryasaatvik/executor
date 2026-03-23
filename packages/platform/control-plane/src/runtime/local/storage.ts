@@ -18,22 +18,6 @@ import {
   getOrProvisionLocalInstallation,
   loadLocalInstallation,
 } from "./installation";
-import type {
-  LocalSourceArtifact,
-} from "./source-artifacts";
-import {
-  buildLocalSourceArtifact,
-  readLocalSourceArtifact,
-  removeLocalSourceArtifact,
-  writeLocalSourceArtifact,
-} from "./source-artifacts";
-import type { LocalWorkspaceState } from "./workspace-state";
-import {
-  loadLocalWorkspaceState,
-  writeLocalWorkspaceState,
-} from "./workspace-state";
-import type { SourceCatalogSyncResult } from "@executor/source-core";
-import type { Source } from "#schema";
 
 export type InstallationStoreShape = {
   load: (
@@ -63,54 +47,12 @@ export class WorkspaceConfigStore extends Context.Tag(
   "#runtime/WorkspaceConfigStore",
 )<WorkspaceConfigStore, WorkspaceConfigStoreShape>() {}
 
-export type WorkspaceStateStoreShape = {
-  load: (
-    context: ResolvedLocalWorkspaceContext,
-  ) => Effect.Effect<LocalWorkspaceState, Error, never>;
-  write: (input: {
-    context: ResolvedLocalWorkspaceContext;
-    state: LocalWorkspaceState;
-  }) => Effect.Effect<void, Error, never>;
-};
-
-export class WorkspaceStateStore extends Context.Tag(
-  "#runtime/WorkspaceStateStore",
-)<WorkspaceStateStore, WorkspaceStateStoreShape>() {}
-
-export type SourceArtifactStoreShape = {
-  build: (input: {
-    source: Source;
-    syncResult: SourceCatalogSyncResult;
-  }) => LocalSourceArtifact;
-  read: (input: {
-    context: ResolvedLocalWorkspaceContext;
-    sourceId: string;
-  }) => Effect.Effect<LocalSourceArtifact | null, Error, never>;
-  write: (input: {
-    context: ResolvedLocalWorkspaceContext;
-    sourceId: string;
-    artifact: LocalSourceArtifact;
-  }) => Effect.Effect<void, Error, never>;
-  remove: (input: {
-    context: ResolvedLocalWorkspaceContext;
-    sourceId: string;
-  }) => Effect.Effect<void, Error, never>;
-};
-
-export class SourceArtifactStore extends Context.Tag(
-  "#runtime/SourceArtifactStore",
-)<SourceArtifactStore, SourceArtifactStoreShape>() {}
-
 export type LocalStorageServices =
   | InstallationStore
-  | WorkspaceConfigStore
-  | WorkspaceStateStore
-  | SourceArtifactStore;
+  | WorkspaceConfigStore;
 
 export type WorkspaceStorageServices =
-  | WorkspaceConfigStore
-  | WorkspaceStateStore
-  | SourceArtifactStore;
+  | WorkspaceConfigStore;
 
 export const LocalInstallationStore: InstallationStoreShape = {
   load: loadLocalInstallation,
@@ -153,71 +95,21 @@ export const LocalWorkspaceConfigStoreLive = Layer.effect(
   }),
 );
 
-export const LocalWorkspaceStateStore: WorkspaceStateStoreShape = {
-  load: (context) => bindNodeFileSystem(loadLocalWorkspaceState(context)),
-  write: (input) => bindNodeFileSystem(writeLocalWorkspaceState(input)),
-};
-
-export const LocalWorkspaceStateStoreLive = Layer.effect(
-  WorkspaceStateStore,
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-
-    return WorkspaceStateStore.of({
-      load: (context) => bindFileSystem(fileSystem, loadLocalWorkspaceState(context)),
-      write: (input) => bindFileSystem(fileSystem, writeLocalWorkspaceState(input)),
-    });
-  }),
-);
-
-export const LocalSourceArtifactStore: SourceArtifactStoreShape = {
-  build: buildLocalSourceArtifact,
-  read: (input) => bindNodeFileSystem(readLocalSourceArtifact(input)),
-  write: (input) => bindNodeFileSystem(writeLocalSourceArtifact(input)),
-  remove: (input) => bindNodeFileSystem(removeLocalSourceArtifact(input)),
-};
-
-export const LocalSourceArtifactStoreLive = Layer.effect(
-  SourceArtifactStore,
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-
-    return SourceArtifactStore.of({
-      build: buildLocalSourceArtifact,
-      read: (input) => bindFileSystem(fileSystem, readLocalSourceArtifact(input)),
-      write: (input) => bindFileSystem(fileSystem, writeLocalSourceArtifact(input)),
-      remove: (input) => bindFileSystem(fileSystem, removeLocalSourceArtifact(input)),
-    });
-  }),
-);
-
 export const makeWorkspaceStorageLayer = (input: {
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
 }) =>
-  Layer.mergeAll(
-    Layer.succeed(WorkspaceConfigStore, input.workspaceConfigStore),
-    Layer.succeed(WorkspaceStateStore, input.workspaceStateStore),
-    Layer.succeed(SourceArtifactStore, input.sourceArtifactStore),
-  );
+  Layer.succeed(WorkspaceConfigStore, input.workspaceConfigStore);
 
 export const makeLocalStorageLayer = (input: {
   installationStore: InstallationStoreShape;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
 }) =>
   Layer.mergeAll(
     Layer.succeed(InstallationStore, input.installationStore),
     makeWorkspaceStorageLayer(input),
   );
 
-export const WorkspaceStorageLive = Layer.mergeAll(
-  LocalWorkspaceConfigStoreLive,
-  LocalWorkspaceStateStoreLive,
-  LocalSourceArtifactStoreLive,
-);
+export const WorkspaceStorageLive = LocalWorkspaceConfigStoreLive;
 
 export const LocalStorageLive = Layer.mergeAll(
   LocalInstallationStoreLive,
