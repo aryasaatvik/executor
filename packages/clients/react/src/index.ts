@@ -136,11 +136,16 @@ type InternalNode<A> = {
   valueOption?: () => Option.Option<A>;
 };
 
-let apiBaseUrl =
+const defaultExecutorApiBaseUrl =
   typeof window !== "undefined" && typeof window.location?.origin === "string"
     ? window.location.origin
     : DEFAULT_EXECUTOR_API_BASE_URL;
 
+type ExecutorApiContextValue = {
+  baseUrl: string;
+};
+
+const ExecutorApiContext = React.createContext<ExecutorApiContextValue | null>(null);
 const ExecutorQueryContext = React.createContext<ExecutorQueryContextValue | null>(null);
 
 const encodeAtomKey = (parts: ReadonlyArray<AtomKeyPart>): string => JSON.stringify(parts);
@@ -254,7 +259,7 @@ const runControlPlane = async <A>(input: {
   accountId?: string;
   execute: (client: ControlPlaneClient) => Effect.Effect<A, unknown, never>;
 }): Promise<A> => {
-  const baseUrl = input.baseUrl ?? apiBaseUrl;
+  const baseUrl = input.baseUrl ?? defaultExecutorApiBaseUrl;
   const accountId = input.accountId;
 
   const exit = await Effect.runPromiseExit(
@@ -521,7 +526,8 @@ const useLoadableAtom = <T>(atom: Atom.Atom<Result.Result<T, Error>>): Loadable<
 };
 
 const useWorkspaceContext = (): Loadable<WorkspaceContext> => {
-  const installation = useLoadableAtom(localInstallationAtom(apiBaseUrl));
+  const baseUrl = useExecutorApiBaseUrl();
+  const installation = useLoadableAtom(localInstallationAtom(baseUrl));
 
   return React.useMemo(() => {
     if (installation.status !== "ready") {
@@ -679,6 +685,16 @@ const useExecutorQueryContext = (): ExecutorQueryContextValue => {
   }
   return context;
 };
+
+const useExecutorApiContext = (): ExecutorApiContextValue => {
+  const context = React.useContext(ExecutorApiContext);
+  if (context === null) {
+    throw new Error("ExecutorReactProvider is missing from the React tree");
+  }
+  return context;
+};
+
+const useExecutorApiBaseUrl = (): string => useExecutorApiContext().baseUrl;
 
 const useTrackActiveKey = (
   collection: keyof ActiveQueryCollections,
@@ -844,7 +860,9 @@ const useSourceMutation = <TInput, TOutput, TOptimistic = never>(
   );
 };
 
-const ExecutorReactProviderInner = (props: React.PropsWithChildren) => {
+const ExecutorReactProviderInner = (
+  props: React.PropsWithChildren<{ baseUrl: string }>,
+) => {
   const registry = React.useContext(RegistryContext);
   const activeQueries = React.useMemo(createActiveQueryCollections, []);
   const invalidateQueries = React.useCallback((target?: InvalidationTarget) => {
@@ -857,18 +875,26 @@ const ExecutorReactProviderInner = (props: React.PropsWithChildren) => {
     invalidateQueries,
   }), [activeQueries, invalidateQueries, registry]);
 
-  return React.createElement(ExecutorQueryContext.Provider, { value }, props.children);
+  const apiValue = React.useMemo<ExecutorApiContextValue>(() => ({
+    baseUrl: props.baseUrl,
+  }), [props.baseUrl]);
+
+  return React.createElement(
+    ExecutorApiContext.Provider,
+    { value: apiValue },
+    React.createElement(ExecutorQueryContext.Provider, { value }, props.children),
+  );
 };
 
-export const setExecutorApiBaseUrl = (baseUrl: string): void => {
-  apiBaseUrl = baseUrl;
-};
-
-export const ExecutorReactProvider = (props: React.PropsWithChildren) =>
+export const ExecutorReactProvider = (props: React.PropsWithChildren<{ baseUrl?: string }>) =>
   React.createElement(
     RegistryProvider,
     null,
-    React.createElement(ExecutorReactProviderInner, null, props.children),
+    React.createElement(
+      ExecutorReactProviderInner,
+      { baseUrl: props.baseUrl ?? defaultExecutorApiBaseUrl },
+      props.children,
+    ),
   );
 
 export const useInvalidateExecutorQueries = (): (() => void) => {
@@ -879,26 +905,28 @@ export const useInvalidateExecutorQueries = (): (() => void) => {
 };
 
 export const useLocalInstallation = (): Loadable<LocalInstallation> =>
-  useLoadableAtom(localInstallationAtom(apiBaseUrl));
+  useLoadableAtom(localInstallationAtom(useExecutorApiBaseUrl()));
 
 export const useInstanceConfig = (): Loadable<InstanceConfig> =>
-  useLoadableAtom(instanceConfigAtom(apiBaseUrl));
+  useLoadableAtom(instanceConfigAtom(useExecutorApiBaseUrl()));
 
 export const useRefreshInstanceConfig = (): (() => void) => {
   const registry = React.useContext(RegistryContext);
+  const baseUrl = useExecutorApiBaseUrl();
   return React.useCallback(() => {
-    registry.refresh(instanceConfigAtom(apiBaseUrl));
-  }, [registry]);
+    registry.refresh(instanceConfigAtom(baseUrl));
+  }, [baseUrl, registry]);
 };
 
 export const useSecrets = (): Loadable<ReadonlyArray<SecretListItem>> =>
-  useLoadableAtom(secretsAtom(apiBaseUrl));
+  useLoadableAtom(secretsAtom(useExecutorApiBaseUrl()));
 
 export const useRefreshSecrets = (): (() => void) => {
   const registry = React.useContext(RegistryContext);
+  const baseUrl = useExecutorApiBaseUrl();
   return React.useCallback(() => {
-    registry.refresh(secretsAtom(apiBaseUrl));
-  }, [registry]);
+    registry.refresh(secretsAtom(baseUrl));
+  }, [baseUrl, registry]);
 };
 
 type SecretMutationState<T> = {
@@ -917,6 +945,7 @@ const useSecretMutation = <TInput, TOutput>(
   execute: (input: TInput) => Promise<TOutput>,
 ) => {
   const registry = React.useContext(RegistryContext);
+  const baseUrl = useExecutorApiBaseUrl();
   const [state, setState] = React.useState<SecretMutationState<TOutput>>({
     status: "idle",
     data: null,
@@ -932,7 +961,7 @@ const useSecretMutation = <TInput, TOutput>(
 
     try {
       const data = await execute(payload);
-      registry.refresh(secretsAtom(apiBaseUrl));
+      registry.refresh(secretsAtom(baseUrl));
       setState({ status: "success", data, error: null });
       return data;
     } catch (cause) {
@@ -940,7 +969,7 @@ const useSecretMutation = <TInput, TOutput>(
       setState({ status: "error", data: null, error });
       throw error;
     }
-  }, [execute, registry]);
+  }, [baseUrl, execute, registry]);
 
   const reset = React.useCallback(() => {
     setState({ status: "idle", data: null, error: null });
@@ -956,48 +985,63 @@ const useSecretMutation = <TInput, TOutput>(
   );
 };
 
-export const useCreateSecret = () =>
-  useSecretMutation<CreateSecretPayload, CreateSecretResult>(
-    React.useCallback(
-      (payload) =>
-        runControlPlane({
-          execute: (client) => client.local.createSecret({
+export const useCreateSecret = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    (payload: CreateSecretPayload) =>
+      runControlPlane({
+        baseUrl,
+        execute: (client) =>
+          client.local.createSecret({
             payload,
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
   );
 
-export const useUpdateSecret = () =>
-  useSecretMutation<{ secretId: string; payload: UpdateSecretPayload }, UpdateSecretResult>(
-    React.useCallback(
-      (input) =>
-        runControlPlane({
-          execute: (client) => client.local.updateSecret({
+  return useSecretMutation<CreateSecretPayload, CreateSecretResult>(execute);
+};
+
+export const useUpdateSecret = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    (input: { secretId: string; payload: UpdateSecretPayload }) =>
+      runControlPlane({
+        baseUrl,
+        execute: (client) =>
+          client.local.updateSecret({
             path: { secretId: input.secretId },
             payload: input.payload,
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
   );
 
-export const useDeleteSecret = () =>
-  useSecretMutation<string, DeleteSecretResult>(
-    React.useCallback(
-      (secretId) =>
-        runControlPlane({
-          execute: (client) => client.local.deleteSecret({
+  return useSecretMutation<{ secretId: string; payload: UpdateSecretPayload }, UpdateSecretResult>(
+    execute,
+  );
+};
+
+export const useDeleteSecret = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    (secretId: string) =>
+      runControlPlane({
+        baseUrl,
+        execute: (client) =>
+          client.local.deleteSecret({
             path: { secretId },
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
   );
+
+  return useSecretMutation<string, DeleteSecretResult>(execute);
+};
 
 export const useUpdateInstanceConfig = () => {
   const registry = React.useContext(RegistryContext);
+  const baseUrl = useExecutorApiBaseUrl();
   const [state, setState] = React.useState<SecretMutationState<UpdateInstanceConfigResult>>({
     status: "idle",
     data: null,
@@ -1013,11 +1057,12 @@ export const useUpdateInstanceConfig = () => {
 
     try {
       const data = await runControlPlane({
+        baseUrl,
         execute: (client) => client.local.updateConfig({
           payload,
         }),
       });
-      registry.refresh(instanceConfigAtom(apiBaseUrl));
+      registry.refresh(instanceConfigAtom(baseUrl));
       setState({ status: "success", data, error: null });
       return data;
     } catch (cause) {
@@ -1025,7 +1070,7 @@ export const useUpdateInstanceConfig = () => {
       setState({ status: "error", data: null, error });
       throw error;
     }
-  }, [registry]);
+  }, [baseUrl, registry]);
 
   const reset = React.useCallback(() => {
     setState({ status: "idle", data: null, error: null });
@@ -1204,80 +1249,96 @@ export const usePrefetchToolDetail = () => {
   );
 };
 
-export const useCreateSource = () =>
-  useSourceMutation<CreateSourcePayload, Source, Source>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.create({
+export const useCreateSource = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: CreateSourcePayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.create({
             path: {
               workspaceId,
             },
             payload,
           }),
-        }),
-      [],
-    ),
-    {
-      optimisticUpdate: (context, payload) => {
-        const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
-        const previousList = getCachedAtomValue(context.registry, listAtom);
-        if (previousList === undefined) {
-          return;
-        }
-
-        const optimisticSource = createOptimisticSource({
-          workspaceId: context.workspaceId,
-          payload,
-        });
-        setCachedAtomValue(context.registry, listAtom, [optimisticSource, ...previousList]);
-        return {
-          value: optimisticSource,
-          rollback: () => {
-            setCachedAtomValue(context.registry, listAtom, previousList);
-          },
-        };
-      },
-      onSuccess: (context, _payload, source, optimisticSource) => {
-        const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
-        const currentList = getCachedAtomValue(context.registry, listAtom);
-        if (currentList !== undefined) {
-          const withoutOptimistic = optimisticSource
-            ? currentList.filter((candidate) => candidate.id !== optimisticSource.id)
-            : currentList;
-          setCachedAtomValue(context.registry, listAtom, upsertSourceInList(withoutOptimistic, source));
-        }
-
-        setCachedAtomValue(
-          context.registry,
-          sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, source.id)),
-          source,
-        );
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useUpdateSource = () =>
-  useSourceMutation<{ sourceId: Source["id"]; payload: UpdateSourcePayload }, Source>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.update({
+  return useSourceMutation<CreateSourcePayload, Source, Source>(execute, {
+    optimisticUpdate: (context, payload) => {
+      const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
+      const previousList = getCachedAtomValue(context.registry, listAtom);
+      if (previousList === undefined) {
+        return;
+      }
+
+      const optimisticSource = createOptimisticSource({
+        workspaceId: context.workspaceId,
+        payload,
+      });
+      setCachedAtomValue(context.registry, listAtom, [optimisticSource, ...previousList]);
+      return {
+        value: optimisticSource,
+        rollback: () => {
+          setCachedAtomValue(context.registry, listAtom, previousList);
+        },
+      };
+    },
+    onSuccess: (context, _payload, source, optimisticSource) => {
+      const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
+      const currentList = getCachedAtomValue(context.registry, listAtom);
+      if (currentList !== undefined) {
+        const withoutOptimistic = optimisticSource
+          ? currentList.filter((candidate) => candidate.id !== optimisticSource.id)
+          : currentList;
+        setCachedAtomValue(context.registry, listAtom, upsertSourceInList(withoutOptimistic, source));
+      }
+
+      setCachedAtomValue(
+        context.registry,
+        sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, source.id)),
+        source,
+      );
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
+
+export const useUpdateSource = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: { sourceId: Source["id"]; payload: UpdateSourcePayload };
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.update({
             path: {
               workspaceId,
               sourceId: payload.sourceId,
             },
             payload: payload.payload,
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
+  );
+
+  return useSourceMutation<{ sourceId: Source["id"]; payload: UpdateSourcePayload }, Source>(
+    execute,
     {
       optimisticUpdate: (context, input) => {
         const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
@@ -1318,229 +1379,287 @@ export const useUpdateSource = () =>
       },
     },
   );
+};
 
-export const useStartSourceOAuth = () =>
-  useSourceMutation<StartSourceOAuthPayload, StartSourceOAuthResult>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.oauth.startSourceAuth({
+export const useStartSourceOAuth = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: StartSourceOAuthPayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.oauth.startSourceAuth({
             path: {
               workspaceId,
             },
             payload,
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
   );
 
-export const useRemoveSource = () =>
-  useSourceMutation<Source["id"], SourceRemoveResult>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.remove({
+  return useSourceMutation<StartSourceOAuthPayload, StartSourceOAuthResult>(execute);
+};
+
+export const useRemoveSource = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: Source["id"];
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.remove({
             path: {
               workspaceId,
               sourceId: payload,
             },
           }),
-        }),
-      [],
-    ),
-    {
-      optimisticUpdate: (context, sourceId) => {
-        const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
-        const previousList = getCachedAtomValue(context.registry, listAtom);
-        if (previousList === undefined) {
-          return;
-        }
-
-        setCachedAtomValue(context.registry, listAtom, removeSourceFromList(previousList, sourceId));
-        return () => {
-          setCachedAtomValue(context.registry, listAtom, previousList);
-        };
-      },
-      onSuccess: (context, sourceId) => {
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-          sourceId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useDiscoverSource = () =>
-  useSourceMutation<DiscoverSourcePayload, SourceDiscoveryResult>(
-    React.useCallback(
-      ({ accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.discover({
+  return useSourceMutation<Source["id"], SourceRemoveResult>(execute, {
+    optimisticUpdate: (context, sourceId) => {
+      const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
+      const previousList = getCachedAtomValue(context.registry, listAtom);
+      if (previousList === undefined) {
+        return;
+      }
+
+      setCachedAtomValue(context.registry, listAtom, removeSourceFromList(previousList, sourceId));
+      return () => {
+        setCachedAtomValue(context.registry, listAtom, previousList);
+      };
+    },
+    onSuccess: (context, sourceId) => {
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+        sourceId,
+      });
+    },
+  });
+};
+
+export const useDiscoverSource = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ accountId, payload }: {
+      accountId: string;
+      payload: DiscoverSourcePayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.discover({
             payload,
           }),
-        }),
-      [],
-    ),
+      }),
+    [baseUrl],
   );
 
-export const useConnectSource = () =>
-  useSourceMutation<ConnectSourcePayload, ConnectSourceResult, Source>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.connect({
+  return useSourceMutation<DiscoverSourcePayload, SourceDiscoveryResult>(execute);
+};
+
+export const useConnectSource = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: ConnectSourcePayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.connect({
             path: {
               workspaceId,
             },
             payload,
           } as any),
-        }),
-      [],
-    ),
-    {
-      onSuccess: (context, _payload, result) => {
-        const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
-        const currentList = getCachedAtomValue(context.registry, listAtom);
-        if (currentList !== undefined) {
-          setCachedAtomValue(context.registry, listAtom, upsertSourceInList(currentList, result.source));
-        }
-
-        setCachedAtomValue(
-          context.registry,
-          sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, result.source.id)),
-          result.source,
-        );
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useConnectSourceBatch = () =>
-  useSourceMutation<ConnectSourceBatchPayload, ConnectSourceBatchResult>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.connectBatch({
+  return useSourceMutation<ConnectSourcePayload, ConnectSourceResult, Source>(execute, {
+    onSuccess: (context, _payload, result) => {
+      const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
+      const currentList = getCachedAtomValue(context.registry, listAtom);
+      if (currentList !== undefined) {
+        setCachedAtomValue(context.registry, listAtom, upsertSourceInList(currentList, result.source));
+      }
+
+      setCachedAtomValue(
+        context.registry,
+        sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, result.source.id)),
+        result.source,
+      );
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
+
+export const useConnectSourceBatch = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: ConnectSourceBatchPayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.connectBatch({
             path: {
               workspaceId,
             },
             payload,
           } as any),
-        }),
-      [],
-    ),
-    {
-      onSuccess: (context, _payload, result) => {
-        const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
-        const currentList = getCachedAtomValue(context.registry, listAtom);
-        if (currentList !== undefined) {
-          let nextList = currentList;
-          for (const entry of result.results) {
-            nextList = upsertSourceInList(nextList, entry.source);
-            setCachedAtomValue(
-              context.registry,
-              sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, entry.source.id)),
-              entry.source,
-            );
-          }
-          setCachedAtomValue(context.registry, listAtom, nextList);
-        }
-
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useCreateWorkspaceOauthClient = () =>
-  useSourceMutation<CreateWorkspaceOauthClientPayload, WorkspaceOauthClient>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.createWorkspaceOauthClient({
+  return useSourceMutation<ConnectSourceBatchPayload, ConnectSourceBatchResult>(execute, {
+    onSuccess: (context, _payload, result) => {
+      const listAtom = sourcesAtom(encodeSourcesKey(true, context.workspaceId, context.accountId));
+      const currentList = getCachedAtomValue(context.registry, listAtom);
+      if (currentList !== undefined) {
+        let nextList = currentList;
+        for (const entry of result.results) {
+          nextList = upsertSourceInList(nextList, entry.source);
+          setCachedAtomValue(
+            context.registry,
+            sourceAtom(encodeSourceKey(true, context.workspaceId, context.accountId, entry.source.id)),
+            entry.source,
+          );
+        }
+        setCachedAtomValue(context.registry, listAtom, nextList);
+      }
+
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
+
+export const useCreateWorkspaceOauthClient = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: CreateWorkspaceOauthClientPayload;
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.createWorkspaceOauthClient({
             path: {
               workspaceId,
             },
             payload,
           }),
-        }),
-      [],
-    ),
-    {
-      onSuccess: (context) => {
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useRemoveWorkspaceOauthClient = () =>
-  useSourceMutation<WorkspaceOauthClient["id"], { removed: boolean }>(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.removeWorkspaceOauthClient({
+  return useSourceMutation<CreateWorkspaceOauthClientPayload, WorkspaceOauthClient>(execute, {
+    onSuccess: (context) => {
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
+
+export const useRemoveWorkspaceOauthClient = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: WorkspaceOauthClient["id"];
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.removeWorkspaceOauthClient({
             path: {
               workspaceId,
               oauthClientId: payload,
             },
           }),
-        }),
-      [],
-    ),
-    {
-      onSuccess: (context) => {
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
 
-export const useRemoveProviderAuthGrant = () =>
-  useSourceMutation<
-    Extract<Source["auth"], { kind: "provider_grant_ref" }>["grantId"],
-    { removed: boolean }
-  >(
-    React.useCallback(
-      ({ workspaceId, accountId, payload }) =>
-        runControlPlane({
-          accountId,
-          execute: (client) => client.sources.removeProviderAuthGrant({
+  return useSourceMutation<WorkspaceOauthClient["id"], { removed: boolean }>(execute, {
+    onSuccess: (context) => {
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
+
+export const useRemoveProviderAuthGrant = () => {
+  const baseUrl = useExecutorApiBaseUrl();
+  const execute = React.useCallback(
+    ({ workspaceId, accountId, payload }: {
+      workspaceId: Source["workspaceId"];
+      accountId: string;
+      payload: Extract<Source["auth"], { kind: "provider_grant_ref" }>["grantId"];
+    }) =>
+      runControlPlane({
+        baseUrl,
+        accountId,
+        execute: (client) =>
+          client.sources.removeProviderAuthGrant({
             path: {
               workspaceId,
               grantId: payload,
             },
           }),
-        }),
-      [],
-    ),
-    {
-      onSuccess: (context) => {
-        context.invalidateQueries({
-          workspaceId: context.workspaceId,
-          accountId: context.accountId,
-        });
-      },
-    },
+      }),
+    [baseUrl],
   );
+
+  return useSourceMutation<
+    Extract<Source["auth"], { kind: "provider_grant_ref" }>["grantId"],
+    { removed: boolean }
+  >(execute, {
+    onSuccess: (context) => {
+      context.invalidateQueries({
+        workspaceId: context.workspaceId,
+        accountId: context.accountId,
+      });
+    },
+  });
+};
 
 export type {
   CompleteSourceOAuthResult,

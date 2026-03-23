@@ -21,7 +21,6 @@ import { createRoot } from "react-dom/client";
 
 import {
   ExecutorReactProvider,
-  setExecutorApiBaseUrl,
   type Loadable,
   useCreateSource,
   useRemoveSource,
@@ -386,7 +385,10 @@ const seedStoredOpenApiSource = async (input: {
   });
 };
 
-async function renderExecutorHarness<T>(useValue: () => T): Promise<HookHarness<T>> {
+async function renderExecutorHarness<T>(
+  useValue: () => T,
+  baseUrl: string,
+): Promise<HookHarness<T>> {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -404,7 +406,7 @@ async function renderExecutorHarness<T>(useValue: () => T): Promise<HookHarness<
 
   await React.act(async () => {
     root.render(
-      <ExecutorReactProvider>
+      <ExecutorReactProvider baseUrl={baseUrl}>
         <Probe />
       </ExecutorReactProvider>,
     );
@@ -423,20 +425,26 @@ async function renderExecutorHarness<T>(useValue: () => T): Promise<HookHarness<
   };
 }
 
-const renderCreateHarness = () =>
-  renderExecutorHarness<CreateHarnessState>(() => ({
-    sources: useSources(),
-    createSource: useCreateSource(),
-  }));
+const renderCreateHarness = (baseUrl: string) =>
+  renderExecutorHarness<CreateHarnessState>(
+    () => ({
+      sources: useSources(),
+      createSource: useCreateSource(),
+    }),
+    baseUrl,
+  );
 
-const renderSourceHarness = (sourceId: string) =>
-  renderExecutorHarness<SourceHarnessState>(() => ({
-    sources: useSources(),
-    source: useSource(sourceId),
-    inspection: useSourceInspection(sourceId),
-    updateSource: useUpdateSource(),
-    removeSource: useRemoveSource(),
-  }));
+const renderSourceHarness = (sourceId: string, baseUrl: string) =>
+  renderExecutorHarness<SourceHarnessState>(
+    () => ({
+      sources: useSources(),
+      source: useSource(sourceId),
+      inspection: useSourceInspection(sourceId),
+      updateSource: useUpdateSource(),
+      removeSource: useRemoveSource(),
+    }),
+    baseUrl,
+  );
 
 async function waitForValue<T>(
   read: () => T | null,
@@ -489,9 +497,7 @@ describe("executor-react source hooks", () => {
       ],
     });
 
-    setExecutorApiBaseUrl(proxyServer.baseUrl);
-
-    const harness = await renderCreateHarness();
+    const harness = await renderCreateHarness(proxyServer.baseUrl);
 
     try {
       await waitForValue(
@@ -555,8 +561,6 @@ describe("executor-react source hooks", () => {
     });
     const specServer = await startOpenApiSpecServer();
 
-    setExecutorApiBaseUrl(proxyServer.baseUrl);
-
     try {
       const installation = await getInstallation(apiServer.baseUrl);
       const source = await seedStoredOpenApiSource({
@@ -565,7 +569,7 @@ describe("executor-react source hooks", () => {
         name: "Original Source",
         specUrl: specServer.specUrl,
       });
-      const harness = await renderSourceHarness(source.id);
+      const harness = await renderSourceHarness(source.id, proxyServer.baseUrl);
 
       try {
         await waitForValue(
@@ -648,8 +652,6 @@ describe("executor-react source hooks", () => {
       ],
     });
 
-    setExecutorApiBaseUrl(proxyServer.baseUrl);
-
     try {
       const installation = await getInstallation(apiServer.baseUrl);
       const source = await seedStoredOpenApiSource({
@@ -657,7 +659,7 @@ describe("executor-react source hooks", () => {
         installation,
         name: "Disposable Source",
       });
-      const harness = await renderSourceHarness(source.id);
+      const harness = await renderSourceHarness(source.id, proxyServer.baseUrl);
 
       try {
         await waitForValue(
@@ -720,10 +722,8 @@ describe("executor-react source hooks", () => {
   it.effect("surfaces missing sources as errors instead of staying loading", () =>
     Effect.promise(async () => {
       const apiServer = await startControlPlaneServer();
-      setExecutorApiBaseUrl(apiServer.baseUrl);
-
       try {
-        const harness = await renderSourceHarness("src_missing");
+        const harness = await renderSourceHarness("src_missing", apiServer.baseUrl);
 
         try {
           const missing = await waitForValue(
