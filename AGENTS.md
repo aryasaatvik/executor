@@ -1,7 +1,7 @@
 # AGENTS.md
 
 **Generated:** 2026-03-23
-**Commit:** b07800bd
+**Commit:** 006dd578
 
 ## OVERVIEW
 
@@ -74,7 +74,10 @@ bun run trace:up    # Start Jaeger (docker)
 ## AGENTS.md LOCATIONS
 
 - `packages/platform/control-plane/AGENTS.md` — Core business logic (Effect-TS, DB, runtime)
+- `packages/platform/server/AGENTS.md` — HTTP server and routing
 - `packages/sources/AGENTS.md` — Source adapters domain
 - `packages/kernel/AGENTS.md` — Kernel abstractions and runtimes
+- `packages/hosts/AGENTS.md` — MCP bridge and AI SDK integration
+- `packages/clients/react/AGENTS.md` — React hooks
 - `apps/executor/AGENTS.md` — CLI entrypoint
 - `apps/web/AGENTS.md` — React web UI

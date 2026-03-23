@@ -22,9 +22,9 @@ It answers:
 
 This is why a source carries local concerns like name, namespace, enabled state, binding config, and status.
 
-### Recipe
+### Catalog
 
-A recipe is the shareable integration identity.
+A catalog is the shareable integration identity (table: `catalog`).
 
 It answers:
 
@@ -32,11 +32,11 @@ It answers:
 - what adapter produced it?
 - what broad catalog kind does it belong to?
 
-A recipe is meant to converge across workspaces when the underlying integration definition is the same.
+A catalog is meant to converge across workspaces when the underlying integration definition is the same.
 
 ### Revision / materialization
 
-A recipe revision is the compiled result of an import.
+A catalog revision is the compiled result of an import (table: `catalog_revision`).
 
 It answers:
 
@@ -120,7 +120,7 @@ The important distinction is that execution now belongs to adapters. The shared 
 The current model is designed so that new support usually means:
 
 - add or evolve an adapter
-- compile into the same recipe/revision/operation layers
+- compile into the same catalog/revision/operation layers
 
 and not:
 

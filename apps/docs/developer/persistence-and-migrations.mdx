@@ -16,6 +16,37 @@ That means the database stores:
 - credentials and auth sessions
 - executions and interactions
 
+## Source of truth: config vs SQLite
+
+Executor deliberately splits source-of-truth between two storage layers:
+
+### executor.jsonc: source definitions
+
+Source definitions — including bindings, auth config, endpoint, and adapter-specific configuration — live in `executor.jsonc` (project-level at `.executor/executor.jsonc` or home-level at `~/.executor/executor.jsonc`).
+
+This is the durable, version-controllable store for what a source is and how it connects.
+
+### SQLite `source` table: sparse lifecycle rows
+
+The SQLite `source` table stores **runtime/lifecycle state only**:
+
+- `sourceId`, `workspaceId`
+- `catalogId`, `catalogRevisionId`
+- `status`, `enabled`
+- `sourceHash`, `lastError`
+- `createdAt`, `updatedAt`
+
+The `binding_config_json` and `import_auth_policy` columns are **not populated** in the live write path. They exist as schema artifacts but are not the primary storage for those values.
+
+### Implication
+
+Config is the durable source-definition store. SQLite acts as a lifecycle/runtime register — tracking whether a source is enabled, what catalog revision it resolved to, and any last error — but not the full source definition.
+
+This split means:
+
+- editing `executor.jsonc` changes the source definition
+- SQLite tracks whether that definition is currently active, healthy, and synced
+
 ## Why the storage is layered
 
 The storage model is layered because these concerns have different reuse and ownership semantics.
@@ -25,7 +56,7 @@ Examples:
 - raw documents are provenance
 - revisions are compiled materializations
 - operations are the hot-path query surface
-- source bindings are workspace-local
+- source bindings are workspace-local and config-driven
 - credentials are private and actor-scoped
 
 Trying to collapse those into one table or one document shape causes churn quickly.

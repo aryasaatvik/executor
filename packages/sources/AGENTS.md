@@ -10,19 +10,30 @@ Every adapter implements `SourceAdapter` (core/src/types.ts):
 SourceAdapter {
   key: string                           // unique adapter id ("mcp", "openapi")
   displayName: string
-  catalogKind: "imported" | "internal"
+  catalogKind: SourceCatalogKind
   connectStrategy: "direct" | "interactive" | "none"
   credentialStrategy: "credential_managed" | "adapter_defined" | "none"
+
+  // Provider and auth
+  providerKey: string
+  defaultImportAuthPolicy: SourceImportAuthPolicy
 
   // Binding config: serialize/deserialize per-source transport settings
   bindingConfigVersion: number
   serializeBindingConfig: (source) => string
   deserializeBindingConfig: (record) => Effect<StoredSourceBindingConfig>
   bindingStateFromSource: (source) => Effect<SourceBindingState>
+  sourceConfigFromSource: (source) => Record<string, unknown>
 
   // Schema for "add source" UI
   connectPayloadSchema: Schema | null
   executorAddInputSchema: Schema | null
+  executorAddHelpText: readonly string[] | null
+  executorAddInputSignatureWidth: number | null
+
+  // Local config binding
+  localConfigBindingSchema: Schema | null
+  localConfigBindingFromSource: (source) => unknown
 
   // Validation
   validateSource: (source) => Effect<Source>
@@ -37,6 +48,10 @@ SourceAdapter {
 
   // Tool invocation
   invoke: (input: SourceAdapterInvokeInput) => Effect<SourceAdapterInvokeResult>
+
+  // OAuth2 (optional)
+  getOauth2SetupConfig?: (input: { source: Source; slot: CredentialSlot }) => Effect<OAuth2SetupConfig | null>
+  normalizeOauthClientInput?: (input: SourceOauthClientInput) => Effect<NormalizedOAuthClientInput>
 }
 ```
 

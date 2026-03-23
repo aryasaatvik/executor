@@ -58,27 +58,67 @@ The result is:
 
 ## Tool catalog shape
 
-The tool catalog is built from:
+The tool catalog is built from four distinct sources:
 
-- persisted source tools
-- built-in executor tools
+### 1. System tools
+Built-in discovery and introspection tools with `sourceKey: "system"`:
+- `catalog.namespaces` - List available namespaces with display names and tool counts
+- `catalog.tools` - List tools with optional namespace and query filters
+- `describe.tool` - Get metadata and optional schemas for a tool path
+- `discover` - Search tools by intent and return ranked matches
 
-That lets executor present one unified discovery and invocation surface even though the underlying tools come from different places.
+### 2. Executor tools
+Workspace management tools with `sourceKey: "executor"`:
+- `executor.sources.add` - Add an MCP, OpenAPI, or GraphQL source to the current workspace
+
+### 3. Local tools
+User-defined tools loaded from the `.executor/tools/` directory. These are transpiled TypeScript/JavaScript files with the `sourceKey` prefix `local.tool.*`. For example, a file at `.executor/tools/hello.ts` becomes tool path `local.tool.hello`.
+
+### 4. Source catalog tools
+Tools from connected sources (MCP servers, OpenAPI specs, GraphQL endpoints) that are persisted in the workspace SQLite database after authentication and schema extraction.
+
+This four-source model lets executor present one unified discovery and invocation surface even though the underlying tools come from different places.
 
 ## Invocation flow
 
-At a high level, invocation works like this:
+There are two distinct invocation paths based on tool source:
 
-1. resolve the persisted operation by tool path
-2. run policy and approval checks
-3. resolve auth material for the correct slot
-4. load the manifest and schema bundle needed for the call
-5. delegate actual invocation to the adapter
+### Authored tool invocation (system, executor, local)
+
+Tools from system, executor, and local sources are invoked directly without policy or auth checks:
+
+1. Tool path is matched against the authored tool registry (system + executor + local tools)
+2. Tool is invoked directly via `authoredInvoker` - NO policy lookup, NO auth resolution
+
+This path is used for:
+- `catalog.namespaces`, `catalog.tools`, `describe.tool`, `discover`
+- `executor.sources.add`
+- Any tool in `.executor/tools/` (prefixed with `local.tool.*`)
+
+### Persisted tool invocation (source catalog)
+
+Tools from connected MCP/OpenAPI/GraphQL sources go through full orchestration:
+
+1. Resolve the tool by path from the workspace database
+2. Run policy and approval checks via `authorizePersistedToolInvocation`
+3. Resolve auth material for the source via `SourceAuthMaterial.resolve`
+4. Load the manifest and schema bundle from the source catalog
+5. Delegate actual invocation to the IR adapter (`invokeIrTool`)
 
 This is the key point:
 
 - the control plane orchestrates
 - the adapter performs the protocol-specific call
+
+### Tool precedence
+
+The catalog merges sources in this order (later sources take precedence):
+1. `local_user` - local tools from `.executor/tools/`
+2. `persisted_source` - tools from connected sources (MCP, OpenAPI, GraphQL)
+3. `executor` - executor tools like `executor.sources.add`
+4. `system_helper` - system tools like `discover`
+
+Note: The source catalog is being merged first in an upcoming change, so `getToolByPath` will find source tools before authored tools.
 
 ## Why this is flexible
 

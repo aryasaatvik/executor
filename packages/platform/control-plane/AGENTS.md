@@ -16,8 +16,8 @@ Core business logic runtime for executor, built on Effect-TS.
 |------|----------|
 | 1 — Foundation | `ControlPlaneStore`, `RuntimeLocalWorkspace`, `ExecutionManager` |
 | 2 — Filesystem | `NodeFileSystem`, `LocalStorage`, `LocalToolRuntimeLoader` |
-| 3 — Storage | `WorkspaceDatabase`, `SecretMaterialStore`, `SourceStore`, `CatalogStore` |
-| 4 — Source | `SourceAuthMaterial`, `CatalogSync`, `SourceAuth` |
+| 3 — Storage | `WorkspaceDatabase`, `SecretMaterialStore`, `SourceStore`, `SourceCatalogStore` |
+| 4 — Source | `SourceAuthMaterial`, `SourceCatalogSync`, `SourceAuthService` |
 | 5 — Execution | `ExecutionEnvironmentResolver` |
 
 Tier N may only depend on tiers 1..N-1.
@@ -27,15 +27,18 @@ Tier N may only depend on tiers 1..N-1.
 | Tag | Location | Purpose |
 |-----|----------|---------|
 | `ControlPlaneStore` | `runtime/store.ts` | In-memory effect-row access to control-plane DB (auth, sessions, executions) |
-| `WorkspaceDatabase` | `local/workspace-database.ts` | Per-workspace SQLite file: provides write/query layers + `provideWrite`/`provideQuery` helpers |
-| `RuntimeLocalWorkspace` | `local/runtime-context.ts` | Workspace ID, account ID, resolved config |
-| `ExecutionManager` | `execution/live.ts` | Live execution state machine + pub/sub |
-| `ExecutionEnvironmentResolver` | `execution/workspace/environment.ts` | Resolves `executor + toolInvoker + catalog` per workspace/account |
-| `RuntimeSourceStore` | `sources/source-store.ts` | Source CRUD |
-| `RuntimeSourceCatalogStore` | `catalog/source/runtime.ts` | Tool catalog per source |
-| `RuntimeSourceAuthService` | `sources/source-auth-service.ts` | OAuth + credential flows |
-| `RuntimeSourceAuthMaterial` | `auth/source-auth-material.ts` | Derived auth credentials |
-| `RuntimeSourceCatalogSync` | `catalog/source/sync.ts` | Catalog reconciliation |
+| `RuntimeLocalWorkspace` | `runtime/local/runtime-context.ts` | Workspace ID, account ID, resolved config |
+| `WorkspaceDatabase` | `runtime/local/workspace-database.ts` | Per-workspace SQLite file: provides write/query layers + `provideWrite`/`provideQuery` helpers |
+| `ExecutionManager` | `runtime/execution/live.ts` | Live execution state machine + pub/sub |
+| `ExecutionEnvironmentResolver` | `runtime/execution/workspace/environment.ts` | Resolves `executor + toolInvoker + catalog` per workspace/account (renamed from `RuntimeExecutionResolverService`) |
+| `LocalToolRuntimeLoader` | `runtime/local/tools.ts` | Tool runtime loading |
+| `SecretMaterialStore` | `runtime/local/secret-material-providers.ts` | Secret material resolution |
+| `SourceStore` | `runtime/sources/source-store.ts` | Source CRUD |
+| `SourceCatalogStore` | `runtime/catalog/source/runtime.ts` | Tool catalog per source |
+| `SourceAuthService` | `runtime/sources/source-auth-service.ts` | OAuth + credential flows |
+| `SourceAuthMaterial` | `runtime/auth/source-auth-material.ts` | Derived auth credentials |
+| `SourceCatalogSync` | `runtime/catalog/source/sync.ts` | Catalog reconciliation |
+| `LocalInstallationStore` | `runtime/local/storage.ts` | Singleton instance (not a class) providing local installation state |
 
 ## DB Schema (`src/db/schema/`)
 
@@ -61,7 +64,7 @@ Catalog schema lives in the workspace SQLite, not here.
 
 ## SQLite Workspace Database Seam
 
-`WorkspaceDatabase` (`local/workspace-database.ts`) is the seam. It provides `writeLayer`/`queryLayer`/`provideWrite`/`provideQuery`. The write layer runs migrations, FTS5 setup, optional JSON→SQLite import, and sqlite-vec initialization. The query layer skips migration and JSON import, just opening the connection.
+`WorkspaceDatabase` (`runtime/local/workspace-database.ts`) is the seam. It provides `writeLayer`/`queryLayer`/`provideWrite`/`provideQuery`. The write layer runs migrations, FTS5 setup, optional JSON→SQLite import, and sqlite-vec initialization. The query layer skips migration and JSON import, just opening the connection.
 
 Catalog tool content lives in the workspace DB. Auth/session/execution state lives in the control-plane DB.
 
