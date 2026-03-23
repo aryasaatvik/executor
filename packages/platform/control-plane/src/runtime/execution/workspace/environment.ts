@@ -21,6 +21,9 @@ import {
   RuntimeSourceAuthServiceTag,
 } from "../../sources/source-auth-service";
 import {
+  RuntimeSourceStoreService,
+} from "../../sources/source-store";
+import {
   RuntimeSourceCatalogStoreService,
 } from "../../catalog/source/runtime";
 import { RuntimeSourceAuthMaterialService } from "../../auth/source-auth-material";
@@ -37,16 +40,11 @@ import {
   type LocalToolRuntimeLoaderShape,
 } from "../../local/tools";
 import {
-  SourceArtifactStore,
-  type SourceArtifactStoreShape,
   WorkspaceConfigStore,
   type WorkspaceConfigStoreShape,
-  WorkspaceStateStore,
-  type WorkspaceStateStoreShape,
 } from "../../local/storage";
 import { createEmbedder, type Embedder } from "../../../db/embedder";
 import type { AccountId, LocalExecutorConfig, SecretRef, Source } from "#schema";
-import type { LocalWorkspaceState } from "../../local/workspace-state";
 export {
   createCodeExecutorForRuntime,
   resolveConfiguredExecutionRuntime,
@@ -72,11 +70,8 @@ type WorkspaceSourceCatalogManager = {
     workspaceId: Source["workspaceId"]
     accountId: AccountId
     runtimeLocalWorkspace: RuntimeLocalWorkspaceState
-    workspaceState: LocalWorkspaceState
     sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>
     workspaceConfigStore: WorkspaceConfigStoreShape
-    workspaceStateStore: WorkspaceStateStoreShape
-    sourceArtifactStore: SourceArtifactStoreShape
     embedder?: Embedder
   }) => Effect.Effect<ManagedWorkspaceSourceCatalog, unknown, never>
   clear: Effect.Effect<void, never, never>
@@ -213,11 +208,9 @@ const workspaceCatalogCacheKey = (input: {
   JSON.stringify(input)
 
 const workspaceCatalogIndexSignature = (input: {
-  workspaceState: LocalWorkspaceState
   embedder?: Embedder
 }): string =>
   JSON.stringify({
-    semanticSearchSignature: input.workspaceState.catalog.semanticSearchSignature,
     embedder: input.embedder
       ? {
           provider: input.embedder.provider,
@@ -225,14 +218,8 @@ const workspaceCatalogIndexSignature = (input: {
           dimensions: input.embedder.dimensions,
         }
       : null,
-    sources: Object.entries(input.workspaceState.sources)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([sourceId, state]) => ({
-        sourceId,
-        status: state.status,
-        sourceHash: state.sourceHash,
-        updatedAt: state.updatedAt,
-      })),
+    // Always re-index — the indexing is incremental and uses content hashes
+    timestamp: Date.now(),
   })
 
 export const loadConfiguredSemanticSearchEmbedder = (
@@ -299,7 +286,6 @@ const makeWorkspaceSourceCatalogManager = (dependencies: {
             accountId: input.accountId,
           })
           const nextIndexSignature = workspaceCatalogIndexSignature({
-            workspaceState: input.workspaceState,
             embedder: input.embedder,
           })
           const cached = cache.get(cacheKey)
@@ -318,8 +304,6 @@ const makeWorkspaceSourceCatalogManager = (dependencies: {
             accountId: input.accountId,
             sourceCatalogStore: input.sourceCatalogStore,
             workspaceConfigStore: input.workspaceConfigStore,
-            workspaceStateStore: input.workspaceStateStore,
-            sourceArtifactStore: input.sourceArtifactStore,
             runtimeLocalWorkspace: input.runtimeLocalWorkspace,
             embedder: input.embedder,
           })
@@ -329,8 +313,6 @@ const makeWorkspaceSourceCatalogManager = (dependencies: {
             accountId: input.accountId,
             sourceCatalogStore: input.sourceCatalogStore,
             workspaceConfigStore: input.workspaceConfigStore,
-            workspaceStateStore: input.workspaceStateStore,
-            sourceArtifactStore: input.sourceArtifactStore,
             runtimeLocalWorkspace: input.runtimeLocalWorkspace,
             embedder: input.embedder,
           })
@@ -351,10 +333,9 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
   sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
   sourceAuthService: Effect.Effect.Success<typeof RuntimeSourceAuthServiceTag>;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  sourceStore: Effect.Effect.Success<typeof RuntimeSourceStoreService>;
   localToolRuntimeLoader: LocalToolRuntimeLoaderShape;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   dependencies?: WorkspaceEnvironmentDependencies;
 }): ResolveExecutionEnvironment =>
   ({ workspaceId, accountId, onElicitation }) =>
@@ -377,9 +358,6 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
       const loadedConfig = yield* input.workspaceConfigStore.load(
         runtimeLocalWorkspace.context,
       );
-      const loadedWorkspaceState = yield* input.workspaceStateStore.load(
-        runtimeLocalWorkspace.context,
-      );
       const localToolRuntime = yield* input.localToolRuntimeLoader.load(
         runtimeLocalWorkspace.context,
       );
@@ -400,11 +378,8 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
           workspaceId,
           accountId,
           runtimeLocalWorkspace,
-          workspaceState: loadedWorkspaceState,
           sourceCatalogStore: input.sourceCatalogStore,
           workspaceConfigStore: input.workspaceConfigStore,
-          workspaceStateStore: input.workspaceStateStore,
-          sourceArtifactStore: input.sourceArtifactStore,
           embedder,
         })
 
@@ -414,10 +389,9 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
         workspaceId,
         accountId,
         sourceCatalogStore: input.sourceCatalogStore,
+        sourceStore: input.sourceStore,
         sourceCatalog,
         workspaceConfigStore: input.workspaceConfigStore,
-        workspaceStateStore: input.workspaceStateStore,
-        sourceArtifactStore: input.sourceArtifactStore,
         sourceAuthMaterialService: input.sourceAuthMaterialService,
         sourceAuthService: input.sourceAuthService,
         runtimeLocalWorkspace,
@@ -458,10 +432,9 @@ export const RuntimeExecutionResolverLive = (
           const sourceAuthMaterialService = yield* RuntimeSourceAuthMaterialService;
           const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
           const sourceCatalogStore = yield* RuntimeSourceCatalogStoreService;
+          const sourceStore = yield* RuntimeSourceStoreService;
           const localToolRuntimeLoader = yield* LocalToolRuntimeLoaderService;
           const workspaceConfigStore = yield* WorkspaceConfigStore;
-          const workspaceStateStore = yield* WorkspaceStateStore;
-          const sourceArtifactStore = yield* SourceArtifactStore;
           const workspaceSourceCatalogManager =
             yield* WorkspaceSourceCatalogManagerService;
 
@@ -470,10 +443,9 @@ export const RuntimeExecutionResolverLive = (
             sourceAuthService,
             sourceAuthMaterialService,
             sourceCatalogStore,
+            sourceStore,
             localToolRuntimeLoader,
             workspaceConfigStore,
-            workspaceStateStore,
-            sourceArtifactStore,
             dependencies: {
               workspaceSourceCatalogManager,
             },

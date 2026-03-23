@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import type {
   ToolCatalog,
 } from "@executor/codemode-core";
@@ -14,11 +15,7 @@ import {
 } from "../../catalog/source/runtime";
 import type { RuntimeLocalWorkspaceState } from "../../local/runtime-context";
 import {
-  makeWorkspaceStorageLayer,
-  type SourceArtifactStoreShape,
   type WorkspaceConfigStoreShape,
-  type WorkspaceStateStoreShape,
-  type WorkspaceStorageServices,
 } from "../../local/storage";
 import { provideRuntimeLocalWorkspace } from "./local";
 import {
@@ -33,8 +30,18 @@ import {
   indexSource,
   removeSourceTools,
   syncSourceLifecycle,
+  loadToolForInvocation,
+  type DbLoadedToolData,
 } from "../../../db/indexer";
 import type { SourceToIndex, ToolToIndex } from "../../../db/indexer";
+import { loadSemanticSearchSignature, writeSemanticSearchSignature } from "../../../db/indexer";
+import {
+  RuntimeSourceStoreService,
+} from "../../sources/source-store";
+import {
+  stableSourceCatalogId,
+  stableSourceCatalogRevisionId,
+} from "../../sources/source-definitions";
 import type { Embedder } from "../../../db/embedder";
 import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-indexer";
 import { catalog_tool } from "../../../db/schema";
@@ -67,7 +74,6 @@ const defaultSourceCatalogDependencies: Required<SourceCatalogDependencies> = {
 // DB path resolution
 // ---------------------------------------------------------------------------
 
-const WORKSPACE_CATALOG_DB_FILENAME = "catalog.db";
 
 const resolveWorkspaceCatalogDbPath = (
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null,
@@ -77,7 +83,7 @@ const resolveWorkspaceCatalogDbPath = (
   }
   return join(
     runtimeLocalWorkspace.context.stateDirectory,
-    WORKSPACE_CATALOG_DB_FILENAME,
+    EXECUTOR_DB_FILENAME,
   );
 };
 
@@ -105,6 +111,8 @@ export const toToolToIndex = (
   outputTypePreview: tool.descriptor.contract?.outputTypePreview ?? undefined,
   interaction: tool.descriptor.interaction ?? "auto",
   providerKind: tool.descriptor.providerKind ?? undefined,
+  capabilityJson: JSON.stringify(tool.capability),
+  executableJson: JSON.stringify(tool.executable),
 });
 
 export const toSourceToIndex = (
@@ -150,7 +158,7 @@ export const loadWorkspaceCatalogTools = (input: {
 }): Effect.Effect<
   readonly LoadedSourceCatalogToolIndexEntry[],
   Error,
-  WorkspaceStorageServices
+  never
 > =>
   Effect.map(
     input.sourceCatalogStore.loadWorkspaceSourceCatalogToolIndex({
@@ -173,7 +181,7 @@ export const loadWorkspaceCatalogToolByPath = (input: {
 }): Effect.Effect<
   LoadedSourceCatalogToolIndexEntry | null,
   Error,
-  WorkspaceStorageServices
+  never
 > =>
   input.sourceCatalogStore.loadWorkspaceSourceCatalogToolByPath({
     workspaceId: input.workspaceId,
@@ -189,6 +197,100 @@ export const loadWorkspaceCatalogToolByPath = (input: {
   );
 
 // ---------------------------------------------------------------------------
+// DB-backed tool loading for invocation
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a StoredSourceRecord from a full Source object.
+ * Used when constructing a LoadedSourceCatalogToolIndexEntry from DB data.
+ */
+const sourceRecordFromSource = (src: Source): LoadedSourceCatalogToolIndexEntry["sourceRecord"] => ({
+  id: src.id,
+  workspaceId: src.workspaceId,
+  catalogId: stableSourceCatalogId(src),
+  catalogRevisionId: stableSourceCatalogRevisionId(src),
+  name: src.name,
+  kind: src.kind,
+  endpoint: src.endpoint,
+  status: src.status,
+  enabled: src.enabled,
+  namespace: src.namespace,
+  iconUrl: src.iconUrl,
+  importAuthPolicy: src.importAuthPolicy,
+  bindingConfigJson: JSON.stringify(src.binding),
+  sourceHash: src.sourceHash,
+  lastError: src.lastError,
+  createdAt: src.createdAt,
+  updatedAt: src.updatedAt,
+});
+
+/**
+ * Load a tool by path from SQLite for invocation. Queries catalog_tool for
+ * capability_json + executable_json and catalog_revision for snapshot_json,
+ * then loads the full Source from the source store.
+ *
+ * Returns a LoadedSourceCatalogToolIndexEntry compatible with the existing
+ * invocation pipeline, or null if the tool is not found or not available.
+ */
+export const loadWorkspaceCatalogToolByPathFromDb = (input: {
+  workspaceId: Source["workspaceId"];
+  accountId: AccountId;
+  path: string;
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
+  sourceStore: Effect.Effect.Success<typeof RuntimeSourceStoreService>;
+}): Effect.Effect<LoadedSourceCatalogToolIndexEntry | null, unknown> => {
+  const dbPath = join(
+    input.runtimeLocalWorkspace.context.stateDirectory,
+    EXECUTOR_DB_FILENAME,
+  );
+  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+
+  return Effect.gen(function* () {
+    const toolData = yield* loadToolForInvocation(input.path).pipe(
+      Effect.provide(dbLayer),
+    );
+
+    if (!toolData) return null;
+
+    // Load the full Source object from the source store (handles binding, auth, etc.)
+    const src = yield* input.sourceStore.loadSourceById({
+      workspaceId: input.workspaceId,
+      sourceId: toolData.sourceId,
+      actorAccountId: input.accountId,
+    });
+
+    if (!src.enabled || src.status !== "connected") return null;
+
+    const searchNamespace = toolData.namespace;
+    const searchText = [
+      toolData.path,
+      searchNamespace,
+      src.name,
+      toolData.capability.surface.title,
+      toolData.capability.surface.summary,
+      toolData.capability.surface.description,
+    ]
+      .filter((part): part is string => typeof part === "string" && part.length > 0)
+      .join(" ")
+      .toLowerCase();
+
+    return {
+      path: toolData.path,
+      searchNamespace,
+      searchText,
+      source: src,
+      sourceRecord: sourceRecordFromSource(src),
+      capabilityId: toolData.capability.id,
+      executableId: toolData.executable.id,
+      capability: toolData.capability,
+      executable: toolData.executable,
+      descriptor: toolData.descriptor,
+      projectedCatalog: toolData.catalog,
+    } as LoadedSourceCatalogToolIndexEntry;
+  });
+};
+
+// ---------------------------------------------------------------------------
 // Index workspace tools into SQLite
 // ---------------------------------------------------------------------------
 
@@ -202,8 +304,6 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
   accountId: AccountId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   embedder?: Embedder;
   dependencies?: SourceCatalogDependencies;
@@ -217,11 +317,6 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     return Effect.fail(new Error("Workspace catalog DB path is unavailable."));
   }
 
-  const workspaceStorageLayer = makeWorkspaceStorageLayer({
-    workspaceConfigStore: input.workspaceConfigStore,
-    workspaceStateStore: input.workspaceStateStore,
-    sourceArtifactStore: input.sourceArtifactStore,
-  });
   const dbLayer = dependencies.makeWorkspaceCatalogDbLayer(dbPath, {
     ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
   });
@@ -261,11 +356,9 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
 
       return Effect.gen(function* () {
         const db = yield* SqliteDrizzle;
-        const workspaceState = yield* input.workspaceStateStore.load(
-          input.runtimeLocalWorkspace.context,
-        );
-        const previousSemanticSearchSignature =
-          workspaceState.catalog.semanticSearchSignature;
+        const previousSemanticSearchSignature = yield* loadSemanticSearchSignature(
+          input.workspaceId,
+        ).pipe(Effect.catchAll(() => Effect.succeed(null)));
         const shouldRebuildEmbeddings =
           previousSemanticSearchSignature !== nextSemanticSearchSignature;
         const indexedSources = yield* db
@@ -319,19 +412,13 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
         );
 
         if (previousSemanticSearchSignature !== nextSemanticSearchSignature) {
-          yield* input.workspaceStateStore.write({
-            context: input.runtimeLocalWorkspace.context,
-            state: {
-              ...workspaceState,
-              catalog: {
-                semanticSearchSignature: nextSemanticSearchSignature,
-              },
-            },
-          });
+          yield* writeSemanticSearchSignature(
+            input.workspaceId,
+            nextSemanticSearchSignature,
+          );
         }
       });
     }),
-    Effect.provide(workspaceStorageLayer),
     Effect.provide(dbLayer),
     Effect.asVoid,
   );
@@ -346,8 +433,6 @@ export const acquireWorkspaceSourceCatalog = (input: {
   accountId: AccountId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   embedder?: Embedder;
   dependencies?: SourceCatalogDependencies;
@@ -393,8 +478,6 @@ export const createWorkspaceSourceCatalog = (input: {
   accountId: AccountId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   embedder?: Embedder;
   dependencies?: SourceCatalogDependencies;
