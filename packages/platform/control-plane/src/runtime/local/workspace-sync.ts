@@ -5,40 +5,7 @@ import {
   type LoadedLocalExecutorConfig,
   type ResolvedLocalWorkspaceContext,
 } from "./config";
-import {
-  loadLocalWorkspaceState,
-  writeLocalWorkspaceState,
-  type LocalWorkspaceState,
-} from "./workspace-state";
-
-const trimOrNull = (value: string | null | undefined): string | null => {
-  if (value == null) {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-};
-
-export const derivePolicyConfigKey = (
-  policy: {
-    resourcePattern: string;
-    effect: "allow" | "deny";
-    approvalMode: "auto" | "required";
-  },
-  used: Set<string>,
-): string => {
-  const base =
-    trimOrNull(policy.resourcePattern)
-    ?? `${policy.effect}-${policy.approvalMode}`;
-  let candidate = base;
-  let counter = 2;
-  while (used.has(candidate)) {
-    candidate = `${base}-${counter}`;
-    counter += 1;
-  }
-  used.add(candidate);
-  return candidate;
-};
+import { loadLocalWorkspaceState, writeLocalWorkspaceState, type LocalWorkspaceState } from "./workspace-state";
 
 const pruneLocalWorkspaceState = (input: {
   context: ResolvedLocalWorkspaceContext;
@@ -50,20 +17,11 @@ const pruneLocalWorkspaceState = (input: {
     const configuredSourceIds = new Set(
       Object.keys(input.loadedConfig.config?.sources ?? {}),
     );
-    const configuredPolicyKeys = new Set(
-      Object.keys(input.loadedConfig.config?.policies ?? {}),
-    );
-
     const nextState: LocalWorkspaceState = {
       ...currentState,
       sources: Object.fromEntries(
         Object.entries(currentState.sources).filter(([sourceId]) =>
           configuredSourceIds.has(sourceId)
-        ),
-      ),
-      policies: Object.fromEntries(
-        Object.entries(currentState.policies).filter(([policyKey]) =>
-          configuredPolicyKeys.has(policyKey)
         ),
       ),
     };

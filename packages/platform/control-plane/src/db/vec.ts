@@ -1,5 +1,23 @@
 import { SqlClient } from "@effect/sql"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+
+export type VecServiceShape = {
+  hasVecTable: typeof hasVecTable
+  setupVecTable: typeof setupVecTable
+  getVecTableDimensions: typeof getVecTableDimensions
+  dropVecTable: typeof dropVecTable
+  searchVec: typeof searchVec
+  upsertVecTool: typeof upsertVecTool
+  removeVecSourceTools: typeof removeVecSourceTools
+  removeVecTools: typeof removeVecTools
+}
+
+export class VecService extends Context.Tag("#db/VecService")<
+  VecService,
+  VecServiceShape
+>() {}
 
 export const hasVecTable = () =>
   Effect.gen(function* () {
@@ -158,3 +176,14 @@ export const removeVecTools = (toolIds: readonly string[]) =>
       yield* sql.unsafe(`DELETE FROM vec_catalog_tool WHERE tool_id = ?`, [toolId])
     }
   })
+
+export const VecLive = Layer.succeed(VecService, {
+  hasVecTable,
+  setupVecTable,
+  getVecTableDimensions,
+  dropVecTable,
+  searchVec,
+  upsertVecTool,
+  removeVecSourceTools,
+  removeVecTools,
+})

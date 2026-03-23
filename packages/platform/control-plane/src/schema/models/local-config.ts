@@ -109,17 +109,6 @@ export const LocalConfigSourceSchema = Schema.Union(
   ]),
 ) as Schema.Schema<LocalConfigSource, any, never>;
 
-export const LocalConfigPolicyActionSchema = Schema.Literal("allow", "deny");
-export const LocalConfigPolicyApprovalSchema = Schema.Literal("auto", "manual");
-
-export const LocalConfigPolicySchema = Schema.Struct({
-  match: Schema.String,
-  action: LocalConfigPolicyActionSchema,
-  approval: LocalConfigPolicyApprovalSchema,
-  enabled: Schema.optional(Schema.Boolean),
-  priority: Schema.optional(Schema.Number),
-});
-
 export const LocalConfigSecretsSchema = Schema.Struct({
   providers: Schema.optional(
     Schema.Record({
@@ -157,12 +146,6 @@ export const LocalExecutorConfigSchema = Schema.Struct({
       value: LocalConfigSourceSchema,
     }),
   ),
-  policies: Schema.optional(
-    Schema.Record({
-      key: Schema.String,
-      value: LocalConfigPolicySchema,
-    }),
-  ),
   secrets: Schema.optional(LocalConfigSecretsSchema),
 });
 
@@ -173,7 +156,6 @@ export type LocalConfigSecretProvider =
 export type LocalConfigExplicitSecretRef =
   typeof LocalConfigExplicitSecretRefSchema.Type;
 export type LocalConfigSecretInput = typeof LocalConfigSecretInputSchema.Type;
-export type LocalConfigPolicy = typeof LocalConfigPolicySchema.Type;
 export type LocalConfigSecrets = typeof LocalConfigSecretsSchema.Type;
 export type LocalConfigSemanticSearch = typeof LocalConfigSemanticSearchSchema.Type;
 export type LocalExecutorRuntime = typeof LocalExecutorRuntimeSchema.Type;

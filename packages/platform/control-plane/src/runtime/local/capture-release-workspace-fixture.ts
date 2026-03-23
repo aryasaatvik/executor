@@ -314,7 +314,9 @@ const main = Effect.gen(function* () {
     sources: {
       [args.sourceId]: sourceState,
     },
-    policies: {},
+    catalog: {
+      semanticSearchSignature: null,
+    },
   };
 
   const manifest = ReleaseWorkspaceFixtureManifestSchema.make({

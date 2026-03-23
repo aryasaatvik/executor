@@ -2,42 +2,69 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
-
+import { SqlClient } from "@effect/sql";
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 import {
-  AuthArtifactSchema,
-  AuthLeaseSchema,
-  type AuthArtifact,
-  type AuthLease,
-  type Execution,
-  type ExecutionInteraction,
-  type ExecutionStep,
-  ExecutionInteractionSchema,
-  ExecutionSchema,
-  ExecutionStepSchema,
-  type ProviderAuthGrant,
-  ProviderAuthGrantSchema,
-  SecretMaterialSchema,
-  type SecretMaterial,
-  type SourceAuthSession,
-  SourceAuthSessionSchema,
-  type WorkspaceOauthClient,
-  WorkspaceOauthClientSchema,
-  type WorkspaceSourceOauthClient,
-  WorkspaceSourceOauthClientSchema,
-} from "#schema";
+  and,
+  asc,
+  desc,
+  eq,
+  isNull,
+} from "drizzle-orm";
 import * as Effect from "effect/Effect";
+import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import {
+  auth_artifact,
+  auth_lease,
+  execution,
+  execution_interaction,
+  execution_step,
+  provider_auth_grant,
+  secret_material,
+  source_auth_session,
+  source_oauth_client,
+  workspace_oauth_client,
+} from "../../db/schema";
+import { makeWorkspaceCatalogDbLayer } from "../../db/setup";
 import type { ResolvedLocalWorkspaceContext } from "./config";
 import { deriveLocalInstallation } from "./installation";
+import { localWorkspaceStatePath } from "./workspace-state";
 import {
   LocalFileSystemError,
   unknownLocalErrorDetails,
 } from "./errors";
 
+import type {
+  AuthArtifact,
+  AuthLease,
+  Execution,
+  ExecutionInteraction,
+  ExecutionStep,
+  ProviderAuthGrant,
+  SecretMaterial,
+  SourceAuthSession,
+  WorkspaceOauthClient,
+  WorkspaceSourceOauthClient,
+} from "#schema";
+import {
+  AuthArtifactSchema,
+  AuthLeaseSchema,
+  ExecutionInteractionSchema,
+  ExecutionSchema,
+  ExecutionStepSchema,
+  ProviderAuthGrantSchema,
+  SecretMaterialSchema,
+  SourceAuthSessionSchema,
+  WorkspaceOauthClientSchema,
+  WorkspaceSourceOauthClientSchema,
+} from "#schema";
+
 const LOCAL_CONTROL_PLANE_STATE_VERSION = 1 as const;
 const LOCAL_CONTROL_PLANE_STATE_BASENAME = "control-plane-state.json";
+const WORKSPACE_DB_FILENAME = "catalog.db";
 
 const LocalControlPlaneStateSchema = Schema.Struct({
   version: Schema.Literal(LOCAL_CONTROL_PLANE_STATE_VERSION),
@@ -60,6 +87,15 @@ export type LocalControlPlanePersistence = {
   close: () => Promise<void>;
 };
 
+type SecretMaterialSummary = {
+  id: string;
+  providerId: string;
+  name: string | null;
+  purpose: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 const decodeLocalControlPlaneState = Schema.decodeUnknown(
   LocalControlPlaneStateSchema,
 );
@@ -78,9 +114,6 @@ const defaultLocalControlPlaneState = (): LocalControlPlaneState => ({
   executionSteps: [],
 });
 
-const cloneValue = <T>(value: T): T =>
-  JSON.parse(JSON.stringify(value)) as T;
-
 const mapFileSystemError = (path: string, action: string) => (cause: unknown) =>
   new LocalFileSystemError({
     message: `Failed to ${action} ${path}: ${unknownLocalErrorDetails(cause)}`,
@@ -88,25 +121,6 @@ const mapFileSystemError = (path: string, action: string) => (cause: unknown) =>
     path,
     details: unknownLocalErrorDetails(cause),
   });
-
-const actorEquals = (
-  left: string | null | undefined,
-  right: string | null | undefined,
-): boolean => (left ?? null) === (right ?? null);
-
-const sortByUpdatedAtAndIdAsc = <T extends { updatedAt: number; id: string }>(
-  values: readonly T[],
-): T[] =>
-  [...values].sort((left, right) =>
-    left.updatedAt - right.updatedAt || left.id.localeCompare(right.id),
-  );
-
-const sortByUpdatedAtAndIdDesc = <T extends { updatedAt: number; id: string }>(
-  values: readonly T[],
-): T[] =>
-  [...values].sort((left, right) =>
-    right.updatedAt - left.updatedAt || right.id.localeCompare(left.id),
-  );
 
 const localControlPlaneStatePath = (
   context: ResolvedLocalWorkspaceContext,
@@ -117,6 +131,9 @@ const localControlPlaneStatePath = (
     deriveLocalInstallation(context).workspaceId,
     LOCAL_CONTROL_PLANE_STATE_BASENAME,
   );
+
+const workspaceDbPath = (context: ResolvedLocalWorkspaceContext): string =>
+  join(context.stateDirectory, WORKSPACE_DB_FILENAME);
 
 const bindFileSystem = <A, E>(
   fileSystem: FileSystem.FileSystem,
@@ -187,278 +204,181 @@ export const writeLocalControlPlaneState = (input: {
 }): Effect.Effect<void, LocalFileSystemError> =>
   bindNodeFileSystem(writeStateToDisk(input.context, input.state));
 
-const mergeById = <T extends { id: string }>(
-  current: readonly T[],
-  imported: readonly T[],
-): T[] => {
-  const merged = new Map<string, T>();
+const toError = (cause: unknown): Error =>
+  cause instanceof Error ? cause : new Error(String(cause));
 
-  for (const item of imported) {
-    merged.set(item.id, cloneValue(item));
-  }
+const nullableEquals = <T>(column: T, value: string | null | undefined) =>
+  value == null ? isNull(column as never) : eq(column as never, value);
 
-  for (const item of current) {
-    merged.set(item.id, cloneValue(item));
-  }
+const jsonString = (value: unknown): string => JSON.stringify(value);
 
-  return [...merged.values()];
-};
+const jsonStringOrNull = (value: unknown | null): string | null =>
+  value === null ? null : JSON.stringify(value);
 
-const mergeAuthLeases = (
-  current: readonly AuthLease[],
-  imported: readonly AuthLease[],
-): AuthLease[] => {
-  const merged = new Map<string, AuthLease>();
+const parseJson = (value: string, field: string) =>
+  Effect.try({
+    try: () => JSON.parse(value),
+    catch: (cause) =>
+      new Error(`Failed to parse ${field}: ${unknownLocalErrorDetails(cause)}`),
+  });
 
-  for (const lease of imported) {
-    merged.set(lease.authArtifactId, cloneValue(lease));
-  }
+const parseNullableJson = (value: string | null, field: string) =>
+  value === null ? Effect.succeed<unknown | null>(null) : parseJson(value, field);
 
-  for (const lease of current) {
-    merged.set(lease.authArtifactId, cloneValue(lease));
-  }
+const optionFromNullable = <T>(value: T | null | undefined) =>
+  value == null ? Option.none<T>() : Option.some(value);
 
-  return [...merged.values()];
-};
+const toAuthArtifact = (
+  row: typeof auth_artifact.$inferSelect,
+): AuthArtifact => ({
+  ...row,
+  configJson: jsonString(row.configJson),
+  grantSetJson: jsonStringOrNull(row.grantSetJson),
+}) as AuthArtifact;
 
-const mergeAuthArtifacts = (
-  current: readonly AuthArtifact[],
-  imported: readonly AuthArtifact[],
-): AuthArtifact[] => {
-  const merged = new Map<string, AuthArtifact>();
+const toAuthLease = (
+  row: typeof auth_lease.$inferSelect,
+): AuthLease => ({
+  ...row,
+  placementsTemplateJson: jsonString(row.placementsTemplateJson),
+}) as AuthLease;
 
-  for (const artifact of imported) {
-    merged.set(
-      [
-        artifact.workspaceId,
-        artifact.sourceId,
-        artifact.actorAccountId ?? "",
-        artifact.slot,
-      ].join("::"),
-      cloneValue(artifact),
-    );
-  }
+const toSourceOauthClient = (
+  row: typeof source_oauth_client.$inferSelect,
+): WorkspaceSourceOauthClient => ({
+  ...row,
+  clientMetadataJson: jsonStringOrNull(row.clientMetadataJson),
+}) as WorkspaceSourceOauthClient;
 
-  for (const artifact of current) {
-    merged.set(
-      [
-        artifact.workspaceId,
-        artifact.sourceId,
-        artifact.actorAccountId ?? "",
-        artifact.slot,
-      ].join("::"),
-      cloneValue(artifact),
-    );
-  }
+const toWorkspaceOauthClient = (
+  row: typeof workspace_oauth_client.$inferSelect,
+): WorkspaceOauthClient => ({
+  ...row,
+  clientMetadataJson: jsonStringOrNull(row.clientMetadataJson),
+}) as WorkspaceOauthClient;
 
-  return [...merged.values()];
-};
+const toProviderAuthGrant = (
+  row: typeof provider_auth_grant.$inferSelect,
+): ProviderAuthGrant => ({
+  ...row,
+  clientAuthentication: row.clientAuthentication as ProviderAuthGrant["clientAuthentication"],
+  refreshToken: row.refreshTokenRef as ProviderAuthGrant["refreshToken"],
+  grantedScopes: row.grantedScopes as ProviderAuthGrant["grantedScopes"],
+}) as unknown as ProviderAuthGrant;
 
-const mergeSourceOauthClients = (
-  current: readonly WorkspaceSourceOauthClient[],
-  imported: readonly WorkspaceSourceOauthClient[],
-): WorkspaceSourceOauthClient[] => {
-  const merged = new Map<string, WorkspaceSourceOauthClient>();
+const toSourceAuthSession = (
+  row: typeof source_auth_session.$inferSelect,
+): SourceAuthSession => ({
+  ...row,
+  status: row.status as SourceAuthSession["status"],
+  sessionDataJson: jsonString(row.sessionDataJson),
+}) as SourceAuthSession;
 
-  for (const oauthClient of imported) {
-    merged.set(
-      [oauthClient.workspaceId, oauthClient.sourceId, oauthClient.providerKey].join(
-        "::",
-      ),
-      cloneValue(oauthClient),
-    );
-  }
+const toSecretMaterial = (
+  row: typeof secret_material.$inferSelect,
+): SecretMaterial => ({
+  ...row,
+}) as SecretMaterial;
 
-  for (const oauthClient of current) {
-    merged.set(
-      [oauthClient.workspaceId, oauthClient.sourceId, oauthClient.providerKey].join(
-        "::",
-      ),
-      cloneValue(oauthClient),
-    );
-  }
+const toExecution = (
+  row: typeof execution.$inferSelect,
+): Execution => ({
+  ...row,
+  executionSessionId: row.executionSessionId ?? null,
+  status: row.status as Execution["status"],
+  resultJson: jsonStringOrNull(row.resultJson),
+  logsJson: jsonStringOrNull(row.logsJson),
+}) as Execution;
 
-  return [...merged.values()];
-};
+const toExecutionInteraction = (
+  row: typeof execution_interaction.$inferSelect,
+): ExecutionInteraction => ({
+  ...row,
+  status: row.status as ExecutionInteraction["status"],
+  payloadJson: jsonString(row.payloadJson),
+  responseJson: jsonStringOrNull(row.responseJson),
+  responsePrivateJson: jsonStringOrNull(row.responsePrivateJson),
+}) as ExecutionInteraction;
 
-const mergeWorkspaceOauthClients = (
-  current: readonly WorkspaceOauthClient[],
-  imported: readonly WorkspaceOauthClient[],
-): WorkspaceOauthClient[] => {
-  const merged = new Map<string, WorkspaceOauthClient>();
+const toExecutionStep = (
+  row: typeof execution_step.$inferSelect,
+): ExecutionStep => ({
+  ...row,
+  kind: row.kind as ExecutionStep["kind"],
+  status: row.status as ExecutionStep["status"],
+  argsJson: jsonString(row.argsJson),
+  resultJson: jsonStringOrNull(row.resultJson),
+}) as ExecutionStep;
 
-  for (const oauthClient of imported) {
-    merged.set(
-      [oauthClient.workspaceId, oauthClient.providerKey, oauthClient.id].join("::"),
-      cloneValue(oauthClient),
-    );
-  }
-
-  for (const oauthClient of current) {
-    merged.set(
-      [oauthClient.workspaceId, oauthClient.providerKey, oauthClient.id].join("::"),
-      cloneValue(oauthClient),
-    );
-  }
-
-  return [...merged.values()];
-};
-
-const mergeProviderAuthGrants = (
-  current: readonly ProviderAuthGrant[],
-  imported: readonly ProviderAuthGrant[],
-): ProviderAuthGrant[] => mergeById(current, imported);
-
-export const mergeImportedLocalControlPlaneState = (input: {
-  current: LocalControlPlaneState;
-  imported: Partial<Omit<LocalControlPlaneState, "version">>;
-}): LocalControlPlaneState => ({
-  version: LOCAL_CONTROL_PLANE_STATE_VERSION,
-  authArtifacts: mergeAuthArtifacts(
-    input.current.authArtifacts,
-    input.imported.authArtifacts ?? [],
-  ),
-  authLeases: mergeAuthLeases(
-    input.current.authLeases,
-    input.imported.authLeases ?? [],
-  ),
-  sourceOauthClients: mergeSourceOauthClients(
-    input.current.sourceOauthClients,
-    input.imported.sourceOauthClients ?? [],
-  ),
-  workspaceOauthClients: mergeWorkspaceOauthClients(
-    input.current.workspaceOauthClients,
-    input.imported.workspaceOauthClients ?? [],
-  ),
-  providerAuthGrants: mergeProviderAuthGrants(
-    input.current.providerAuthGrants,
-    input.imported.providerAuthGrants ?? [],
-  ),
-  sourceAuthSessions: mergeById(
-    input.current.sourceAuthSessions,
-    input.imported.sourceAuthSessions ?? [],
-  ),
-  secretMaterials: mergeById(
-    input.current.secretMaterials,
-    input.imported.secretMaterials ?? [],
-  ),
-  executions: mergeById(input.current.executions, input.imported.executions ?? []),
-  executionInteractions: mergeById(
-    input.current.executionInteractions,
-    input.imported.executionInteractions ?? [],
-  ),
-  executionSteps: mergeById(
-    input.current.executionSteps,
-    input.imported.executionSteps ?? [],
-  ),
-});
-
-type StateMutationResult<A> = {
-  state: LocalControlPlaneState;
-  value: A;
-};
-
-const createStateManager = (
+const removeLegacyControlPlaneState = (
   context: ResolvedLocalWorkspaceContext,
   fileSystem: FileSystem.FileSystem,
+) =>
+  bindFileSystem(
+    fileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = localControlPlaneStatePath(context);
+      const exists = yield* fs.exists(path).pipe(
+        Effect.mapError(mapFileSystemError(path, "check control plane state path")),
+      );
+      if (!exists) {
+        return;
+      }
+
+      yield* fs.remove(path, { force: true }).pipe(
+        Effect.mapError(mapFileSystemError(path, "remove legacy control plane state")),
+      );
+    }),
+  );
+
+const createSqliteControlPlaneStore = (
+  runtime: ManagedRuntime.ManagedRuntime<any, any>,
 ) => {
-  let cache: LocalControlPlaneState | null = null;
-  let mutationQueue: Promise<void> = Promise.resolve();
-  const run = <A, E>(effect: Effect.Effect<A, E, FileSystem.FileSystem>) =>
-    Effect.runPromise(bindFileSystem(fileSystem, effect));
-
-  const ensureLoaded = async (): Promise<LocalControlPlaneState> => {
-    if (cache !== null) {
-      return cache;
-    }
-
-    cache = await run(readStateFromDisk(context));
-    return cache;
-  };
-
-  const read = <A>(
-    operation: (state: LocalControlPlaneState) => A | Promise<A>,
-  ): Effect.Effect<A, LocalFileSystemError> =>
-    Effect.tryPromise({
-      try: async () => {
-        await mutationQueue;
-        return operation(cloneValue(await ensureLoaded()));
-      },
-      catch: mapFileSystemError(
-        localControlPlaneStatePath(context),
-        "read control plane state",
-      ),
-    });
-
-  const mutate = <A>(
-    operation: (
-      state: LocalControlPlaneState,
-    ) => StateMutationResult<A> | Promise<StateMutationResult<A>>,
-  ): Effect.Effect<A, LocalFileSystemError> =>
-    Effect.tryPromise({
-      try: async () => {
-        let value!: A;
-        let failure: unknown = null;
-
-        mutationQueue = mutationQueue.then(async () => {
-          try {
-            const current = cloneValue(await ensureLoaded());
-            const result = await operation(current);
-            cache = result.state;
-            value = result.value;
-            await run(writeStateToDisk(context, cache));
-          } catch (cause) {
-            failure = cause;
-          }
-        });
-
-        await mutationQueue;
-
-        if (failure !== null) {
-          throw failure;
-        }
-
-        return value;
-      },
-      catch: mapFileSystemError(
-        localControlPlaneStatePath(context),
-        "write control plane state",
-      ),
-    });
-
-  return {
-    read,
-    mutate,
-  };
-};
-
-export const createLocalControlPlaneStore = (
-  context: ResolvedLocalWorkspaceContext,
-  fileSystem: FileSystem.FileSystem,
-) => {
-  const stateManager = createStateManager(context, fileSystem);
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, SqliteDrizzle | SqlClient.SqlClient>,
+  ): Effect.Effect<A, Error | E, never> =>
+    effect.pipe(
+      Effect.provide(runtime),
+      Effect.mapError((cause) => cause as Error | E),
+    );
 
   return {
     authArtifacts: {
       listByWorkspaceId: (workspaceId: AuthArtifact["workspaceId"]) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.authArtifacts.filter((artifact) => artifact.workspaceId === workspaceId),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(auth_artifact)
+              .where(eq(auth_artifact.workspaceId, workspaceId))
+              .orderBy(asc(auth_artifact.updatedAt), asc(auth_artifact.id));
+
+            return rows.map(toAuthArtifact);
+          }),
         ),
 
       listByWorkspaceAndSourceId: (input: {
         workspaceId: AuthArtifact["workspaceId"];
         sourceId: AuthArtifact["sourceId"];
       }) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.authArtifacts.filter(
-              (artifact) =>
-                artifact.workspaceId === input.workspaceId
-                && artifact.sourceId === input.sourceId,
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(auth_artifact)
+              .where(
+                and(
+                  eq(auth_artifact.workspaceId, input.workspaceId),
+                  eq(auth_artifact.sourceId, input.sourceId),
+                ),
+              )
+              .orderBy(asc(auth_artifact.updatedAt), asc(auth_artifact.id));
+
+            return rows.map(toAuthArtifact);
+          }),
         ),
 
       getByWorkspaceSourceAndActor: (input: {
@@ -467,39 +387,62 @@ export const createLocalControlPlaneStore = (
         actorAccountId: AuthArtifact["actorAccountId"];
         slot: AuthArtifact["slot"];
       }) =>
-        stateManager.read((state) => {
-          const artifact = state.authArtifacts.find(
-            (candidate) =>
-              candidate.workspaceId === input.workspaceId
-              && candidate.sourceId === input.sourceId
-              && candidate.slot === input.slot
-              && actorEquals(candidate.actorAccountId, input.actorAccountId),
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(auth_artifact)
+              .where(
+                and(
+                  eq(auth_artifact.workspaceId, input.workspaceId),
+                  eq(auth_artifact.sourceId, input.sourceId),
+                  eq(auth_artifact.slot, input.slot),
+                  nullableEquals(auth_artifact.actorAccountId, input.actorAccountId),
+                ),
+              )
+              .limit(1);
 
-          return artifact ? Option.some(cloneValue(artifact)) : Option.none<AuthArtifact>();
-        }),
+            return optionFromNullable(rows[0] ? toAuthArtifact(rows[0]) : null);
+          }),
+        ),
 
       upsert: (artifact: AuthArtifact) =>
-        stateManager.mutate((state) => {
-          const nextArtifacts = state.authArtifacts.filter(
-            (candidate) =>
-              !(
-                candidate.workspaceId === artifact.workspaceId
-                && candidate.sourceId === artifact.sourceId
-                && candidate.slot === artifact.slot
-                && actorEquals(candidate.actorAccountId, artifact.actorAccountId)
-              ),
-          );
-          nextArtifacts.push(cloneValue(artifact));
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const sql = yield* SqlClient.SqlClient;
+            const configJson = yield* parseJson(
+              artifact.configJson,
+              "auth artifact configJson",
+            );
+            const grantSetJson = yield* parseNullableJson(
+              artifact.grantSetJson,
+              "auth artifact grantSetJson",
+            );
 
-          return {
-            state: {
-              ...state,
-              authArtifacts: nextArtifacts,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+            yield* sql.withTransaction(
+              Effect.gen(function* () {
+                yield* db
+                  .delete(auth_artifact)
+                  .where(
+                    and(
+                      eq(auth_artifact.workspaceId, artifact.workspaceId),
+                      eq(auth_artifact.sourceId, artifact.sourceId),
+                      eq(auth_artifact.slot, artifact.slot),
+                      nullableEquals(auth_artifact.actorAccountId, artifact.actorAccountId),
+                    ),
+                  );
+
+                yield* db.insert(auth_artifact).values({
+                  ...artifact,
+                  configJson,
+                  grantSetJson,
+                });
+              }),
+            );
+          }),
+        ),
 
       removeByWorkspaceSourceAndActor: (input: {
         workspaceId: AuthArtifact["workspaceId"];
@@ -507,87 +450,114 @@ export const createLocalControlPlaneStore = (
         actorAccountId: AuthArtifact["actorAccountId"];
         slot?: AuthArtifact["slot"];
       }) =>
-        stateManager.mutate((state) => {
-          const nextArtifacts = state.authArtifacts.filter(
-            (candidate) =>
-              candidate.workspaceId !== input.workspaceId
-              || candidate.sourceId !== input.sourceId
-              || !actorEquals(candidate.actorAccountId, input.actorAccountId)
-              || (input.slot !== undefined && candidate.slot !== input.slot),
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(auth_artifact)
+              .where(
+                and(
+                  eq(auth_artifact.workspaceId, input.workspaceId),
+                  eq(auth_artifact.sourceId, input.sourceId),
+                  nullableEquals(auth_artifact.actorAccountId, input.actorAccountId),
+                  input.slot === undefined
+                    ? undefined
+                    : eq(auth_artifact.slot, input.slot),
+                ),
+              )
+              .returning({ id: auth_artifact.id });
 
-          return {
-            state: {
-              ...state,
-              authArtifacts: nextArtifacts,
-            },
-            value: nextArtifacts.length !== state.authArtifacts.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
 
       removeByWorkspaceAndSourceId: (input: {
         workspaceId: AuthArtifact["workspaceId"];
         sourceId: AuthArtifact["sourceId"];
       }) =>
-        stateManager.mutate((state) => {
-          const nextArtifacts = state.authArtifacts.filter(
-            (candidate) =>
-              candidate.workspaceId !== input.workspaceId
-              || candidate.sourceId !== input.sourceId,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(auth_artifact)
+              .where(
+                and(
+                  eq(auth_artifact.workspaceId, input.workspaceId),
+                  eq(auth_artifact.sourceId, input.sourceId),
+                ),
+              )
+              .returning({ id: auth_artifact.id });
 
-          return {
-            state: {
-              ...state,
-              authArtifacts: nextArtifacts,
-            },
-            value: state.authArtifacts.length - nextArtifacts.length,
-          } satisfies StateMutationResult<number>;
-        }),
+            return deleted.length;
+          }),
+        ),
     },
 
     authLeases: {
       listAll: () =>
-        stateManager.read((state) => sortByUpdatedAtAndIdAsc(state.authLeases)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(auth_lease)
+              .orderBy(asc(auth_lease.updatedAt), asc(auth_lease.id));
+
+            return rows.map(toAuthLease);
+          }),
+        ),
 
       getByAuthArtifactId: (authArtifactId: AuthLease["authArtifactId"]) =>
-        stateManager.read((state) => {
-          const lease = state.authLeases.find(
-            (candidate) => candidate.authArtifactId === authArtifactId,
-          );
-          return lease ? Option.some(cloneValue(lease)) : Option.none<AuthLease>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(auth_lease)
+              .where(eq(auth_lease.authArtifactId, authArtifactId))
+              .limit(1);
+
+            return optionFromNullable(rows[0] ? toAuthLease(rows[0]) : null);
+          }),
+        ),
 
       upsert: (lease: AuthLease) =>
-        stateManager.mutate((state) => {
-          const nextLeases = state.authLeases.filter(
-            (candidate) => candidate.authArtifactId !== lease.authArtifactId,
-          );
-          nextLeases.push(cloneValue(lease));
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const sql = yield* SqlClient.SqlClient;
+            const placementsTemplateJson = yield* parseJson(
+              lease.placementsTemplateJson,
+              "auth lease placementsTemplateJson",
+            );
 
-          return {
-            state: {
-              ...state,
-              authLeases: nextLeases,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+            yield* sql.withTransaction(
+              Effect.gen(function* () {
+                yield* db
+                  .delete(auth_lease)
+                  .where(eq(auth_lease.authArtifactId, lease.authArtifactId));
+
+                yield* db.insert(auth_lease).values({
+                  ...lease,
+                  placementsTemplateJson,
+                });
+              }),
+            );
+          }),
+        ),
 
       removeByAuthArtifactId: (authArtifactId: AuthLease["authArtifactId"]) =>
-        stateManager.mutate((state) => {
-          const nextLeases = state.authLeases.filter(
-            (candidate) => candidate.authArtifactId !== authArtifactId,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(auth_lease)
+              .where(eq(auth_lease.authArtifactId, authArtifactId))
+              .returning({ id: auth_lease.id });
 
-          return {
-            state: {
-              ...state,
-              authLeases: nextLeases,
-            },
-            value: nextLeases.length !== state.authLeases.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
     },
 
     sourceOauthClients: {
@@ -596,59 +566,76 @@ export const createLocalControlPlaneStore = (
         sourceId: WorkspaceSourceOauthClient["sourceId"];
         providerKey: string;
       }) =>
-        stateManager.read((state) => {
-          const oauthClient = state.sourceOauthClients.find(
-            (candidate) =>
-              candidate.workspaceId === input.workspaceId
-              && candidate.sourceId === input.sourceId
-              && candidate.providerKey === input.providerKey,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_oauth_client)
+              .where(
+                and(
+                  eq(source_oauth_client.workspaceId, input.workspaceId),
+                  eq(source_oauth_client.sourceId, input.sourceId),
+                  eq(source_oauth_client.providerKey, input.providerKey),
+                ),
+              )
+              .limit(1);
 
-          return oauthClient
-            ? Option.some(cloneValue(oauthClient))
-            : Option.none<WorkspaceSourceOauthClient>();
-        }),
+            return optionFromNullable(rows[0] ? toSourceOauthClient(rows[0]) : null);
+          }),
+        ),
 
       upsert: (oauthClient: WorkspaceSourceOauthClient) =>
-        stateManager.mutate((state) => {
-          const nextOauthClients = state.sourceOauthClients.filter(
-            (candidate) =>
-              !(
-                candidate.workspaceId === oauthClient.workspaceId
-                && candidate.sourceId === oauthClient.sourceId
-                && candidate.providerKey === oauthClient.providerKey
-              ),
-          );
-          nextOauthClients.push(cloneValue(oauthClient));
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const sql = yield* SqlClient.SqlClient;
+            const clientMetadataJson = yield* parseNullableJson(
+              oauthClient.clientMetadataJson,
+              "source oauth client clientMetadataJson",
+            );
 
-          return {
-            state: {
-              ...state,
-              sourceOauthClients: nextOauthClients,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+            yield* sql.withTransaction(
+              Effect.gen(function* () {
+                yield* db
+                  .delete(source_oauth_client)
+                  .where(
+                    and(
+                      eq(source_oauth_client.workspaceId, oauthClient.workspaceId),
+                      eq(source_oauth_client.sourceId, oauthClient.sourceId),
+                      eq(source_oauth_client.providerKey, oauthClient.providerKey),
+                    ),
+                  );
+
+                yield* db.insert(source_oauth_client).values({
+                  ...oauthClient,
+                  clientMetadataJson,
+                });
+              }),
+            );
+          }),
+        ),
 
       removeByWorkspaceAndSourceId: (input: {
         workspaceId: WorkspaceSourceOauthClient["workspaceId"];
         sourceId: WorkspaceSourceOauthClient["sourceId"];
       }) =>
-        stateManager.mutate((state) => {
-          const nextOauthClients = state.sourceOauthClients.filter(
-            (candidate) =>
-              candidate.workspaceId !== input.workspaceId
-              || candidate.sourceId !== input.sourceId,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(source_oauth_client)
+              .where(
+                and(
+                  eq(source_oauth_client.workspaceId, input.workspaceId),
+                  eq(source_oauth_client.sourceId, input.sourceId),
+                ),
+              )
+              .returning({ id: source_oauth_client.id });
 
-          return {
-            state: {
-              ...state,
-              sourceOauthClients: nextOauthClients,
-            },
-            value: state.sourceOauthClients.length - nextOauthClients.length,
-          } satisfies StateMutationResult<number>;
-        }),
+            return deleted.length;
+          }),
+        ),
     },
 
     workspaceOauthClients: {
@@ -656,67 +643,103 @@ export const createLocalControlPlaneStore = (
         workspaceId: WorkspaceOauthClient["workspaceId"];
         providerKey: string;
       }) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.workspaceOauthClients.filter(
-              (candidate) =>
-                candidate.workspaceId === input.workspaceId
-                && candidate.providerKey === input.providerKey,
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(workspace_oauth_client)
+              .where(
+                and(
+                  eq(workspace_oauth_client.workspaceId, input.workspaceId),
+                  eq(workspace_oauth_client.providerKey, input.providerKey),
+                ),
+              )
+              .orderBy(
+                asc(workspace_oauth_client.updatedAt),
+                asc(workspace_oauth_client.id),
+              );
+
+            return rows.map(toWorkspaceOauthClient);
+          }),
         ),
 
       getById: (id: WorkspaceOauthClient["id"]) =>
-        stateManager.read((state) => {
-          const oauthClient = state.workspaceOauthClients.find(
-            (candidate) => candidate.id === id,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(workspace_oauth_client)
+              .where(eq(workspace_oauth_client.id, id))
+              .limit(1);
 
-          return oauthClient
-            ? Option.some(cloneValue(oauthClient))
-            : Option.none<WorkspaceOauthClient>();
-        }),
+            return optionFromNullable(rows[0] ? toWorkspaceOauthClient(rows[0]) : null);
+          }),
+        ),
 
       upsert: (oauthClient: WorkspaceOauthClient) =>
-        stateManager.mutate((state) => {
-          const nextOauthClients = state.workspaceOauthClients.filter(
-            (candidate) => candidate.id !== oauthClient.id,
-          );
-          nextOauthClients.push(cloneValue(oauthClient));
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const clientMetadataJson = yield* parseNullableJson(
+              oauthClient.clientMetadataJson,
+              "workspace oauth client clientMetadataJson",
+            );
 
-          return {
-            state: {
-              ...state,
-              workspaceOauthClients: nextOauthClients,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+            yield* db
+              .insert(workspace_oauth_client)
+              .values({
+                ...oauthClient,
+                clientMetadataJson,
+              })
+              .onConflictDoUpdate({
+                target: workspace_oauth_client.id,
+                set: {
+                  workspaceId: oauthClient.workspaceId,
+                  providerKey: oauthClient.providerKey,
+                  label: oauthClient.label,
+                  clientId: oauthClient.clientId,
+                  clientSecretProviderId: oauthClient.clientSecretProviderId,
+                  clientSecretHandle: oauthClient.clientSecretHandle,
+                  clientMetadataJson,
+                  createdAt: oauthClient.createdAt,
+                  updatedAt: oauthClient.updatedAt,
+                },
+              });
+          }),
+        ),
 
       removeById: (id: WorkspaceOauthClient["id"]) =>
-        stateManager.mutate((state) => {
-          const nextOauthClients = state.workspaceOauthClients.filter(
-            (candidate) => candidate.id !== id,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(workspace_oauth_client)
+              .where(eq(workspace_oauth_client.id, id))
+              .returning({ id: workspace_oauth_client.id });
 
-          return {
-            state: {
-              ...state,
-              workspaceOauthClients: nextOauthClients,
-            },
-            value: nextOauthClients.length !== state.workspaceOauthClients.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
     },
 
     providerAuthGrants: {
       listByWorkspaceId: (workspaceId: ProviderAuthGrant["workspaceId"]) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.providerAuthGrants.filter(
-              (grant) => grant.workspaceId === workspaceId,
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(provider_auth_grant)
+              .where(eq(provider_auth_grant.workspaceId, workspaceId))
+              .orderBy(
+                asc(provider_auth_grant.updatedAt),
+                asc(provider_auth_grant.id),
+              );
+
+            return rows.map(toProviderAuthGrant);
+          }),
         ),
 
       listByWorkspaceActorAndProvider: (input: {
@@ -724,92 +747,147 @@ export const createLocalControlPlaneStore = (
         actorAccountId: ProviderAuthGrant["actorAccountId"];
         providerKey: string;
       }) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.providerAuthGrants.filter(
-              (grant) =>
-                grant.workspaceId === input.workspaceId
-                && grant.providerKey === input.providerKey
-                && actorEquals(grant.actorAccountId, input.actorAccountId),
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(provider_auth_grant)
+              .where(
+                and(
+                  eq(provider_auth_grant.workspaceId, input.workspaceId),
+                  eq(provider_auth_grant.providerKey, input.providerKey),
+                  nullableEquals(
+                    provider_auth_grant.actorAccountId,
+                    input.actorAccountId,
+                  ),
+                ),
+              )
+              .orderBy(
+                asc(provider_auth_grant.updatedAt),
+                asc(provider_auth_grant.id),
+              );
+
+            return rows.map(toProviderAuthGrant);
+          }),
         ),
 
       getById: (id: ProviderAuthGrant["id"]) =>
-        stateManager.read((state) => {
-          const grant = state.providerAuthGrants.find(
-            (candidate) => candidate.id === id,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(provider_auth_grant)
+              .where(eq(provider_auth_grant.id, id))
+              .limit(1);
 
-          return grant
-            ? Option.some(cloneValue(grant))
-            : Option.none<ProviderAuthGrant>();
-        }),
+            return optionFromNullable(rows[0] ? toProviderAuthGrant(rows[0]) : null);
+          }),
+        ),
 
       upsert: (grant: ProviderAuthGrant) =>
-        stateManager.mutate((state) => {
-          const nextGrants = state.providerAuthGrants.filter(
-            (candidate) => candidate.id !== grant.id,
-          );
-          nextGrants.push(cloneValue(grant));
-
-          return {
-            state: {
-              ...state,
-              providerAuthGrants: nextGrants,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            yield* db
+              .insert(provider_auth_grant)
+              .values({
+                ...grant,
+                refreshTokenRef: grant.refreshToken,
+                grantedScopes: grant.grantedScopes,
+              })
+              .onConflictDoUpdate({
+                target: provider_auth_grant.id,
+                set: {
+                  workspaceId: grant.workspaceId,
+                  actorAccountId: grant.actorAccountId,
+                  providerKey: grant.providerKey,
+                  oauthClientId: grant.oauthClientId,
+                  tokenEndpoint: grant.tokenEndpoint,
+                  clientAuthentication: grant.clientAuthentication,
+                  headerName: grant.headerName,
+                  prefix: grant.prefix,
+                  refreshTokenRef: grant.refreshToken,
+                  grantedScopes: grant.grantedScopes,
+                  lastRefreshedAt: grant.lastRefreshedAt,
+                  orphanedAt: grant.orphanedAt,
+                  createdAt: grant.createdAt,
+                  updatedAt: grant.updatedAt,
+                },
+              });
+          }),
+        ),
 
       removeById: (id: ProviderAuthGrant["id"]) =>
-        stateManager.mutate((state) => {
-          const nextGrants = state.providerAuthGrants.filter(
-            (candidate) => candidate.id !== id,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(provider_auth_grant)
+              .where(eq(provider_auth_grant.id, id))
+              .returning({ id: provider_auth_grant.id });
 
-          return {
-            state: {
-              ...state,
-              providerAuthGrants: nextGrants,
-            },
-            value: nextGrants.length !== state.providerAuthGrants.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
     },
 
     sourceAuthSessions: {
       listAll: () =>
-        stateManager.read((state) => sortByUpdatedAtAndIdAsc(state.sourceAuthSessions)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_auth_session)
+              .orderBy(asc(source_auth_session.updatedAt), asc(source_auth_session.id));
+
+            return rows.map(toSourceAuthSession);
+          }),
+        ),
 
       listByWorkspaceId: (workspaceId: SourceAuthSession["workspaceId"]) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdAsc(
-            state.sourceAuthSessions.filter(
-              (session) => session.workspaceId === workspaceId,
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_auth_session)
+              .where(eq(source_auth_session.workspaceId, workspaceId))
+              .orderBy(asc(source_auth_session.updatedAt), asc(source_auth_session.id));
+
+            return rows.map(toSourceAuthSession);
+          }),
         ),
 
       getById: (id: SourceAuthSession["id"]) =>
-        stateManager.read((state) => {
-          const session = state.sourceAuthSessions.find(
-            (candidate) => candidate.id === id,
-          );
-          return session
-            ? Option.some(cloneValue(session))
-            : Option.none<SourceAuthSession>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_auth_session)
+              .where(eq(source_auth_session.id, id))
+              .limit(1);
 
-      getByState: (stateValue: SourceAuthSession["state"]) =>
-        stateManager.read((state) => {
-          const session = state.sourceAuthSessions.find(
-            (candidate) => candidate.state === stateValue,
-          );
-          return session
-            ? Option.some(cloneValue(session))
-            : Option.none<SourceAuthSession>();
-        }),
+            return optionFromNullable(rows[0] ? toSourceAuthSession(rows[0]) : null);
+          }),
+        ),
+
+      getByState: (state: SourceAuthSession["state"]) =>
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_auth_session)
+              .where(eq(source_auth_session.state, state))
+              .limit(1);
+
+            return optionFromNullable(rows[0] ? toSourceAuthSession(rows[0]) : null);
+          }),
+        ),
 
       getPendingByWorkspaceSourceAndActor: (input: {
         workspaceId: SourceAuthSession["workspaceId"];
@@ -817,211 +895,326 @@ export const createLocalControlPlaneStore = (
         actorAccountId: SourceAuthSession["actorAccountId"];
         credentialSlot?: SourceAuthSession["credentialSlot"];
       }) =>
-        stateManager.read((state) => {
-          const session = sortByUpdatedAtAndIdAsc(
-            state.sourceAuthSessions.filter(
-              (candidate) =>
-                candidate.workspaceId === input.workspaceId
-                && candidate.sourceId === input.sourceId
-                && candidate.status === "pending"
-                && actorEquals(candidate.actorAccountId, input.actorAccountId)
-                && (input.credentialSlot === undefined
-                  || candidate.credentialSlot === input.credentialSlot),
-            ),
-          )[0] ?? null;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(source_auth_session)
+              .where(
+                and(
+                  eq(source_auth_session.workspaceId, input.workspaceId),
+                  eq(source_auth_session.sourceId, input.sourceId),
+                  eq(source_auth_session.status, "pending"),
+                  nullableEquals(
+                    source_auth_session.actorAccountId,
+                    input.actorAccountId,
+                  ),
+                  input.credentialSlot === undefined
+                    ? undefined
+                    : eq(source_auth_session.credentialSlot, input.credentialSlot),
+                ),
+              )
+              .orderBy(asc(source_auth_session.updatedAt), asc(source_auth_session.id))
+              .limit(1);
 
-          return session
-            ? Option.some(cloneValue(session))
-            : Option.none<SourceAuthSession>();
-        }),
+            return optionFromNullable(rows[0] ? toSourceAuthSession(rows[0]) : null);
+          }),
+        ),
 
       insert: (session: SourceAuthSession) =>
-        stateManager.mutate((state) => ({
-          state: {
-            ...state,
-            sourceAuthSessions: [...state.sourceAuthSessions, cloneValue(session)],
-          },
-          value: undefined,
-        } satisfies StateMutationResult<void>)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const sessionDataJson = yield* parseJson(
+              session.sessionDataJson,
+              "source auth session sessionDataJson",
+            );
+
+            yield* db.insert(source_auth_session).values({
+              ...session,
+              sessionDataJson,
+            });
+          }),
+        ),
 
       update: (
         id: SourceAuthSession["id"],
-        patch: Partial<Omit<SourceAuthSession, "id" | "workspaceId" | "sourceId" | "createdAt">>,
+        patch: Partial<
+          Omit<SourceAuthSession, "id" | "workspaceId" | "sourceId" | "createdAt">
+        >,
       ) =>
-        stateManager.mutate((state) => {
-          let updated: SourceAuthSession | null = null;
-          const nextSessions = state.sourceAuthSessions.map((session) => {
-            if (session.id !== id) {
-              return session;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const updates: Partial<typeof source_auth_session.$inferInsert> = {
+              ...(patch.actorAccountId !== undefined
+                ? { actorAccountId: patch.actorAccountId }
+                : {}),
+              ...(patch.credentialSlot !== undefined
+                ? { credentialSlot: patch.credentialSlot }
+                : {}),
+              ...(patch.executionId !== undefined ? { executionId: patch.executionId } : {}),
+              ...(patch.interactionId !== undefined
+                ? { interactionId: patch.interactionId }
+                : {}),
+              ...(patch.providerKind !== undefined
+                ? { providerKind: patch.providerKind }
+                : {}),
+              ...(patch.status !== undefined ? { status: patch.status } : {}),
+              ...(patch.state !== undefined ? { state: patch.state } : {}),
+              ...(patch.errorText !== undefined ? { errorText: patch.errorText } : {}),
+              ...(patch.completedAt !== undefined ? { completedAt: patch.completedAt } : {}),
+              ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
+            };
+
+            if (patch.sessionDataJson !== undefined) {
+              updates.sessionDataJson = yield* parseJson(
+                patch.sessionDataJson,
+                "source auth session sessionDataJson",
+              );
             }
 
-            updated = {
-              ...session,
-              ...cloneValue(patch),
-            } satisfies SourceAuthSession;
-            return updated;
-          });
+            const rows = yield* db
+              .update(source_auth_session)
+              .set(updates)
+              .where(eq(source_auth_session.id, id))
+              .returning();
 
-          return {
-            state: {
-              ...state,
-              sourceAuthSessions: nextSessions,
-            },
-            value: updated ? Option.some(cloneValue(updated)) : Option.none<SourceAuthSession>(),
-          } satisfies StateMutationResult<Option.Option<SourceAuthSession>>;
-        }),
+            return optionFromNullable(rows[0] ? toSourceAuthSession(rows[0]) : null);
+          }),
+        ),
 
       upsert: (session: SourceAuthSession) =>
-        stateManager.mutate((state) => {
-          const nextSessions = state.sourceAuthSessions.filter(
-            (candidate) => candidate.id !== session.id,
-          );
-          nextSessions.push(cloneValue(session));
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const sessionDataJson = yield* parseJson(
+              session.sessionDataJson,
+              "source auth session sessionDataJson",
+            );
 
-          return {
-            state: {
-              ...state,
-              sourceAuthSessions: nextSessions,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+            yield* db
+              .insert(source_auth_session)
+              .values({
+                ...session,
+                sessionDataJson,
+              })
+              .onConflictDoUpdate({
+                target: source_auth_session.id,
+                set: {
+                  workspaceId: session.workspaceId,
+                  sourceId: session.sourceId,
+                  actorAccountId: session.actorAccountId,
+                  credentialSlot: session.credentialSlot,
+                  executionId: session.executionId,
+                  interactionId: session.interactionId,
+                  providerKind: session.providerKind,
+                  status: session.status,
+                  state: session.state,
+                  sessionDataJson,
+                  errorText: session.errorText,
+                  completedAt: session.completedAt,
+                  createdAt: session.createdAt,
+                  updatedAt: session.updatedAt,
+                },
+              });
+          }),
+        ),
 
       removeByWorkspaceAndSourceId: (
         workspaceId: SourceAuthSession["workspaceId"],
         sourceId: SourceAuthSession["sourceId"],
       ) =>
-        stateManager.mutate((state) => {
-          const nextSessions = state.sourceAuthSessions.filter(
-            (candidate) =>
-              candidate.workspaceId !== workspaceId || candidate.sourceId !== sourceId,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(source_auth_session)
+              .where(
+                and(
+                  eq(source_auth_session.workspaceId, workspaceId),
+                  eq(source_auth_session.sourceId, sourceId),
+                ),
+              )
+              .returning({ id: source_auth_session.id });
 
-          return {
-            state: {
-              ...state,
-              sourceAuthSessions: nextSessions,
-            },
-            value: nextSessions.length !== state.sourceAuthSessions.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
     },
 
     secretMaterials: {
       getById: (id: SecretMaterial["id"]) =>
-        stateManager.read((state) => {
-          const material = state.secretMaterials.find(
-            (candidate) => candidate.id === id,
-          );
-          return material
-            ? Option.some(cloneValue(material))
-            : Option.none<SecretMaterial>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(secret_material)
+              .where(eq(secret_material.id, id))
+              .limit(1);
+
+            return optionFromNullable(rows[0] ? toSecretMaterial(rows[0]) : null);
+          }),
+        ),
 
       listAll: () =>
-        stateManager.read((state) => sortByUpdatedAtAndIdDesc(state.secretMaterials)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select({
+                id: secret_material.id,
+                providerId: secret_material.providerId,
+                name: secret_material.name,
+                purpose: secret_material.purpose,
+                createdAt: secret_material.createdAt,
+                updatedAt: secret_material.updatedAt,
+              })
+              .from(secret_material)
+              .orderBy(desc(secret_material.updatedAt), desc(secret_material.id));
+
+            return rows satisfies ReadonlyArray<SecretMaterialSummary>;
+          }),
+        ),
 
       upsert: (material: SecretMaterial) =>
-        stateManager.mutate((state) => {
-          const nextMaterials = state.secretMaterials.filter(
-            (candidate) => candidate.id !== material.id,
-          );
-          nextMaterials.push(cloneValue(material));
-
-          return {
-            state: {
-              ...state,
-              secretMaterials: nextMaterials,
-            },
-            value: undefined,
-          } satisfies StateMutationResult<void>;
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            yield* db
+              .insert(secret_material)
+              .values(material)
+              .onConflictDoUpdate({
+                target: secret_material.id,
+                set: {
+                  name: material.name,
+                  purpose: material.purpose,
+                  providerId: material.providerId,
+                  handle: material.handle,
+                  value: material.value,
+                  createdAt: material.createdAt,
+                  updatedAt: material.updatedAt,
+                },
+              });
+          }),
+        ),
 
       updateById: (
         id: SecretMaterial["id"],
         update: { name?: string | null; value?: string },
       ) =>
-        stateManager.mutate((state) => {
-          let updated: SecretMaterial | null = null;
-          const nextMaterials = state.secretMaterials.map((material) => {
-            if (material.id !== id) {
-              return material;
-            }
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .update(secret_material)
+              .set({
+                ...(update.name !== undefined ? { name: update.name } : {}),
+                ...(update.value !== undefined ? { value: update.value } : {}),
+                updatedAt: Date.now(),
+              })
+              .where(eq(secret_material.id, id))
+              .returning({
+                id: secret_material.id,
+                providerId: secret_material.providerId,
+                name: secret_material.name,
+                purpose: secret_material.purpose,
+                createdAt: secret_material.createdAt,
+                updatedAt: secret_material.updatedAt,
+              });
 
-            updated = {
-              ...material,
-              ...(update.name !== undefined ? { name: update.name } : {}),
-              ...(update.value !== undefined ? { value: update.value } : {}),
-              updatedAt: Date.now(),
-            } satisfies SecretMaterial;
-            return updated;
-          });
-
-          return {
-            state: {
-              ...state,
-              secretMaterials: nextMaterials,
-            },
-            value: updated ? Option.some(cloneValue(updated)) : Option.none<SecretMaterial>(),
-          } satisfies StateMutationResult<Option.Option<SecretMaterial>>;
-        }),
+            return optionFromNullable(rows[0] ?? null);
+          }),
+        ),
 
       removeById: (id: SecretMaterial["id"]) =>
-        stateManager.mutate((state) => {
-          const nextMaterials = state.secretMaterials.filter(
-            (candidate) => candidate.id !== id,
-          );
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const deleted = yield* db
+              .delete(secret_material)
+              .where(eq(secret_material.id, id))
+              .returning({ id: secret_material.id });
 
-          return {
-            state: {
-              ...state,
-              secretMaterials: nextMaterials,
-            },
-            value: nextMaterials.length !== state.secretMaterials.length,
-          } satisfies StateMutationResult<boolean>;
-        }),
+            return deleted.length > 0;
+          }),
+        ),
     },
 
     executions: {
       getById: (executionId: Execution["id"]) =>
-        stateManager.read((state) => {
-          const execution = state.executions.find(
-            (candidate) => candidate.id === executionId,
-          );
-          return execution
-            ? Option.some(cloneValue(execution))
-            : Option.none<Execution>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution)
+              .where(eq(execution.id, executionId))
+              .limit(1);
+
+            return optionFromNullable(rows[0] ? toExecution(rows[0]) : null);
+          }),
+        ),
 
       getByWorkspaceAndId: (
         workspaceId: Execution["workspaceId"],
         executionId: Execution["id"],
       ) =>
-        stateManager.read((state) => {
-          const execution = state.executions.find(
-            (candidate) =>
-              candidate.workspaceId === workspaceId && candidate.id === executionId,
-          );
-          return execution
-            ? Option.some(cloneValue(execution))
-            : Option.none<Execution>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution)
+              .where(
+                and(
+                  eq(execution.workspaceId, workspaceId),
+                  eq(execution.id, executionId),
+                ),
+              )
+              .limit(1);
 
-      listByWorkspaceId: (workspaceId: Execution["workspaceId"]) =>
-        stateManager.read((state) =>
-          [...state.executions]
-            .filter((e) => e.workspaceId === workspaceId)
-            .sort((a, b) => b.createdAt - a.createdAt),
+            return optionFromNullable(rows[0] ? toExecution(rows[0]) : null);
+          }),
         ),
 
-      insert: (execution: Execution) =>
-        stateManager.mutate((state) => ({
-          state: {
-            ...state,
-            executions: [...state.executions, cloneValue(execution)],
-          },
-          value: undefined,
-        } satisfies StateMutationResult<void>)),
+      listByWorkspaceId: (workspaceId: Execution["workspaceId"]) =>
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution)
+              .where(eq(execution.workspaceId, workspaceId))
+              .orderBy(desc(execution.createdAt));
+
+            return rows.map(toExecution);
+          }),
+        ),
+
+      insert: (nextExecution: Execution) =>
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const resultJson = yield* parseNullableJson(
+              nextExecution.resultJson,
+              "execution resultJson",
+            );
+            const logsJson = yield* parseNullableJson(
+              nextExecution.logsJson,
+              "execution logsJson",
+            );
+
+            yield* db.insert(execution).values({
+              ...nextExecution,
+              executionSessionId: nextExecution.executionSessionId,
+              resultJson,
+              logsJson,
+            });
+          }),
+        ),
 
       update: (
         executionId: Execution["id"],
@@ -1029,109 +1222,179 @@ export const createLocalControlPlaneStore = (
           Omit<Execution, "id" | "workspaceId" | "createdByAccountId" | "createdAt">
         >,
       ) =>
-        stateManager.mutate((state) => {
-          let updated: Execution | null = null;
-          const nextExecutions = state.executions.map((execution) => {
-            if (execution.id !== executionId) {
-              return execution;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const updates: Partial<typeof execution.$inferInsert> = {
+              ...(patch.status !== undefined ? { status: patch.status } : {}),
+              ...(patch.code !== undefined ? { code: patch.code } : {}),
+              ...(patch.executionSessionId !== undefined
+                ? { executionSessionId: patch.executionSessionId }
+                : {}),
+              ...(patch.errorText !== undefined ? { errorText: patch.errorText } : {}),
+              ...(patch.startedAt !== undefined ? { startedAt: patch.startedAt } : {}),
+              ...(patch.completedAt !== undefined
+                ? { completedAt: patch.completedAt }
+                : {}),
+              ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
+            };
+
+            if (patch.resultJson !== undefined) {
+              updates.resultJson = yield* parseNullableJson(
+                patch.resultJson,
+                "execution resultJson",
+              );
             }
 
-            updated = {
-              ...execution,
-              ...cloneValue(patch),
-            } satisfies Execution;
-            return updated;
-          });
+            if (patch.logsJson !== undefined) {
+              updates.logsJson = yield* parseNullableJson(
+                patch.logsJson,
+                "execution logsJson",
+              );
+            }
 
-          return {
-            state: {
-              ...state,
-              executions: nextExecutions,
-            },
-            value: updated ? Option.some(cloneValue(updated)) : Option.none<Execution>(),
-          } satisfies StateMutationResult<Option.Option<Execution>>;
-        }),
+            const rows = yield* db
+              .update(execution)
+              .set(updates)
+              .where(eq(execution.id, executionId))
+              .returning();
+
+            return optionFromNullable(rows[0] ? toExecution(rows[0]) : null);
+          }),
+        ),
     },
 
     executionInteractions: {
       getById: (interactionId: ExecutionInteraction["id"]) =>
-        stateManager.read((state) => {
-          const interaction = state.executionInteractions.find(
-            (candidate) => candidate.id === interactionId,
-          );
-          return interaction
-            ? Option.some(cloneValue(interaction))
-            : Option.none<ExecutionInteraction>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution_interaction)
+              .where(eq(execution_interaction.id, interactionId))
+              .limit(1);
+
+            return optionFromNullable(
+              rows[0] ? toExecutionInteraction(rows[0]) : null,
+            );
+          }),
+        ),
 
       listByExecutionId: (executionId: ExecutionInteraction["executionId"]) =>
-        stateManager.read((state) =>
-          sortByUpdatedAtAndIdDesc(
-            state.executionInteractions.filter(
-              (interaction) => interaction.executionId === executionId,
-            ),
-          ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution_interaction)
+              .where(eq(execution_interaction.executionId, executionId))
+              .orderBy(
+                desc(execution_interaction.updatedAt),
+                desc(execution_interaction.id),
+              );
+
+            return rows.map(toExecutionInteraction);
+          }),
         ),
 
       getPendingByExecutionId: (executionId: ExecutionInteraction["executionId"]) =>
-        stateManager.read((state) => {
-          const interaction = sortByUpdatedAtAndIdDesc(
-            state.executionInteractions.filter(
-              (candidate) =>
-                candidate.executionId === executionId && candidate.status === "pending",
-            ),
-          )[0] ?? null;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution_interaction)
+              .where(
+                and(
+                  eq(execution_interaction.executionId, executionId),
+                  eq(execution_interaction.status, "pending"),
+                ),
+              )
+              .orderBy(
+                desc(execution_interaction.updatedAt),
+                desc(execution_interaction.id),
+              )
+              .limit(1);
 
-          return interaction
-            ? Option.some(cloneValue(interaction))
-            : Option.none<ExecutionInteraction>();
-        }),
+            return optionFromNullable(
+              rows[0] ? toExecutionInteraction(rows[0]) : null,
+            );
+          }),
+        ),
 
       insert: (interaction: ExecutionInteraction) =>
-        stateManager.mutate((state) => ({
-          state: {
-            ...state,
-            executionInteractions: [
-              ...state.executionInteractions,
-              cloneValue(interaction),
-            ],
-          },
-          value: undefined,
-        } satisfies StateMutationResult<void>)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const payloadJson = yield* parseJson(
+              interaction.payloadJson,
+              "execution interaction payloadJson",
+            );
+            const responseJson = yield* parseNullableJson(
+              interaction.responseJson,
+              "execution interaction responseJson",
+            );
+            const responsePrivateJson = yield* parseNullableJson(
+              interaction.responsePrivateJson,
+              "execution interaction responsePrivateJson",
+            );
+
+            yield* db.insert(execution_interaction).values({
+              ...interaction,
+              payloadJson,
+              responseJson,
+              responsePrivateJson,
+            });
+          }),
+        ),
 
       update: (
         interactionId: ExecutionInteraction["id"],
         patch: Partial<
-          Omit<
-            ExecutionInteraction,
-            "id" | "executionId" | "createdAt"
-          >
+          Omit<ExecutionInteraction, "id" | "executionId" | "createdAt">
         >,
       ) =>
-        stateManager.mutate((state) => {
-          let updated: ExecutionInteraction | null = null;
-          const nextInteractions = state.executionInteractions.map((interaction) => {
-            if (interaction.id !== interactionId) {
-              return interaction;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const updates: Partial<typeof execution_interaction.$inferInsert> = {
+              ...(patch.status !== undefined ? { status: patch.status } : {}),
+              ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+              ...(patch.purpose !== undefined ? { purpose: patch.purpose } : {}),
+              ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
+            };
+
+            if (patch.payloadJson !== undefined) {
+              updates.payloadJson = yield* parseJson(
+                patch.payloadJson,
+                "execution interaction payloadJson",
+              );
+            }
+            if (patch.responseJson !== undefined) {
+              updates.responseJson = yield* parseNullableJson(
+                patch.responseJson,
+                "execution interaction responseJson",
+              );
+            }
+            if (patch.responsePrivateJson !== undefined) {
+              updates.responsePrivateJson = yield* parseNullableJson(
+                patch.responsePrivateJson,
+                "execution interaction responsePrivateJson",
+              );
             }
 
-            updated = {
-              ...interaction,
-              ...cloneValue(patch),
-            } as ExecutionInteraction;
-            return updated;
-          });
+            const rows = yield* db
+              .update(execution_interaction)
+              .set(updates)
+              .where(eq(execution_interaction.id, interactionId))
+              .returning();
 
-          return {
-            state: {
-              ...state,
-              executionInteractions: nextInteractions,
-            },
-            value: updated
-              ? Option.some(cloneValue(updated))
-              : Option.none<ExecutionInteraction>(),
-          } satisfies StateMutationResult<Option.Option<ExecutionInteraction>>;
-        }),
+            return optionFromNullable(
+              rows[0] ? toExecutionInteraction(rows[0]) : null,
+            );
+          }),
+        ),
     },
 
     executionSteps: {
@@ -1139,93 +1402,150 @@ export const createLocalControlPlaneStore = (
         executionId: ExecutionStep["executionId"],
         sequence: ExecutionStep["sequence"],
       ) =>
-        stateManager.read((state) => {
-          const step = state.executionSteps.find(
-            (candidate) =>
-              candidate.executionId === executionId && candidate.sequence === sequence,
-          );
-          return step
-            ? Option.some(cloneValue(step))
-            : Option.none<ExecutionStep>();
-        }),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution_step)
+              .where(
+                and(
+                  eq(execution_step.executionId, executionId),
+                  eq(execution_step.sequence, sequence),
+                ),
+              )
+              .limit(1);
+
+            return optionFromNullable(rows[0] ? toExecutionStep(rows[0]) : null);
+          }),
+        ),
 
       listByExecutionId: (executionId: ExecutionStep["executionId"]) =>
-        stateManager.read((state) =>
-          [...state.executionSteps]
-            .filter((step) => step.executionId === executionId)
-            .sort(
-              (left, right) =>
-                left.sequence - right.sequence
-                || right.updatedAt - left.updatedAt,
-            ),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const rows = yield* db
+              .select()
+              .from(execution_step)
+              .where(eq(execution_step.executionId, executionId))
+              .orderBy(asc(execution_step.sequence), desc(execution_step.updatedAt));
+
+            return rows.map(toExecutionStep);
+          }),
         ),
 
       insert: (step: ExecutionStep) =>
-        stateManager.mutate((state) => ({
-          state: {
-            ...state,
-            executionSteps: [...state.executionSteps, cloneValue(step)],
-          },
-          value: undefined,
-        } satisfies StateMutationResult<void>)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const argsJson = yield* parseJson(
+              step.argsJson,
+              "execution step argsJson",
+            );
+            const resultJson = yield* parseNullableJson(
+              step.resultJson,
+              "execution step resultJson",
+            );
+
+            yield* db.insert(execution_step).values({
+              ...step,
+              argsJson,
+              resultJson,
+            });
+          }),
+        ),
 
       deleteByExecutionId: (executionId: ExecutionStep["executionId"]) =>
-        stateManager.mutate((state) => ({
-          state: {
-            ...state,
-            executionSteps: state.executionSteps.filter(
-              (step) => step.executionId !== executionId,
-            ),
-          },
-          value: undefined,
-        } satisfies StateMutationResult<void>)),
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            yield* db
+              .delete(execution_step)
+              .where(eq(execution_step.executionId, executionId));
+          }),
+        ),
 
       updateByExecutionAndSequence: (
         executionId: ExecutionStep["executionId"],
         sequence: ExecutionStep["sequence"],
         patch: Partial<
-          Omit<
-            ExecutionStep,
-            "id" | "executionId" | "sequence" | "createdAt"
-          >
+          Omit<ExecutionStep, "id" | "executionId" | "sequence" | "createdAt">
         >,
       ) =>
-        stateManager.mutate((state) => {
-          let updated: ExecutionStep | null = null;
-          const nextSteps = state.executionSteps.map((step) => {
-            if (step.executionId !== executionId || step.sequence !== sequence) {
-              return step;
+        run(
+          Effect.gen(function* () {
+            const db = yield* SqliteDrizzle;
+            const updates: Partial<typeof execution_step.$inferInsert> = {
+              ...(patch.kind !== undefined ? { kind: patch.kind } : {}),
+              ...(patch.status !== undefined ? { status: patch.status } : {}),
+              ...(patch.path !== undefined ? { path: patch.path } : {}),
+              ...(patch.errorText !== undefined ? { errorText: patch.errorText } : {}),
+              ...(patch.interactionId !== undefined
+                ? { interactionId: patch.interactionId }
+                : {}),
+              ...(patch.updatedAt !== undefined ? { updatedAt: patch.updatedAt } : {}),
+            };
+
+            if (patch.argsJson !== undefined) {
+              updates.argsJson = yield* parseJson(
+                patch.argsJson,
+                "execution step argsJson",
+              );
+            }
+            if (patch.resultJson !== undefined) {
+              updates.resultJson = yield* parseNullableJson(
+                patch.resultJson,
+                "execution step resultJson",
+              );
             }
 
-            updated = {
-              ...step,
-              ...cloneValue(patch),
-            } as ExecutionStep;
-            return updated;
-          });
+            const rows = yield* db
+              .update(execution_step)
+              .set(updates)
+              .where(
+                and(
+                  eq(execution_step.executionId, executionId),
+                  eq(execution_step.sequence, sequence),
+                ),
+              )
+              .returning();
 
-          return {
-            state: {
-              ...state,
-              executionSteps: nextSteps,
-            },
-            value: updated
-              ? Option.some(cloneValue(updated))
-              : Option.none<ExecutionStep>(),
-          } satisfies StateMutationResult<Option.Option<ExecutionStep>>;
-        }),
+            return optionFromNullable(rows[0] ? toExecutionStep(rows[0]) : null);
+          }),
+        ),
     },
   };
 };
 
-export type LocalControlPlaneStore = ReturnType<typeof createLocalControlPlaneStore>;
+export type LocalControlPlaneStore = ReturnType<typeof createSqliteControlPlaneStore>;
 
 export const createLocalControlPlanePersistence = (
   context: ResolvedLocalWorkspaceContext,
   fileSystem: FileSystem.FileSystem,
-): LocalControlPlanePersistence => ({
-  rows: createLocalControlPlaneStore(context, fileSystem),
-  close: async () => {},
-});
+): Effect.Effect<LocalControlPlanePersistence, Error> =>
+  Effect.gen(function* () {
+    const runtime = ManagedRuntime.make(
+      makeWorkspaceCatalogDbLayer(workspaceDbPath(context), {
+        jsonPaths: {
+          controlPlaneStatePath: localControlPlaneStatePath(context),
+          workspaceStatePath: localWorkspaceStatePath(context),
+        },
+      }),
+    );
+
+    yield* Effect.tryPromise({
+      try: () => runtime.runPromise(SqlClient.SqlClient.pipe(Effect.asVoid)),
+      catch: toError,
+    });
+
+    yield* removeLegacyControlPlaneState(context, fileSystem).pipe(
+      Effect.mapError(toError),
+    );
+
+    return {
+      rows: createSqliteControlPlaneStore(runtime),
+      close: () => runtime.dispose(),
+    } satisfies LocalControlPlanePersistence;
+  });
 
 export { localControlPlaneStatePath };

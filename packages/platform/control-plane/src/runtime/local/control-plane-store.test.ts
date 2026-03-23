@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -73,6 +73,52 @@ describe("local-control-plane-store", () => {
       if (process.platform !== "win32") {
         expect((yield* fs.stat(expectedPath)).mode & 0o777).toBe(0o600);
       }
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("rejects legacy control-plane state without executionSessionId", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const context = yield* makeContext();
+      const path = localControlPlaneStatePath(context);
+
+      yield* fs.makeDirectory(dirname(path), { recursive: true });
+      yield* fs.writeFileString(
+        path,
+        `${JSON.stringify({
+          version: 1,
+          authArtifacts: [],
+          authLeases: [],
+          sourceOauthClients: [],
+          workspaceOauthClients: [],
+          providerAuthGrants: [],
+          sourceAuthSessions: [],
+          secretMaterials: [],
+          executions: [
+            {
+              id: "exec_legacy",
+              workspaceId: "ws_legacy",
+              createdByAccountId: "acct_legacy",
+              status: "pending",
+              code: "console.log('legacy')",
+              resultJson: null,
+              errorText: null,
+              logsJson: null,
+              startedAt: null,
+              completedAt: null,
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          ],
+          executionInteractions: [],
+          executionSteps: [],
+        })}\n`,
+        { mode: 0o600 },
+      );
+
+      const error = yield* Effect.flip(loadLocalControlPlaneState(context));
+
+      expect(error.message).toContain("decode control plane state");
     }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 });

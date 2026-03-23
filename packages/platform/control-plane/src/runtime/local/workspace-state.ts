@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 
 import {
-  PolicyIdSchema,
   SourceStatusSchema,
   TimestampMsSchema,
 } from "#schema";
@@ -26,12 +25,6 @@ const LocalWorkspaceSourceStateSchema = Schema.Struct({
   updatedAt: TimestampMsSchema,
 });
 
-const LocalWorkspacePolicyStateSchema = Schema.Struct({
-  id: PolicyIdSchema,
-  createdAt: TimestampMsSchema,
-  updatedAt: TimestampMsSchema,
-});
-
 const LocalWorkspaceCatalogStateSchema = Schema.Struct({
   semanticSearchSignature: Schema.NullOr(Schema.String),
 });
@@ -42,15 +35,10 @@ export const LocalWorkspaceStateSchema = Schema.Struct({
     key: Schema.String,
     value: LocalWorkspaceSourceStateSchema,
   }),
-  policies: Schema.Record({
-    key: Schema.String,
-    value: LocalWorkspacePolicyStateSchema,
-  }),
-  catalog: Schema.optional(LocalWorkspaceCatalogStateSchema),
+  catalog: LocalWorkspaceCatalogStateSchema,
 });
 
 export type LocalWorkspaceSourceState = typeof LocalWorkspaceSourceStateSchema.Type;
-export type LocalWorkspacePolicyState = typeof LocalWorkspacePolicyStateSchema.Type;
 export type LocalWorkspaceState = typeof LocalWorkspaceStateSchema.Type;
 
 const decodeLocalWorkspaceState = Schema.decodeUnknownSync(LocalWorkspaceStateSchema);
@@ -66,7 +54,6 @@ const mapFileSystemError = (path: string, action: string) => (cause: unknown) =>
 const defaultLocalWorkspaceState = (): LocalWorkspaceState => ({
   version: 1,
   sources: {},
-  policies: {},
   catalog: {
     semanticSearchSignature: null,
   },

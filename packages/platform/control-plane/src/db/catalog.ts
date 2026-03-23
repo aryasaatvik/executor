@@ -1,6 +1,7 @@
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite"
 import { SqlClient } from "@effect/sql"
 import { eq, and, sql as drizzleSql } from "drizzle-orm"
+import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import { catalog_tool } from "./schema"
@@ -13,7 +14,9 @@ import type {
   ToolContract,
 } from "@executor/codemode-core"
 import type { Embedder } from "./embedder/types"
-import { hasVecTable, searchVec } from "./vec"
+import {
+  VecService,
+} from "./vec"
 import { reciprocalRankFusion } from "./rrf"
 
 // ---------------------------------------------------------------------------
@@ -43,39 +46,39 @@ const buildFtsQuery = (query: string): string =>
 const rowToDescriptor = (
   row: {
     path: string
-    source_key: string
+    sourceKey: string
     description: string | null
     interaction: string | null
-    input_type_preview: string | null
-    output_type_preview: string | null
-    input_schema_json: unknown
-    output_schema_json: unknown
-    provider_kind: string | null
+    inputTypePreview: string | null
+    outputTypePreview: string | null
+    inputSchemaJson: unknown
+    outputSchemaJson: unknown
+    providerKind: string | null
   },
   includeSchemas: boolean,
 ): ToolDescriptor => {
   const contract: ToolContract = {
-    ...(row.input_type_preview != null
-      ? { inputTypePreview: row.input_type_preview }
+    ...(row.inputTypePreview != null
+      ? { inputTypePreview: row.inputTypePreview }
       : {}),
-    ...(row.output_type_preview != null
-      ? { outputTypePreview: row.output_type_preview }
+    ...(row.outputTypePreview != null
+      ? { outputTypePreview: row.outputTypePreview }
       : {}),
-    ...(includeSchemas && row.input_schema_json != null
-      ? { inputSchema: row.input_schema_json }
+    ...(includeSchemas && row.inputSchemaJson != null
+      ? { inputSchema: row.inputSchemaJson }
       : {}),
-    ...(includeSchemas && row.output_schema_json != null
-      ? { outputSchema: row.output_schema_json }
+    ...(includeSchemas && row.outputSchemaJson != null
+      ? { outputSchema: row.outputSchemaJson }
       : {}),
   }
 
   return {
     path: row.path as ToolPath,
-    sourceKey: row.source_key,
+    sourceKey: row.sourceKey,
     ...(row.description != null ? { description: row.description } : {}),
     interaction: (row.interaction ?? "auto") as "auto" | "required",
     ...(Object.keys(contract).length > 0 ? { contract } : {}),
-    ...(row.provider_kind != null ? { providerKind: row.provider_kind } : {}),
+    ...(row.providerKind != null ? { providerKind: row.providerKind } : {}),
   }
 }
 
@@ -85,14 +88,14 @@ const rowToDescriptor = (
 
 const descriptorColumns = {
   path: catalog_tool.path,
-  source_key: catalog_tool.source_key,
+  sourceKey: catalog_tool.sourceKey,
   description: catalog_tool.description,
   interaction: catalog_tool.interaction,
-  input_type_preview: catalog_tool.input_type_preview,
-  output_type_preview: catalog_tool.output_type_preview,
-  input_schema_json: catalog_tool.input_schema_json,
-  output_schema_json: catalog_tool.output_schema_json,
-  provider_kind: catalog_tool.provider_kind,
+  inputTypePreview: catalog_tool.inputTypePreview,
+  outputTypePreview: catalog_tool.outputTypePreview,
+  inputSchemaJson: catalog_tool.inputSchemaJson,
+  outputSchemaJson: catalog_tool.outputSchemaJson,
+  providerKind: catalog_tool.providerKind,
 } as const
 
 const lexicalScoreFromBm25 = (bm25Score: number): number => {
@@ -110,6 +113,10 @@ const withSearchMode = (
 // SQLite-backed ToolCatalog
 // ---------------------------------------------------------------------------
 
+export class SqliteToolCatalogService extends Context.Tag(
+  "#db/SqliteToolCatalogService",
+)<SqliteToolCatalogService, ToolCatalog>() {}
+
 /**
  * Create a `ToolCatalog` implementation backed by SQLite with FTS5.
  *
@@ -125,26 +132,28 @@ const withSearchMode = (
  * )
  * ```
  */
-export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
+const makeSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
   ToolCatalog,
   never,
-  SqliteDrizzle | SqlClient.SqlClient
+  SqliteDrizzle | SqlClient.SqlClient | VecService
 > = (embedder?: Embedder) => Effect.gen(function* () {
   // Capture the runtime layer so we can provide it to each method's Effect
   const sqlClient = yield* SqlClient.SqlClient
   const drizzleDb = yield* SqliteDrizzle
+  const vec = yield* VecService
 
   // Build a layer that provides both services from the captured values
   const runtimeLayer = Layer.mergeAll(
     Layer.succeed(SqlClient.SqlClient, sqlClient),
     Layer.succeed(SqliteDrizzle, drizzleDb),
+    Layer.succeed(VecService, vec),
   )
 
   /**
    * Helper: run an inner Effect that needs SqlClient + SqliteDrizzle
    * by providing the captured layer.
    */
-  const run = <A>(effect: Effect.Effect<A, unknown, SqlClient.SqlClient | SqliteDrizzle>) =>
+  const run = <A>(effect: Effect.Effect<A, unknown, SqlClient.SqlClient | SqliteDrizzle | VecService>) =>
     Effect.provide(effect, runtimeLayer)
 
   return {
@@ -155,6 +164,7 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
       run(
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient
+          const vec = yield* VecService
 
           // -----------------------------------------------------------------
           // Step 1: Always run FTS5 search
@@ -225,11 +235,11 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
               cause instanceof Error ? cause : new Error(String(cause)),
           })
 
-          if (!(yield* hasVecTable())) {
+          if (!(yield* vec.hasVecTable())) {
             return withSearchMode(ftsResults.slice(0, limit), "fts")
           }
 
-          const vecResults = yield* searchVec({
+          const vecResults = yield* vec.searchVec({
             queryEmbedding,
             limit: limit * 2,
             ...(sourceKey ? { sourceFilter: sourceKey } : {}),
@@ -285,21 +295,24 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
               ? [ftsQuery, namespace, limit]
               : [ftsQuery, limit]
 
-            const rows = yield* sql.unsafe<{
-              path: string
-              source_key: string
-              description: string | null
-              interaction: string | null
-              input_type_preview: string | null
-              output_type_preview: string | null
-              input_schema_json: string | null
-              output_schema_json: string | null
-              provider_kind: string | null
-            }>(
-              `SELECT t.path, t.source_key, t.description, t.interaction,
-                      t.input_type_preview, t.output_type_preview,
-                      t.input_schema_json, t.output_schema_json,
-                      t.provider_kind
+          const rows = yield* sql.unsafe<{
+            path: string
+            sourceKey: string
+            description: string | null
+            interaction: string | null
+            inputTypePreview: string | null
+            outputTypePreview: string | null
+            inputSchemaJson: string | null
+            outputSchemaJson: string | null
+            providerKind: string | null
+          }>(
+              `SELECT t.path AS path, t.source_key AS sourceKey,
+                      t.description AS description, t.interaction AS interaction,
+                      t.input_type_preview AS inputTypePreview,
+                      t.output_type_preview AS outputTypePreview,
+                      t.input_schema_json AS inputSchemaJson,
+                      t.output_schema_json AS outputSchemaJson,
+                      t.provider_kind AS providerKind
                FROM catalog_tool_fts
                JOIN catalog_tool t ON t.rowid = catalog_tool_fts.rowid
                WHERE catalog_tool_fts MATCH ?
@@ -315,11 +328,11 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
               rowToDescriptor(
                 {
                   ...row,
-                  input_schema_json: row.input_schema_json
-                    ? JSON.parse(row.input_schema_json)
+                  inputSchemaJson: row.inputSchemaJson
+                    ? JSON.parse(row.inputSchemaJson)
                     : null,
-                  output_schema_json: row.output_schema_json
-                    ? JSON.parse(row.output_schema_json)
+                  outputSchemaJson: row.outputSchemaJson
+                    ? JSON.parse(row.outputSchemaJson)
                     : null,
                 },
                 includeSchemas,
@@ -331,8 +344,8 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           const db = yield* SqliteDrizzle
 
           const conditions = [
-            eq(catalog_tool.source_enabled, true),
-            eq(catalog_tool.source_status, "connected"),
+            eq(catalog_tool.sourceEnabled, true),
+            eq(catalog_tool.sourceStatus, "connected"),
           ]
           if (namespace) {
             conditions.push(eq(catalog_tool.namespace, namespace))
@@ -361,19 +374,19 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
           const rows = yield* db
             .select({
               namespace: catalog_tool.namespace,
-              tool_count: drizzleSql<number>`COUNT(*)`.as("tool_count"),
+              toolCount: drizzleSql<number>`COUNT(*)`.as("toolCount"),
             })
             .from(catalog_tool)
             .where(and(
-              eq(catalog_tool.source_enabled, true),
-              eq(catalog_tool.source_status, "connected"),
+              eq(catalog_tool.sourceEnabled, true),
+              eq(catalog_tool.sourceStatus, "connected"),
             ))
             .groupBy(catalog_tool.namespace)
             .limit(limit)
 
           return rows.map((row) => ({
             namespace: row.namespace,
-            toolCount: row.tool_count,
+            toolCount: row.toolCount,
           })) as readonly ToolNamespace[]
         }),
       ),
@@ -391,8 +404,8 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
             .from(catalog_tool)
             .where(and(
               eq(catalog_tool.path, path),
-              eq(catalog_tool.source_enabled, true),
-              eq(catalog_tool.source_status, "connected"),
+              eq(catalog_tool.sourceEnabled, true),
+              eq(catalog_tool.sourceStatus, "connected"),
             ))
             .limit(1)
 
@@ -405,3 +418,8 @@ export const createSqliteToolCatalog: (embedder?: Embedder) => Effect.Effect<
       ),
   } satisfies ToolCatalog
 })
+
+export const SqliteToolCatalogLive = (embedder?: Embedder) =>
+  Layer.effect(SqliteToolCatalogService, makeSqliteToolCatalog(embedder))
+
+export const createSqliteToolCatalog = makeSqliteToolCatalog

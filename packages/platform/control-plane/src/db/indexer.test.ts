@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
+import { SourceIdSchema, WorkspaceIdSchema } from "#schema";
 import { buildSearchText, indexSource, type SourceToIndex, type ToolToIndex } from "./indexer";
 import { source } from "./schema";
 
@@ -47,7 +48,7 @@ const computeContentHash = (tool: ToolToIndex): string => {
 const baseTool: ToolToIndex = {
   toolId: "github.issues.create",
   path: "github.issues.create",
-  sourceId: "source-github",
+  sourceId: SourceIdSchema.make("source-github"),
   sourceKey: "github",
   namespace: "github.issues",
   searchText: "github github.issues GitHub Create Issue streamable-http oauth",
@@ -55,8 +56,8 @@ const baseTool: ToolToIndex = {
 };
 
 const baseSource: SourceToIndex = {
-  sourceId: "source-github",
-  workspaceId: "workspace-1",
+  sourceId: SourceIdSchema.make("source-github"),
+  workspaceId: WorkspaceIdSchema.make("workspace-1"),
   name: "GitHub",
   kind: "openapi",
   endpoint: "https://api.github.com",
@@ -68,10 +69,10 @@ const baseSource: SourceToIndex = {
 };
 
 const makeDb = (existingRows: Array<{
-  tool_id: string;
-  content_hash: string;
-  source_enabled: boolean;
-  source_status: string | null;
+  toolId: string;
+  contentHash: string;
+  sourceEnabled: boolean;
+  sourceStatus: string | null;
 }>) => {
   const updates: Array<Record<string, unknown>> = [];
   const toolInserts: Array<Record<string, unknown>> = [];
@@ -154,10 +155,10 @@ describe("indexSource", () => {
       const unchangedHash = computeContentHash(baseTool);
       const fake = makeDb([
         {
-          tool_id: baseTool.toolId,
-          content_hash: unchangedHash,
-          source_enabled: true,
-          source_status: "connected",
+          toolId: baseTool.toolId,
+          contentHash: unchangedHash,
+          sourceEnabled: true,
+          sourceStatus: "connected",
         },
       ]);
 
@@ -187,10 +188,10 @@ describe("indexSource", () => {
       const unchangedHash = computeContentHash(baseTool);
       const fake = makeDb([
         {
-          tool_id: baseTool.toolId,
-          content_hash: unchangedHash,
-          source_enabled: false,
-          source_status: "disconnected",
+          toolId: baseTool.toolId,
+          contentHash: unchangedHash,
+          sourceEnabled: false,
+          sourceStatus: "disconnected",
         },
       ]);
 
@@ -211,8 +212,8 @@ describe("indexSource", () => {
       expect(result.changedTools).toEqual([]);
       expect(fake.updates).toEqual([
         {
-          source_enabled: true,
-          source_status: "connected",
+          sourceEnabled: true,
+          sourceStatus: "connected",
         },
       ]);
       expect(fake.toolInserts).toEqual([]);
@@ -247,25 +248,25 @@ describe("indexSource", () => {
         {
           values: {
             id: baseSource.sourceId,
-            workspace_id: baseSource.workspaceId,
+            workspaceId: baseSource.workspaceId,
             name: baseSource.name,
             kind: baseSource.kind,
             endpoint: baseSource.endpoint,
             status: baseSource.status,
             enabled: baseSource.enabled,
             namespace: baseSource.namespace,
-            time_created: baseSource.createdAt,
-            time_updated: baseSource.updatedAt,
+            createdAt: baseSource.createdAt,
+            updatedAt: baseSource.updatedAt,
           },
           set: {
-            workspace_id: baseSource.workspaceId,
+            workspaceId: baseSource.workspaceId,
             name: baseSource.name,
             kind: baseSource.kind,
             endpoint: baseSource.endpoint,
             status: baseSource.status,
             enabled: baseSource.enabled,
             namespace: baseSource.namespace,
-            time_updated: baseSource.updatedAt,
+            updatedAt: baseSource.updatedAt,
           },
         },
       ]);

@@ -5,27 +5,22 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
-vi.mock("./vec", () => ({
-  hasVecTable: vi.fn(() => Effect.succeed(true)),
-  searchVec: vi.fn(),
-}));
-
 import { createSqliteToolCatalog } from "./catalog";
-import { hasVecTable, searchVec } from "./vec";
+import { VecService, type VecServiceShape } from "./vec";
 
 type CatalogRow = {
   path: string
   namespace: string
-  source_key: string
+  sourceKey: string
   description: string | null
   interaction: string | null
-  input_type_preview: string | null
-  output_type_preview: string | null
-  input_schema_json: unknown
-  output_schema_json: unknown
-  provider_kind: string | null
-  source_enabled: boolean
-  source_status: string | null
+  inputTypePreview: string | null
+  outputTypePreview: string | null
+  inputSchemaJson: unknown
+  outputSchemaJson: unknown
+  providerKind: string | null
+  sourceEnabled: boolean
+  sourceStatus: string | null
 }
 
 const flattenQueryChunks = (node: unknown): Array<unknown> => {
@@ -96,14 +91,41 @@ const matchesConditions = (
     switch (key) {
       case "path":
         return row.path === value
+      case "namespace":
+        return row.namespace === value
       case "source_enabled":
-        return row.source_enabled === value
+        return row.sourceEnabled === value
       case "source_status":
-        return row.source_status === value
+        return row.sourceStatus === value
       default:
         return true
     }
   })
+
+const makeVecLayer = (overrides: {
+  hasVecTable?: VecServiceShape["hasVecTable"]
+  searchVec?: VecServiceShape["searchVec"]
+} = {}) => {
+  const hasVecTable =
+    overrides.hasVecTable ?? vi.fn(() => Effect.succeed(true))
+  const searchVec =
+    overrides.searchVec ?? vi.fn(() => Effect.succeed([] as readonly { toolId: string; score: number }[]))
+
+  return {
+    hasVecTable,
+    searchVec,
+    layer: Layer.succeed(VecService, {
+      hasVecTable,
+      setupVecTable: () => Effect.void,
+      getVecTableDimensions: Effect.succeed(null),
+      dropVecTable: Effect.void,
+      searchVec,
+      upsertVecTool: () => Effect.void,
+      removeVecSourceTools: () => Effect.void,
+      removeVecTools: () => Effect.void,
+    } satisfies VecServiceShape),
+  }
+}
 
 const makeFakeDb = (rows: readonly CatalogRow[]) => ({
   select: (fields: Record<string, unknown>) => ({
@@ -116,16 +138,16 @@ const makeFakeDb = (rows: readonly CatalogRow[]) => ({
             )
             .slice(0, limit)
 
-          if ("tool_count" in fields) {
+          if ("toolCount" in fields) {
             return Effect.succeed(
               Array.from(
                 filteredRows.reduce((acc, row) => {
                   acc.set(row.namespace, (acc.get(row.namespace) ?? 0) + 1)
                   return acc
                 }, new Map<string, number>()),
-              ).map(([namespace, tool_count]) => ({
+              ).map(([namespace, toolCount]) => ({
                 namespace,
-                tool_count,
+                toolCount,
               })),
             )
           }
@@ -133,14 +155,14 @@ const makeFakeDb = (rows: readonly CatalogRow[]) => ({
           return Effect.succeed(
             filteredRows.map((row) => ({
               path: row.path,
-              source_key: row.source_key,
+              sourceKey: row.sourceKey,
               description: row.description,
               interaction: row.interaction,
-              input_type_preview: row.input_type_preview,
-              output_type_preview: row.output_type_preview,
-              input_schema_json: row.input_schema_json,
-              output_schema_json: row.output_schema_json,
-              provider_kind: row.provider_kind,
+              inputTypePreview: row.inputTypePreview,
+              outputTypePreview: row.outputTypePreview,
+              inputSchemaJson: row.inputSchemaJson,
+              outputSchemaJson: row.outputSchemaJson,
+              providerKind: row.providerKind,
             })),
           )
         },
@@ -158,9 +180,9 @@ const makeFakeDb = (rows: readonly CatalogRow[]) => ({
                 }, new Map<string, number>()),
               )
                 .slice(0, limit)
-                .map(([namespace, tool_count]) => ({
+                .map(([namespace, toolCount]) => ({
                   namespace,
-                  tool_count,
+                  toolCount,
                 })),
             )
           },
@@ -176,6 +198,7 @@ const makeCatalog = (rows: readonly CatalogRow[]) =>
       Layer.mergeAll(
         Layer.succeed(SqliteDrizzle, makeFakeDb(rows) as never),
         Layer.succeed(SqlClient.SqlClient, {} as never),
+        makeVecLayer().layer,
       ),
     ),
   )
@@ -190,6 +213,7 @@ const makeSearchCatalog = (input: {
     embedBatch: (texts: string[], hint?: "document" | "query") => Promise<number[][]>
   }
   onUnsafe?: (query: string, params: ReadonlyArray<unknown>) => void
+  vecLayer?: ReturnType<typeof makeVecLayer>
 }) =>
   createSqliteToolCatalog(input.embedder as never).pipe(
     Effect.provide(
@@ -201,6 +225,7 @@ const makeSearchCatalog = (input: {
             return Effect.succeed(input.rows)
           },
         } as never),
+        (input.vecLayer ?? makeVecLayer()).layer,
       ),
     ),
   )
@@ -210,44 +235,44 @@ describe("sqlite catalog", () => {
     {
       path: "github.connected",
       namespace: "github",
-      source_key: "github",
+      sourceKey: "github",
       description: "Connected tool",
       interaction: "auto",
-      input_type_preview: null,
-      output_type_preview: null,
-      input_schema_json: null,
-      output_schema_json: null,
-      provider_kind: null,
-      source_enabled: true,
-      source_status: "connected",
+      inputTypePreview: null,
+      outputTypePreview: null,
+      inputSchemaJson: null,
+      outputSchemaJson: null,
+      providerKind: null,
+      sourceEnabled: true,
+      sourceStatus: "connected",
     },
     {
       path: "github.disconnected",
       namespace: "github",
-      source_key: "github",
+      sourceKey: "github",
       description: "Disconnected tool",
       interaction: "auto",
-      input_type_preview: null,
-      output_type_preview: null,
-      input_schema_json: null,
-      output_schema_json: null,
-      provider_kind: null,
-      source_enabled: true,
-      source_status: "error",
+      inputTypePreview: null,
+      outputTypePreview: null,
+      inputSchemaJson: null,
+      outputSchemaJson: null,
+      providerKind: null,
+      sourceEnabled: true,
+      sourceStatus: "error",
     },
     {
       path: "github.disabled",
       namespace: "github",
-      source_key: "github",
+      sourceKey: "github",
       description: "Disabled tool",
       interaction: "auto",
-      input_type_preview: null,
-      output_type_preview: null,
-      input_schema_json: null,
-      output_schema_json: null,
-      provider_kind: null,
-      source_enabled: false,
-      source_status: "connected",
+      inputTypePreview: null,
+      outputTypePreview: null,
+      inputSchemaJson: null,
+      outputSchemaJson: null,
+      providerKind: null,
+      sourceEnabled: false,
+      sourceStatus: "connected",
     },
   ]
 
@@ -290,30 +315,30 @@ describe("sqlite catalog", () => {
         {
           path: "slack.messages.send",
           namespace: "slack.messages",
-          source_key: "slack",
+          sourceKey: "slack",
           description: "Slack tool",
           interaction: "auto",
-          input_type_preview: null,
-          output_type_preview: null,
-          input_schema_json: null,
-          output_schema_json: null,
-          provider_kind: null,
-          source_enabled: true,
-          source_status: "connected",
+          inputTypePreview: null,
+          outputTypePreview: null,
+          inputSchemaJson: null,
+          outputSchemaJson: null,
+          providerKind: null,
+          sourceEnabled: true,
+          sourceStatus: "connected",
         },
         {
           path: "slack.messages.archived",
           namespace: "slack.messages",
-          source_key: "slack",
+          sourceKey: "slack",
           description: "Disconnected Slack tool",
           interaction: "auto",
-          input_type_preview: null,
-          output_type_preview: null,
-          input_schema_json: null,
-          output_schema_json: null,
-          provider_kind: null,
-          source_enabled: true,
-          source_status: "error",
+          inputTypePreview: null,
+          outputTypePreview: null,
+          inputSchemaJson: null,
+          outputSchemaJson: null,
+          providerKind: null,
+          sourceEnabled: true,
+          sourceStatus: "error",
         },
       ])
 
@@ -352,16 +377,12 @@ describe("sqlite catalog searchTools", () => {
 
   it.effect("falls back to semantic search when the FTS query is empty but an embedder exists", () =>
     Effect.gen(function* () {
-      const searchVecMock = vi.mocked(searchVec)
-      const hasVecTableMock = vi.mocked(hasVecTable)
-      searchVecMock.mockReset()
-      hasVecTableMock.mockReset()
-      hasVecTableMock.mockReturnValue(Effect.succeed(true))
-      searchVecMock.mockReturnValue(
-        Effect.succeed([
-          { toolId: "github.issues.create", score: 0.7 },
-        ]),
-      )
+      const vecLayer = makeVecLayer({
+        hasVecTable: vi.fn(() => Effect.succeed(true)),
+        searchVec: vi.fn(() =>
+          Effect.succeed([{ toolId: "github.issues.create", score: 0.7 }]),
+        ),
+      })
 
       const embedder = {
         provider: "local",
@@ -374,6 +395,7 @@ describe("sqlite catalog searchTools", () => {
       const catalog = yield* makeSearchCatalog({
         rows: [],
         embedder,
+        vecLayer,
       })
 
       const results = yield* catalog.searchTools({
@@ -384,18 +406,16 @@ describe("sqlite catalog searchTools", () => {
       expect(results).toHaveLength(1)
       expect(results[0]?.path).toBe("github.issues.create")
       expect(results[0]?.score).toBeGreaterThan(0)
-      expect(searchVecMock).toHaveBeenCalledTimes(1)
+      expect(vecLayer.searchVec).toHaveBeenCalledTimes(1)
     }),
   )
 
   it.effect("skips semantic search when FTS already has a dominant lexical match", () =>
     Effect.gen(function* () {
-      const searchVecMock = vi.mocked(searchVec)
-      const hasVecTableMock = vi.mocked(hasVecTable)
-      searchVecMock.mockReset()
-      hasVecTableMock.mockReset()
-      hasVecTableMock.mockReturnValue(Effect.succeed(true))
-      searchVecMock.mockReturnValue(Effect.succeed([]))
+      const vecLayer = makeVecLayer({
+        hasVecTable: vi.fn(() => Effect.succeed(true)),
+        searchVec: vi.fn(() => Effect.succeed([])),
+      })
 
       const embedder = {
         provider: "local",
@@ -411,6 +431,7 @@ describe("sqlite catalog searchTools", () => {
           { path: "github.issues.update", raw_score: -0.5 },
         ],
         embedder,
+        vecLayer,
       })
 
       const results = yield* catalog.searchTools({
@@ -419,7 +440,7 @@ describe("sqlite catalog searchTools", () => {
       })
 
       expect(results.map((result) => result.path)).toEqual(["github.issues.create", "github.issues.update"])
-      expect(searchVecMock).not.toHaveBeenCalled()
+      expect(vecLayer.searchVec).not.toHaveBeenCalled()
       expect(results[0]!.score).toBeGreaterThan(results[1]!.score)
       expect(results[0]!.score).toBeGreaterThan(0.85)
     }),
@@ -427,9 +448,9 @@ describe("sqlite catalog searchTools", () => {
 
   it.effect("surfaces semantic embedding failures instead of silently falling back", () =>
     Effect.gen(function* () {
-      const hasVecTableMock = vi.mocked(hasVecTable)
-      hasVecTableMock.mockReset()
-      hasVecTableMock.mockReturnValue(Effect.succeed(true))
+      const vecLayer = makeVecLayer({
+        hasVecTable: vi.fn(() => Effect.succeed(true)),
+      })
 
       const embedder = {
         provider: "local",
@@ -446,6 +467,7 @@ describe("sqlite catalog searchTools", () => {
           { path: "github.issues.create", raw_score: -0.25 },
         ],
         embedder,
+        vecLayer,
       })
 
       yield* Effect.flip(
@@ -464,11 +486,9 @@ describe("sqlite catalog searchTools", () => {
 
   it.effect("returns lexical results when sqlite-vec is unavailable", () =>
     Effect.gen(function* () {
-      const searchVecMock = vi.mocked(searchVec)
-      const hasVecTableMock = vi.mocked(hasVecTable)
-      searchVecMock.mockReset()
-      hasVecTableMock.mockReset()
-      hasVecTableMock.mockReturnValue(Effect.succeed(false))
+      const vecLayer = makeVecLayer({
+        hasVecTable: vi.fn(() => Effect.succeed(false)),
+      })
 
       const embedder = {
         provider: "local",
@@ -484,6 +504,7 @@ describe("sqlite catalog searchTools", () => {
           { path: "github.issues.update", raw_score: -0.2 },
         ],
         embedder,
+        vecLayer,
       })
 
       const results = yield* catalog.searchTools({
@@ -496,7 +517,7 @@ describe("sqlite catalog searchTools", () => {
         "github.issues.update",
       ])
       expect(results.searchMode).toBe("fts")
-      expect(searchVecMock).not.toHaveBeenCalled()
+      expect(vecLayer.searchVec).not.toHaveBeenCalled()
     }),
   )
 

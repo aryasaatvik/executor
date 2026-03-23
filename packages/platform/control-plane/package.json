@@ -14,6 +14,8 @@
     "#runtime": "./src/runtime/index.ts"
   },
   "scripts": {
+    "db:generate": "bunx drizzle-kit generate --config drizzle.config.ts",
+    "db:check": "bunx drizzle-kit check --config drizzle.config.ts",
     "fixture:release:capture": "bun run ./src/runtime/local/capture-release-workspace-fixture.ts",
     "typecheck": "bunx tsc --noEmit -p tsconfig.json",
     "test": "vitest run",

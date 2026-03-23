@@ -1,20 +1,11 @@
 import { describe, expect, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
 import { vi } from "vitest"
-
-const { removeVecToolsMock, upsertVecToolMock } = vi.hoisted(() => ({
-  removeVecToolsMock: vi.fn(),
-  upsertVecToolMock: vi.fn(),
-}))
-
-vi.mock("./vec", () => ({
-  removeVecSourceTools: vi.fn(),
-  removeVecTools: removeVecToolsMock,
-  upsertVecTool: upsertVecToolMock,
-}))
 
 import { buildEmbeddingText, embedSourceTools } from "./embed-indexer"
 import type { ToolToIndex } from "./indexer"
+import { VecService, type VecServiceShape } from "./vec"
 
 describe("buildEmbeddingText", () => {
   it("embeds the richer runtime search document and params", () => {
@@ -43,13 +34,35 @@ describe("buildEmbeddingText", () => {
   })
 })
 
+const makeVecLayer = (overrides: {
+  removeVecTools?: VecServiceShape["removeVecTools"]
+  upsertVecTool?: VecServiceShape["upsertVecTool"]
+} = {}) => {
+  const removeVecTools =
+    overrides.removeVecTools ?? vi.fn(() => Effect.void)
+  const upsertVecTool =
+    overrides.upsertVecTool ?? vi.fn(() => Effect.void)
+
+  return {
+    removeVecTools,
+    upsertVecTool,
+    layer: Layer.succeed(VecService, {
+      hasVecTable: () => Effect.succeed(false),
+      setupVecTable: () => Effect.void,
+      getVecTableDimensions: Effect.succeed(null),
+      dropVecTable: Effect.void,
+      searchVec: () => Effect.succeed([]),
+      upsertVecTool,
+      removeVecSourceTools: () => Effect.void,
+      removeVecTools,
+    } satisfies VecServiceShape),
+  }
+}
+
 describe("embedSourceTools", () => {
   it.effect("removes stale vectors for tools whose embedding fails", () =>
     Effect.gen(function* () {
-      removeVecToolsMock.mockReset()
-      upsertVecToolMock.mockReset()
-      removeVecToolsMock.mockReturnValue(Effect.void)
-      upsertVecToolMock.mockReturnValue(Effect.void)
+      const vecLayer = makeVecLayer()
 
       yield* embedSourceTools({
         embedder: {
@@ -91,17 +104,17 @@ describe("embedSourceTools", () => {
             inputSchemaJson: undefined,
           },
         ] satisfies readonly ToolToIndex[],
-      })
+      }).pipe(Effect.provide(vecLayer.layer))
 
-      expect(upsertVecToolMock).toHaveBeenCalledTimes(1)
-      expect(upsertVecToolMock).toHaveBeenCalledWith({
+      expect(vecLayer.upsertVecTool).toHaveBeenCalledTimes(1)
+      expect(vecLayer.upsertVecTool).toHaveBeenCalledWith({
         toolId: "github.issues.create",
         embedding: [1, 2, 3],
         sourceKey: "github",
         namespace: "github.issues",
       })
-      expect(removeVecToolsMock).toHaveBeenCalledTimes(1)
-      expect(removeVecToolsMock).toHaveBeenCalledWith([
+      expect(vecLayer.removeVecTools).toHaveBeenCalledTimes(1)
+      expect(vecLayer.removeVecTools).toHaveBeenCalledWith([
         "github.issues.update",
       ])
     }),

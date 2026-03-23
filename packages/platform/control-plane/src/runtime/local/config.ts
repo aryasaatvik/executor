@@ -10,7 +10,6 @@ import {
 import {
   LocalExecutorConfigSchema,
   type LocalExecutorConfig,
-  type LocalConfigPolicy,
   type LocalConfigSecretProvider,
   type LocalConfigSource,
 } from "#schema";
@@ -208,19 +207,6 @@ const mergeSourceMaps = (
   };
 };
 
-const mergePolicyMaps = (
-  base: Record<string, LocalConfigPolicy> | undefined,
-  extra: Record<string, LocalConfigPolicy> | undefined,
-): Record<string, LocalConfigPolicy> | undefined => {
-  if (!base && !extra) {
-    return undefined;
-  }
-  return {
-    ...base,
-    ...extra,
-  };
-};
-
 const mergeSecretProviderMaps = (
   base: Record<string, LocalConfigSecretProvider> | undefined,
   extra: Record<string, LocalConfigSecretProvider> | undefined,
@@ -262,7 +248,6 @@ export const mergeLocalExecutorConfigs = (
         ? { semanticSearch: base.semanticSearch }
         : {}),
     sources: mergeSourceMaps(base?.sources, extra?.sources),
-    policies: mergePolicyMaps(base?.policies, extra?.policies),
     secrets: {
       providers: mergeSecretProviderMaps(
         base?.secrets?.providers,

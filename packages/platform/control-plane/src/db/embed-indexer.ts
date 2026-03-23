@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect"
 import type { Embedder } from "./embedder/types"
 import type { ToolToIndex } from "./indexer"
-import { removeVecSourceTools, removeVecTools, upsertVecTool } from "./vec"
+import {
+  VecService,
+} from "./vec"
 
 const BATCH_SIZE = 32
 
@@ -18,6 +20,7 @@ export const embedSourceTools = (input: {
 }) =>
   Effect.gen(function* () {
     const { embedder, tools, sourceKey } = input
+    const vec = yield* VecService
 
     // Batch embed
     for (let i = 0; i < tools.length; i += BATCH_SIZE) {
@@ -50,13 +53,13 @@ export const embedSourceTools = (input: {
         .map((tool) => tool.toolId)
 
       if (failedToolIds.length > 0) {
-        yield* removeVecTools(failedToolIds)
+        yield* vec.removeVecTools(failedToolIds)
       }
 
       // Upsert into vector table
       for (let j = 0; j < batch.length; j++) {
         if (embeddings[j] && embeddings[j].length > 0) {
-          yield* upsertVecTool({
+          yield* vec.upsertVecTool({
             toolId: batch[j].toolId,
             embedding: embeddings[j],
             sourceKey,
@@ -71,7 +74,10 @@ export const embedSourceTools = (input: {
  * Remove all embeddings for a source from the vector table.
  */
 export const removeSourceEmbeddings = (sourceKey: string) =>
-  removeVecSourceTools(sourceKey)
+  Effect.gen(function* () {
+    const vec = yield* VecService
+    yield* vec.removeVecSourceTools(sourceKey)
+  })
 
 /**
  * Build the text to embed for a tool.

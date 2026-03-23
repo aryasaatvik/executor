@@ -2,6 +2,7 @@ import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite"
 import { SqlClient } from "@effect/sql"
 import { eq, and, inArray } from "drizzle-orm"
 import * as Effect from "effect/Effect"
+import type { SourceId, SourceKind, SourceStatus, WorkspaceId } from "#schema"
 import { catalog_tool, source } from "./schema"
 import { removeVecTools } from "./vec"
 
@@ -17,7 +18,7 @@ import { removeVecTools } from "./vec"
 export interface ToolToIndex {
   toolId: string // full path like "github.issues.create"
   path: string
-  sourceId: string
+  sourceId: SourceId
   sourceKey: string
   namespace: string
   searchText?: string
@@ -32,12 +33,12 @@ export interface ToolToIndex {
 }
 
 export interface SourceToIndex {
-  sourceId: string
-  workspaceId: string
+  sourceId: SourceId
+  workspaceId: WorkspaceId
   name: string
-  kind: string
+  kind: SourceKind
   endpoint: string
-  status: string
+  status: SourceStatus
   enabled: boolean
   namespace: string | null
   createdAt: number
@@ -163,7 +164,7 @@ const computeContentHash = (tool: ToolToIndex, searchText: string): string => {
  * Runs inside a transaction for atomicity.
  */
 export const indexSource = (input: {
-  sourceId: string
+  sourceId: SourceId
   sourceKey: string
   source: SourceToIndex
   tools: readonly ToolToIndex[]
@@ -175,44 +176,46 @@ export const indexSource = (input: {
 
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        yield* db.insert(source).values({
+        const sourceRow = {
           id: input.source.sourceId,
-          workspace_id: input.source.workspaceId,
+          workspaceId: input.source.workspaceId,
           name: input.source.name,
           kind: input.source.kind,
           endpoint: input.source.endpoint,
           status: input.source.status,
           enabled: input.source.enabled,
           namespace: input.source.namespace,
-          time_created: input.source.createdAt,
-          time_updated: input.source.updatedAt,
-        }).onConflictDoUpdate({
+          createdAt: input.source.createdAt,
+          updatedAt: input.source.updatedAt,
+        } satisfies typeof source.$inferInsert
+
+        yield* db.insert(source).values(sourceRow).onConflictDoUpdate({
           target: source.id,
           set: {
-            workspace_id: input.source.workspaceId,
+            workspaceId: input.source.workspaceId,
             name: input.source.name,
             kind: input.source.kind,
             endpoint: input.source.endpoint,
             status: input.source.status,
             enabled: input.source.enabled,
             namespace: input.source.namespace,
-            time_updated: input.source.updatedAt,
+            updatedAt: input.source.updatedAt,
           },
         })
 
         // Fetch existing tools for this source to compare hashes
         const existing = yield* db
           .select({
-            tool_id: catalog_tool.tool_id,
-            content_hash: catalog_tool.content_hash,
-            source_enabled: catalog_tool.source_enabled,
-            source_status: catalog_tool.source_status,
+            toolId: catalog_tool.toolId,
+            contentHash: catalog_tool.contentHash,
+            sourceEnabled: catalog_tool.sourceEnabled,
+            sourceStatus: catalog_tool.sourceStatus,
           })
           .from(catalog_tool)
-          .where(eq(catalog_tool.source_id, input.sourceId))
+          .where(eq(catalog_tool.sourceId, input.sourceId as typeof catalog_tool.$inferInsert.sourceId))
 
         const existingByToolId = new Map(
-          existing.map((row) => [row.tool_id, row]),
+          existing.map((row) => [row.toolId, row]),
         )
 
         const incomingToolIds = new Set<string>()
@@ -223,21 +226,21 @@ export const indexSource = (input: {
           incomingToolIds.add(tool.toolId)
 
           const existingRow = existingByToolId.get(tool.toolId)
-          const existingHash = existingRow?.content_hash
+          const existingHash = existingRow?.contentHash
 
           if (existingHash === contentHash) {
             const needsReactivation =
-              existingRow?.source_enabled !== true
-              || existingRow?.source_status !== "connected"
+              existingRow?.sourceEnabled !== true
+              || existingRow?.sourceStatus !== "connected"
 
             if (needsReactivation) {
               yield* db
                 .update(catalog_tool)
                 .set({
-                  source_enabled: true,
-                  source_status: "connected",
+                  sourceEnabled: true,
+                  sourceStatus: "connected",
                 })
-                .where(eq(catalog_tool.tool_id, tool.toolId))
+                .where(eq(catalog_tool.toolId, tool.toolId))
             }
             continue
           }
@@ -248,51 +251,53 @@ export const indexSource = (input: {
               .update(catalog_tool)
               .set({
                 path: tool.path,
-                source_key: tool.sourceKey,
+                sourceKey: tool.sourceKey,
                 namespace: tool.namespace,
                 title: tool.title ?? null,
                 description: tool.description ?? null,
-                search_text: searchText,
-                input_schema_json: tool.inputSchemaJson ?? null,
-                output_schema_json: tool.outputSchemaJson ?? null,
-                input_type_preview: tool.inputTypePreview ?? null,
-                output_type_preview: tool.outputTypePreview ?? null,
+                searchText: searchText,
+                inputSchemaJson: tool.inputSchemaJson ?? null,
+                outputSchemaJson: tool.outputSchemaJson ?? null,
+                inputTypePreview: tool.inputTypePreview ?? null,
+                outputTypePreview: tool.outputTypePreview ?? null,
                 interaction: tool.interaction ?? "auto",
-                provider_kind: tool.providerKind ?? null,
-                content_hash: contentHash,
-                source_enabled: true,
-                source_status: "connected",
+                providerKind: tool.providerKind ?? null,
+                contentHash: contentHash,
+                sourceEnabled: true,
+                sourceStatus: "connected",
               })
-              .where(eq(catalog_tool.tool_id, tool.toolId))
+              .where(eq(catalog_tool.toolId, tool.toolId))
             changedTools.push(tool)
           } else {
             // New tool — insert
-            yield* db.insert(catalog_tool).values({
-              tool_id: tool.toolId,
+            const toolRow = {
+              toolId: tool.toolId,
               path: tool.path,
-              source_id: input.sourceId,
-              source_key: tool.sourceKey,
+              sourceId: input.sourceId as typeof catalog_tool.$inferInsert.sourceId,
+              sourceKey: tool.sourceKey,
               namespace: tool.namespace,
               title: tool.title ?? null,
               description: tool.description ?? null,
-              search_text: searchText,
-              input_schema_json: tool.inputSchemaJson ?? null,
-              output_schema_json: tool.outputSchemaJson ?? null,
-              input_type_preview: tool.inputTypePreview ?? null,
-              output_type_preview: tool.outputTypePreview ?? null,
+              searchText: searchText,
+              inputSchemaJson: tool.inputSchemaJson ?? null,
+              outputSchemaJson: tool.outputSchemaJson ?? null,
+              inputTypePreview: tool.inputTypePreview ?? null,
+              outputTypePreview: tool.outputTypePreview ?? null,
               interaction: tool.interaction ?? "auto",
-              provider_kind: tool.providerKind ?? null,
-              content_hash: contentHash,
-              source_enabled: true,
-              source_status: "connected",
-            })
+              providerKind: tool.providerKind ?? null,
+              contentHash: contentHash,
+              sourceEnabled: true,
+              sourceStatus: "connected",
+            } satisfies typeof catalog_tool.$inferInsert
+
+            yield* db.insert(catalog_tool).values(toolRow)
             changedTools.push(tool)
           }
         }
 
         // Remove stale tools that no longer exist in the source
         const staleToolIds = existing
-          .map((row) => row.tool_id)
+          .map((row) => row.toolId)
           .filter((id) => !incomingToolIds.has(id))
 
         if (staleToolIds.length > 0) {
@@ -300,8 +305,8 @@ export const indexSource = (input: {
             .delete(catalog_tool)
             .where(
               and(
-                eq(catalog_tool.source_id, input.sourceId),
-                inArray(catalog_tool.tool_id, staleToolIds),
+                eq(catalog_tool.sourceId, input.sourceId as typeof catalog_tool.$inferInsert.sourceId),
+                inArray(catalog_tool.toolId, staleToolIds),
               ),
             )
           yield* removeVecTools(staleToolIds)
@@ -322,17 +327,17 @@ export const indexSource = (input: {
  * Mark all tools for a source as disabled (source_enabled = false).
  * Used when a source disconnects but is not removed.
  */
-export const deactivateSourceTools = (sourceId: string) =>
+export const deactivateSourceTools = (sourceId: SourceId) =>
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle
 
     yield* db
       .update(catalog_tool)
       .set({
-        source_enabled: false,
-        source_status: "disconnected",
+        sourceEnabled: false,
+        sourceStatus: "disconnected",
       })
-      .where(eq(catalog_tool.source_id, sourceId))
+      .where(eq(catalog_tool.sourceId, sourceId as typeof catalog_tool.$inferInsert.sourceId))
   })
 
 /**
@@ -340,44 +345,46 @@ export const deactivateSourceTools = (sourceId: string) =>
  * Used for sources that still exist but are currently disabled or disconnected.
  */
 export const syncSourceLifecycle = (input: {
-  sourceId: string
+  sourceId: SourceId
   source: SourceToIndex
 }) =>
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle
 
-    yield* db.insert(source).values({
+    const sourceRow = {
       id: input.source.sourceId,
-      workspace_id: input.source.workspaceId,
+      workspaceId: input.source.workspaceId,
       name: input.source.name,
       kind: input.source.kind,
       endpoint: input.source.endpoint,
       status: input.source.status,
       enabled: input.source.enabled,
       namespace: input.source.namespace,
-      time_created: input.source.createdAt,
-      time_updated: input.source.updatedAt,
-    }).onConflictDoUpdate({
+      createdAt: input.source.createdAt,
+      updatedAt: input.source.updatedAt,
+    } satisfies typeof source.$inferInsert
+
+    yield* db.insert(source).values(sourceRow).onConflictDoUpdate({
       target: source.id,
       set: {
-        workspace_id: input.source.workspaceId,
+        workspaceId: input.source.workspaceId,
         name: input.source.name,
         kind: input.source.kind,
         endpoint: input.source.endpoint,
         status: input.source.status,
         enabled: input.source.enabled,
         namespace: input.source.namespace,
-        time_updated: input.source.updatedAt,
+        updatedAt: input.source.updatedAt,
       },
     })
 
     yield* db
       .update(catalog_tool)
       .set({
-        source_enabled: input.source.enabled,
-        source_status: input.source.status,
+        sourceEnabled: input.source.enabled,
+        sourceStatus: input.source.status,
       })
-      .where(eq(catalog_tool.source_id, input.sourceId))
+      .where(eq(catalog_tool.sourceId, input.sourceId as typeof catalog_tool.$inferInsert.sourceId))
   })
 
 // ---------------------------------------------------------------------------
@@ -388,11 +395,11 @@ export const syncSourceLifecycle = (input: {
  * Delete all tools for a source from the catalog_tool table.
  * Used when a source is permanently removed.
  */
-export const removeSourceTools = (sourceId: string) =>
+export const removeSourceTools = (sourceId: SourceId) =>
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle
 
     yield* db
       .delete(catalog_tool)
-      .where(eq(catalog_tool.source_id, sourceId))
+      .where(eq(catalog_tool.sourceId, sourceId as typeof catalog_tool.$inferInsert.sourceId))
   })
