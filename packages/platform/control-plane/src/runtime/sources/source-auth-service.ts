@@ -2119,22 +2119,26 @@ const addExecutorHttpSource = (input: {
         actorAccountId: input.sourceInput.actorAccountId,
       },
     );
-    const existing = existingSources.find((source) => {
+    let existing: Source | undefined = undefined;
+    for (const source of existingSources) {
       if (source.kind !== input.sourceInput.kind) {
-        return false;
+        continue;
       }
 
       if (normalizeEndpoint(source.endpoint) !== normalizedEndpoint) {
-        return false;
+        continue;
       }
 
       if (input.sourceInput.kind === "openapi") {
-        const bindingState = Effect.runSync(sourceBindingStateFromSource(source));
-        return trimOrNull(bindingState.specUrl) === normalizedSpecUrl;
+        const bindingState = yield* sourceBindingStateFromSource(source);
+        if (trimOrNull(bindingState.specUrl) !== normalizedSpecUrl) {
+          continue;
+        }
       }
 
-      return true;
-    });
+      existing = source;
+      break;
+    }
 
     const chosenName =
       trimOrNull(input.sourceInput.name)

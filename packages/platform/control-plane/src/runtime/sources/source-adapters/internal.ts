@@ -4,7 +4,6 @@ import {
   createSourceCatalogSyncResult,
   createCatalogImportMetadata,
   decodeBindingConfig,
-  decodeSourceBindingPayload,
   emptySourceBindingState,
   encodeBindingConfig,
   type Source,
@@ -27,30 +26,47 @@ const bindingHasAnyField = (
 
 const internalBindingConfigFromSource = (
   source: Pick<Source, "id" | "bindingVersion" | "binding">,
-) =>
-  Effect.gen(function* () {
-    if (
-      bindingHasAnyField(source.binding, [
-        "specUrl",
-        "defaultHeaders",
-        "transport",
-        "queryParams",
-        "headers",
-      ])
-    ) {
-      return yield* runtimeEffectError("sources/source-adapters/internal", "internal sources cannot define HTTP source settings");
-    }
+): typeof InternalBindingConfigSchema.Type => {
+  if (source.bindingVersion !== INTERNAL_BINDING_CONFIG_VERSION) {
+    throw runtimeEffectError(
+      "sources/source-adapters/internal",
+      `Unsupported internal binding version ${source.bindingVersion} for ${source.id}; expected ${INTERNAL_BINDING_CONFIG_VERSION}`,
+    );
+  }
 
-    return yield* decodeSourceBindingPayload({
-      sourceId: source.id,
-      label: "internal",
-      version: source.bindingVersion,
-      expectedVersion: INTERNAL_BINDING_CONFIG_VERSION,
-      schema: InternalBindingConfigSchema,
-      value: source.binding,
-      allowedKeys: [],
-    });
-  });
+  if (
+    bindingHasAnyField(source.binding, [
+      "specUrl",
+      "defaultHeaders",
+      "transport",
+      "queryParams",
+      "headers",
+    ])
+  ) {
+    throw runtimeEffectError(
+      "sources/source-adapters/internal",
+      "internal sources cannot define HTTP source settings",
+    );
+  }
+
+  if (
+    source.binding !== null &&
+    typeof source.binding === "object" &&
+    !Array.isArray(source.binding)
+  ) {
+    const extraKeys = Object.keys(source.binding as Record<string, unknown>);
+    if (extraKeys.length > 0) {
+      throw new Error(`Unsupported fields: ${extraKeys.join(", ")}`);
+    }
+  }
+
+  try {
+    return Schema.decodeUnknownSync(InternalBindingConfigSchema)(source.binding);
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    throw new Error(`Invalid internal binding payload for ${source.id}: ${message}`);
+  }
+};
 
 export const internalSourceAdapter = {
   key: "internal",
@@ -72,7 +88,7 @@ export const internalSourceAdapter = {
       adapterKey: source.kind,
       version: INTERNAL_BINDING_CONFIG_VERSION,
       payloadSchema: InternalBindingConfigSchema,
-      payload: Effect.runSync(internalBindingConfigFromSource(source)),
+      payload: internalBindingConfigFromSource(source),
     }),
   deserializeBindingConfig: ({ id, bindingConfigJson }) =>
     Effect.map(
@@ -96,7 +112,11 @@ export const internalSourceAdapter = {
   }),
   validateSource: (source) =>
     Effect.gen(function* () {
-      yield* internalBindingConfigFromSource(source);
+      yield* Effect.try({
+        try: () => internalBindingConfigFromSource(source),
+        catch: (cause) =>
+          cause instanceof Error ? cause : new Error(String(cause)),
+      });
 
       return {
         ...source,

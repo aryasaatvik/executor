@@ -47,7 +47,9 @@ const workspaceState: LocalWorkspaceState = {
       updatedAt: 2000,
     },
   },
-  policies: {},
+  catalog: {
+    semanticSearchSignature: null,
+  },
 };
 
 describe("source-store", () => {
@@ -65,6 +67,7 @@ describe("source-store", () => {
         id: sourceId,
         workspaceId,
         name: "Linear GraphQL",
+        iconUrl: null,
         kind: "graphql",
         endpoint: "https://api.linear.app/graphql",
         status: "connected",

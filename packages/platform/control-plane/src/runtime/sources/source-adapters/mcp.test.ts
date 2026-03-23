@@ -21,6 +21,7 @@ import { z } from "zod/v4";
 
 import { projectCatalogForAgentSdk } from "@executor/ir/catalog";
 import type { CatalogSnapshotV1 } from "@executor/ir/model";
+import { clearMcpConnectionPoolSession } from "@executor/source-mcp";
 import { createCatalogTypeProjector, projectedCatalogTypeRoots } from "../../catalog/catalog-typescript";
 import { invokeIrTool } from "../../execution/ir-execution";
 import {
@@ -958,6 +959,173 @@ describe("mcp source adapter", () => {
           content: [{
             type: "text",
             text: "1",
+          }],
+        },
+        error: null,
+        headers: {},
+        status: null,
+      });
+    }),
+  );
+
+  it.scoped("reuses a stateful MCP session across different runs in the same execution session", () =>
+    Effect.gen(function* () {
+      const realServer = yield* makeStatefulMcpServer;
+      const source = yield* createSourceFromPayload({
+        workspaceId: "ws_test" as any,
+        sourceId: SourceIdSchema.make(`src_${randomUUID()}`),
+        payload: {
+          name: "Stateful MCP Demo",
+          kind: "mcp",
+          endpoint: realServer.endpoint,
+          namespace: "mcp.stateful.demo",
+          binding: {
+            transport: "streamable-http",
+            queryParams: null,
+            headers: null,
+          },
+          importAuthPolicy: "reuse_runtime",
+          importAuth: { kind: "none" },
+          auth: { kind: "none" },
+          status: "connected",
+          enabled: true,
+        },
+        now: Date.now(),
+      });
+
+      const syncResult = yield* mcpSourceAdapter.syncCatalog({
+        source,
+        resolveSecretMaterial: () =>
+          Effect.fail(runtimeEffectError("sources/source-adapters/mcp.test", "unexpected secret lookup")),
+        resolveAuthMaterialForSlot: () =>
+          Effect.succeed({
+            placements: [],
+            headers: {},
+            queryParams: {},
+            cookies: {},
+            bodyValues: {},
+            expiresAt: null,
+            refreshAfter: null,
+          }),
+      });
+      const snapshot = snapshotFromSourceCatalogSyncResult(syncResult);
+      const catalog = makeLoadedCatalog({
+        source,
+        snapshot,
+      });
+
+      const incrementTool = yield* expandCatalogToolByPath({
+        catalogs: [catalog],
+        path: "mcp.stateful.demo.increment_session",
+      });
+      const readTool = yield* expandCatalogToolByPath({
+        catalogs: [catalog],
+        path: "mcp.stateful.demo.read_session",
+      });
+
+      if (!incrementTool || !readTool) {
+        throw new Error("Expected stateful MCP tools to resolve");
+      }
+
+      const sharedContext = {
+        executionSessionId: "exec_session_demo",
+        actor: "acct_test",
+      };
+
+      const incrementResult = yield* invokeIrTool({
+        workspaceId: source.workspaceId,
+        accountId: "acct_test" as any,
+        tool: incrementTool,
+        auth: {
+          placements: [],
+          headers: {},
+          queryParams: {},
+          cookies: {},
+          bodyValues: {},
+          expiresAt: null,
+          refreshAfter: null,
+        },
+        args: {},
+        context: {
+          ...sharedContext,
+          runId: "exec_first",
+        },
+      });
+
+      const readResult = yield* invokeIrTool({
+        workspaceId: source.workspaceId,
+        accountId: "acct_test" as any,
+        tool: readTool,
+        auth: {
+          placements: [],
+          headers: {},
+          queryParams: {},
+          cookies: {},
+          bodyValues: {},
+          expiresAt: null,
+          refreshAfter: null,
+        },
+        args: {},
+        context: {
+          ...sharedContext,
+          runId: "exec_second",
+        },
+      });
+
+      expect(incrementResult).toEqual({
+        data: {
+          content: [{
+            type: "text",
+            text: "1",
+          }],
+        },
+        error: null,
+        headers: {},
+        status: null,
+      });
+      expect(readResult).toEqual({
+        data: {
+          content: [{
+            type: "text",
+            text: "1",
+          }],
+        },
+        error: null,
+        headers: {},
+        status: null,
+      });
+
+      yield* clearMcpConnectionPoolSession({
+        workspaceId: source.workspaceId,
+        accountId: "acct_test",
+        executionSessionId: "exec_session_demo",
+      });
+
+      const resetReadResult = yield* invokeIrTool({
+        workspaceId: source.workspaceId,
+        accountId: "acct_test" as any,
+        tool: readTool,
+        auth: {
+          placements: [],
+          headers: {},
+          queryParams: {},
+          cookies: {},
+          bodyValues: {},
+          expiresAt: null,
+          refreshAfter: null,
+        },
+        args: {},
+        context: {
+          ...sharedContext,
+          runId: "exec_third",
+        },
+      });
+
+      expect(resetReadResult).toEqual({
+        data: {
+          content: [{
+            type: "text",
+            text: "0",
           }],
         },
         error: null,
