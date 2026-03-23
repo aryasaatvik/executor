@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import type {
   Source,
   StoredSourceCatalogRevisionRecord,
-  StoredSourceRecord,
 } from "#schema";
 import {
   SourceCatalogIdSchema,
@@ -292,25 +291,6 @@ const createLoadedCatalog = (options?: {
     updatedAt: 0,
   } satisfies Source;
 
-  const sourceRecord = {
-    id: source.id,
-    workspaceId: source.workspaceId,
-    catalogId: SourceCatalogIdSchema.make("catalog_linear"),
-    catalogRevisionId: SourceCatalogRevisionIdSchema.make("catalog_revision_linear"),
-    name: source.name,
-    kind: source.kind,
-    endpoint: source.endpoint,
-    status: source.status,
-    enabled: source.enabled,
-    namespace: source.namespace,
-    importAuthPolicy: source.importAuthPolicy,
-    bindingConfigJson: "{}",
-    sourceHash: source.sourceHash,
-    lastError: source.lastError,
-    createdAt: source.createdAt,
-    updatedAt: source.updatedAt,
-  } satisfies StoredSourceRecord;
-
   const revision = {
     id: SourceCatalogRevisionIdSchema.make("catalog_revision_linear"),
     catalogId: SourceCatalogIdSchema.make("catalog_linear"),
@@ -325,7 +305,6 @@ const createLoadedCatalog = (options?: {
 
   return {
     source,
-    sourceRecord,
     revision,
     snapshot,
     catalog,

@@ -86,11 +86,22 @@ export const createWorkspaceToolInvoker = (input: {
     executorTools,
     input.localToolRuntime.tools,
   ]);
-  const authoredCatalog = createToolCatalogFromTools({
-    tools: authoredTools,
+  const localUserCatalog = createToolCatalogFromTools({
+    tools: input.localToolRuntime.tools,
+  });
+  const executorCatalog = createToolCatalogFromTools({
+    tools: executorTools,
+  });
+  const systemHelperCatalog = createToolCatalogFromTools({
+    tools: systemTools,
   });
   catalog = mergeToolCatalogs({
-    catalogs: [authoredCatalog, input.sourceCatalog],
+    catalogs: [
+      { catalog: localUserCatalog, role: "local_user" },
+      { catalog: input.sourceCatalog, role: "persisted_source" },
+      { catalog: executorCatalog, role: "executor" },
+      { catalog: systemHelperCatalog, role: "system_helper" },
+    ],
   });
   const authoredToolPaths = new Set(Object.keys(authoredTools));
   const authoredInvoker = makeToolInvokerFromTools({

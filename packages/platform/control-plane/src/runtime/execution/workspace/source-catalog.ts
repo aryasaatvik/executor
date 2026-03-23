@@ -165,12 +165,12 @@ export const toSourceToIndex = (
 ): SourceToIndex => ({
   sourceId: source.id,
   workspaceId: source.workspaceId,
-  name: source.name,
-  kind: source.kind,
-  endpoint: source.endpoint,
+  catalogId: stableSourceCatalogId(source),
+  catalogRevisionId: stableSourceCatalogRevisionId(source),
   status: source.status,
   enabled: source.enabled,
-  namespace: source.namespace,
+  sourceHash: source.sourceHash,
+  lastError: source.lastError,
   createdAt: source.createdAt,
   updatedAt: source.updatedAt,
 });
@@ -235,30 +235,6 @@ export const loadWorkspaceCatalogToolByPath = (input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a StoredSourceRecord from a full Source object.
- * Used when constructing a LoadedSourceCatalogToolIndexEntry from DB data.
- */
-const sourceRecordFromSource = (src: Source): LoadedSourceCatalogToolIndexEntry["sourceRecord"] => ({
-  id: src.id,
-  workspaceId: src.workspaceId,
-  catalogId: stableSourceCatalogId(src),
-  catalogRevisionId: stableSourceCatalogRevisionId(src),
-  name: src.name,
-  kind: src.kind,
-  endpoint: src.endpoint,
-  status: src.status,
-  enabled: src.enabled,
-  namespace: src.namespace,
-  iconUrl: src.iconUrl,
-  importAuthPolicy: src.importAuthPolicy,
-  bindingConfigJson: JSON.stringify(src.binding),
-  sourceHash: src.sourceHash,
-  lastError: src.lastError,
-  createdAt: src.createdAt,
-  updatedAt: src.updatedAt,
-});
-
-/**
  * Load a tool by path from SQLite for invocation. Queries catalog_tool for
  * capability_json + executable_json and catalog_revision for snapshot_json,
  * then loads the full Source from the source store.
@@ -316,7 +292,6 @@ export const loadWorkspaceCatalogToolByPathFromDb = (input: {
       searchNamespace,
       searchText,
       source: src,
-      sourceRecord: sourceRecordFromSource(src),
       capabilityId: toolData.capability.id,
       executableId: toolData.executable.id,
       capability: toolData.capability,

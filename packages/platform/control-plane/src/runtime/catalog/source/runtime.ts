@@ -7,7 +7,6 @@ import type {
   Source,
   SourceId,
   SourceCatalogRevisionId,
-  StoredSourceRecord,
   StoredSourceCatalogRevisionRecord,
   WorkspaceId,
 } from "#schema";
@@ -63,7 +62,6 @@ type ProjectedToolDescriptor = ProjectedCatalog["toolDescriptors"][keyof Project
 
 export type LoadedSourceCatalog = {
   source: Source;
-  sourceRecord: StoredSourceRecord;
   revision: StoredSourceCatalogRevisionRecord;
   snapshot: CatalogSnapshotV1;
   catalog: CatalogV1;
@@ -77,7 +75,6 @@ export type LoadedSourceCatalogTool = {
   searchNamespace: string;
   searchText: string;
   source: Source;
-  sourceRecord: StoredSourceRecord;
   revision: StoredSourceCatalogRevisionRecord;
   capabilityId: keyof CatalogV1["capabilities"];
   executableId: keyof CatalogV1["executables"];
@@ -628,7 +625,6 @@ const loadedCatalogToolFromCapability = (input: {
     searchNamespace,
     searchText,
     source: input.catalogEntry.source,
-    sourceRecord: input.catalogEntry.sourceRecord,
     revision: input.catalogEntry.revision,
     capabilityId: input.capability.id,
     executableId: executable.id,
@@ -924,30 +920,8 @@ export const loadSourceWithCatalogFromDb = (input: {
           : revisionRow.importMetadataJson) as CatalogImportMetadata
       : { capabilities: {} } as unknown as CatalogImportMetadata;
 
-    // 11. Build the source record
-    const sourceRecord: StoredSourceRecord = {
-      id: source.id,
-      workspaceId: source.workspaceId,
-      catalogId: catalogId as StoredSourceRecord["catalogId"],
-      catalogRevisionId: revision.id,
-      name: source.name,
-      kind: source.kind,
-      endpoint: source.endpoint,
-      status: source.status,
-      enabled: source.enabled,
-      namespace: source.namespace,
-      iconUrl: source.iconUrl,
-      importAuthPolicy: source.importAuthPolicy,
-      bindingConfigJson: JSON.stringify(source.binding),
-      sourceHash: source.sourceHash,
-      lastError: source.lastError,
-      createdAt: source.createdAt,
-      updatedAt: source.updatedAt,
-    };
-
     return {
       source,
-      sourceRecord,
       revision,
       snapshot: {
         version: "ir.v1.snapshot",
@@ -1218,7 +1192,6 @@ export const loadWorkspaceSourceCatalogToolIndex = (input: {
       searchNamespace: tool.searchNamespace,
       searchText: tool.searchText,
       source: tool.source,
-      sourceRecord: tool.sourceRecord,
       capabilityId: tool.capabilityId,
       executableId: tool.executableId,
       capability: tool.capability,
@@ -1254,7 +1227,6 @@ export const loadWorkspaceSourceCatalogToolByPath = (input: {
           searchNamespace: tool.searchNamespace,
           searchText: tool.searchText,
           source: tool.source,
-          sourceRecord: tool.sourceRecord,
           capabilityId: tool.capabilityId,
           executableId: tool.executableId,
           capability: tool.capability,

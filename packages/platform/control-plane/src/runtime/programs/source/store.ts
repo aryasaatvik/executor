@@ -261,12 +261,9 @@ export const persistSourceProgram = (
     yield* upsertSourceStatus({
         sourceId: nextSource.id,
         workspaceId: nextSource.workspaceId,
-        name: nextSource.name,
-        kind: nextSource.kind,
-        endpoint: nextSource.endpoint,
+        catalogId: stableSourceCatalogId(nextSource),
         status: nextSource.status,
         enabled: nextSource.enabled,
-        namespace: nextSource.namespace,
         lastError: nextSource.lastError,
         sourceHash: nextSource.sourceHash,
         createdAt: existingDbStatus?.createdAt ?? nextSource.createdAt,
