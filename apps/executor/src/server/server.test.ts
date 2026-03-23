@@ -1780,7 +1780,7 @@ describe("local-executor-server", () => {
           approvalMode: "auto",
         },
       });
-      expect(policy.key).toBe("dns.records.createRecord");
+      expect(policy.slug).toBe("dns.records.createRecord");
 
       const automatic = yield* client.executions.create({
         path: {

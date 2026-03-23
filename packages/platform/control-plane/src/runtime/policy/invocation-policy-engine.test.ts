@@ -32,7 +32,7 @@ const basePolicy = (
   patch: Partial<LocalWorkspacePolicy> = {},
 ): LocalWorkspacePolicy => ({
   id: PolicyIdSchema.make(`pol_${Math.random().toString(36).slice(2, 8)}`),
-  key: "vercel-dns",
+  slug: "vercel-dns",
   workspaceId,
   resourcePattern: "vercel.api.dns.createRecord",
   effect: "allow",
@@ -100,14 +100,14 @@ describe("invocation-policy-engine", () => {
       policies: [
         basePolicy({
           id: PolicyIdSchema.make("pol_allow_all_vercel"),
-          key: "allow-all-vercel",
+          slug: "allow-all-vercel",
           resourcePattern: "vercel.api.*",
           effect: "allow",
           priority: 0,
         }),
         basePolicy({
           id: PolicyIdSchema.make("pol_deny_create_record"),
-          key: "deny-create-record",
+          slug: "deny-create-record",
           effect: "deny",
           priority: 1,
         }),
