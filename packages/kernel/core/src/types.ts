@@ -187,6 +187,12 @@ export type ToolCatalogEntry = {
   score?: (queryTokens: readonly string[]) => number;
 };
 
+export type ToolCatalogRole =
+  | "persisted_source"
+  | "local_user"
+  | "executor"
+  | "system_helper";
+
 export interface ToolCatalog {
   listNamespaces(input: {
     limit: number;

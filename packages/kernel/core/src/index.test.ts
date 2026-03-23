@@ -610,6 +610,76 @@ describe("codemode-core", () => {
     }),
   );
 
+  it.effect("boosts helper tools for introspection-oriented queries", () =>
+    Effect.gen(function* () {
+      const sourceCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "github.issue_write"
+              ? {
+                  path: asToolPath("github.issue_write"),
+                  sourceKey: "github",
+                  description: "Create or update a GitHub issue",
+                  interaction: "auto",
+                }
+              : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("github.issue_write"), score: 1.0 },
+          ]),
+      };
+
+      const helperCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "discover"
+              ? {
+                  path: asToolPath("discover"),
+                  sourceKey: "system",
+                  description: "Discover tools by query",
+                  interaction: "auto",
+                }
+              : path === "describe.tool"
+                ? {
+                    path: asToolPath("describe.tool"),
+                    sourceKey: "system",
+                    description: "Describe a tool by path",
+                    interaction: "auto",
+                  }
+                : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("discover"), score: 1.0 },
+            { path: asToolPath("describe.tool"), score: 0.9 },
+          ]),
+      };
+
+      const catalog = mergeToolCatalogs({
+        catalogs: [
+          { catalog: sourceCatalog, role: "persisted_source" },
+          { catalog: helperCatalog, role: "system_helper" },
+        ],
+      });
+
+      const results = yield* catalog.searchTools({
+        query: "find a tool for github issues",
+        limit: 5,
+      });
+
+      expect(results.map((result) => result.path)).toEqual([
+        "discover",
+        "describe.tool",
+        "github.issue_write",
+      ]);
+    }),
+  );
+
   it.effect("executes code against tool map via executor contract", () =>
     Effect.gen(function* () {
       const tools = {

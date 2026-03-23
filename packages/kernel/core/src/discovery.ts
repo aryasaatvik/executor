@@ -9,6 +9,7 @@ import type {
   SearchHit,
   ToolCatalog,
   ToolCatalogEntry,
+  ToolCatalogRole,
   ToolDescriptor,
   ToolMap,
   ToolNamespace,
@@ -155,19 +156,119 @@ const dedupeToolDescriptors = (
   );
 };
 
+type SearchHitsWithMode = readonly SearchHit[] & {
+  searchMode?: "fts" | "semantic" | "hybrid";
+};
+
+type QueryIntent = "task" | "introspection";
+
+type MergedCatalogEntry = {
+  catalog: ToolCatalog;
+  role: ToolCatalogRole;
+};
+
+const withSearchMode = (
+  hits: readonly SearchHit[],
+  searchMode: "fts" | "semantic" | "hybrid",
+): readonly SearchHit[] =>
+  Object.assign([...hits], { searchMode }) as readonly SearchHit[];
+
+const classifyQueryIntent = (query: string): QueryIntent => {
+  const normalized = query.trim().toLowerCase();
+
+  const introspectionPatterns = [
+    /\bavailable tools?\b/,
+    /\bwhat tools?\b/,
+    /\bfind (?:a )?tool\b/,
+    /\bdescribe\b/,
+    /\bshow schema\b/,
+    /\blist namespaces?\b/,
+    /\blist tools?\b/,
+    /\bcatalog\b/,
+    /\btool search\b/,
+  ];
+
+  return introspectionPatterns.some((pattern) => pattern.test(normalized))
+    ? "introspection"
+    : "task";
+};
+
+const roleWeightForIntent = (
+  role: ToolCatalogRole,
+  intent: QueryIntent,
+): number => {
+  if (intent === "introspection") {
+    switch (role) {
+      case "system_helper":
+        return 1.6;
+      case "local_user":
+        return 0.9;
+      case "persisted_source":
+        return 0.9;
+      case "executor":
+        return 0.85;
+    }
+  }
+
+  switch (role) {
+    case "local_user":
+      return 1.15;
+    case "persisted_source":
+      return 1.0;
+    case "executor":
+      return 0.9;
+    case "system_helper":
+      return 0.55;
+  }
+};
+
+const mergeSearchModes = (
+  groups: ReadonlyArray<SearchHitsWithMode>,
+): "fts" | "semantic" | "hybrid" => {
+  const modes = new Set(
+    groups
+      .map((group) => group.searchMode)
+      .filter((mode): mode is "fts" | "semantic" | "hybrid" => mode !== undefined),
+  );
+
+  if (modes.has("hybrid")) {
+    return "hybrid";
+  }
+
+  if (modes.has("semantic") && modes.has("fts")) {
+    return "hybrid";
+  }
+
+  if (modes.has("semantic")) {
+    return "semantic";
+  }
+
+  return "fts";
+};
+
 const fuseSearchHits = (
-  groups: ReadonlyArray<readonly SearchHit[]>,
+  groups: ReadonlyArray<{
+    hits: SearchHitsWithMode;
+    role: ToolCatalogRole;
+  }>,
+  query: string,
   limit: number,
-): SearchHit[] => {
+): readonly SearchHit[] => {
   const k = 60;
+  const intent = classifyQueryIntent(query);
   const scores = new Map<string, number>();
   const firstSeen = new Map<string, number>();
   let nextOrder = 0;
 
   for (const group of groups) {
-    for (let rank = 0; rank < group.length; rank += 1) {
-      const hit = group[rank]!;
-      scores.set(hit.path, (scores.get(hit.path) ?? 0) + (1 / (k + rank + 1)));
+    const roleWeight = roleWeightForIntent(group.role, intent);
+
+    for (let rank = 0; rank < group.hits.length; rank += 1) {
+      const hit = group.hits[rank]!;
+      scores.set(
+        hit.path,
+        (scores.get(hit.path) ?? 0) + (roleWeight / (k + rank + 1)),
+      );
       if (!firstSeen.has(hit.path)) {
         firstSeen.set(hit.path, nextOrder);
       }
@@ -175,7 +276,7 @@ const fuseSearchHits = (
     }
   }
 
-  return [...scores.entries()]
+  const fusedHits = [...scores.entries()]
     .sort((left, right) =>
       right[1] - left[1]
       || (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
@@ -187,6 +288,8 @@ const fuseSearchHits = (
       path: path as ToolPath,
       score,
     }));
+
+  return withSearchMode(fusedHits, mergeSearchModes(groups.map((group) => group.hits)));
 };
 
 export function createToolCatalogFromTools(input: {
@@ -279,16 +382,23 @@ export function createToolCatalogFromEntries(input: {
 }
 
 export function mergeToolCatalogs(input: {
-  catalogs: ReadonlyArray<ToolCatalog>;
+  catalogs: ReadonlyArray<ToolCatalog | MergedCatalogEntry>;
 }): ToolCatalog {
-  const catalogs = [...input.catalogs];
+  const catalogs = input.catalogs.map((catalog): MergedCatalogEntry =>
+    "catalog" in catalog
+      ? catalog
+      : {
+          catalog,
+          role: "persisted_source",
+        },
+  );
 
   return {
     listNamespaces: ({ limit }) =>
       Effect.gen(function* () {
         const groups = yield* Effect.forEach(
           catalogs,
-          (catalog) => catalog.listNamespaces({ limit: Math.max(limit, limit * catalogs.length) }),
+          ({ catalog }) => catalog.listNamespaces({ limit: Math.max(limit, limit * catalogs.length) }),
           { concurrency: "unbounded" },
         );
 
@@ -299,7 +409,7 @@ export function mergeToolCatalogs(input: {
       Effect.gen(function* () {
         const groups = yield* Effect.forEach(
           catalogs,
-          (catalog) =>
+          ({ catalog }) =>
             catalog.listTools({
               ...(namespace !== undefined ? { namespace } : {}),
               ...(query !== undefined ? { query } : {}),
@@ -314,7 +424,7 @@ export function mergeToolCatalogs(input: {
 
     getToolByPath: ({ path, includeSchemas }) =>
       Effect.gen(function* () {
-        for (const catalog of catalogs) {
+        for (const { catalog } of catalogs) {
           const descriptor = yield* catalog.getToolByPath({ path, includeSchemas });
           if (descriptor) {
             return descriptor;
@@ -328,17 +438,22 @@ export function mergeToolCatalogs(input: {
       Effect.gen(function* () {
         const groups = yield* Effect.forEach(
           catalogs,
-          (catalog) =>
+          ({ catalog, role }) =>
             catalog.searchTools({
               query,
               ...(namespace !== undefined ? { namespace } : {}),
               ...(sourceKey !== undefined ? { sourceKey } : {}),
               limit: Math.max(limit, limit * catalogs.length),
-            }),
+            }).pipe(
+              Effect.map((hits) => ({
+                hits: hits as SearchHitsWithMode,
+                role,
+              })),
+            ),
           { concurrency: "unbounded" },
         );
 
-        return fuseSearchHits(groups, limit);
+        return fuseSearchHits(groups, query, limit);
       }),
   } satisfies ToolCatalog;
 }
