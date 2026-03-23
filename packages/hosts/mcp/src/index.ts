@@ -6,10 +6,11 @@ import {
   EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
   ExecutionSessionIdSchema,
-  RuntimeExecutionResolverService,
+  ExecutionEnvironmentResolver,
   closeExecutionSession,
   createExecution,
   getExecution,
+  provideControlPlaneRuntime,
   resumeExecution,
 } from "@executor/control-plane";
 import * as Effect from "effect/Effect";
@@ -101,7 +102,7 @@ const runControlPlane = async <A, E, R>(
   effect: Effect.Effect<A, E, R>,
 ): Promise<A> => {
   const exit = await Effect.runPromiseExit(
-    effect.pipe(Effect.provide(runtime.runtimeLayer)) as Effect.Effect<A, E, never>,
+    provideControlPlaneRuntime(effect, runtime) as Effect.Effect<A, E, never>,
   );
 
   if (Exit.isSuccess(exit)) {
@@ -162,7 +163,7 @@ const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> =
   return runControlPlane(
     runtime,
     Effect.gen(function* () {
-      const resolveExecutionEnvironment = yield* RuntimeExecutionResolverService;
+      const resolveExecutionEnvironment = yield* ExecutionEnvironmentResolver;
       const environment = yield* resolveExecutionEnvironment({
         workspaceId: runtime.localInstallation.workspaceId,
         accountId: runtime.localInstallation.accountId,
@@ -514,7 +515,7 @@ const createExecutorMcpServer = async (config: {
       const result = await runControlPlane(
         config.runtime,
         Effect.gen(function* () {
-          const resolveExecutionEnvironment = yield* RuntimeExecutionResolverService;
+          const resolveExecutionEnvironment = yield* ExecutionEnvironmentResolver;
           const environment = yield* resolveExecutionEnvironment({
             workspaceId: workspaceId as never,
             accountId: accountId as never,

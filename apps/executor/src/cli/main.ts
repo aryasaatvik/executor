@@ -12,7 +12,7 @@ import {
 import {
   EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
-  RuntimeExecutionResolverService,
+  ExecutionEnvironmentResolver,
   createControlPlaneClient,
   createControlPlaneRuntime,
   type ControlPlaneClient,
@@ -56,6 +56,10 @@ import {
   type LocalServerReachabilityTimeoutError,
   localServerReachabilityTimeoutError,
 } from "../effect-errors";
+import {
+  deriveLocalInstallation,
+  resolveLocalWorkspaceContext,
+} from "@executor/control-plane";
 
 const toError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -276,7 +280,7 @@ const loadRunWorkflowText = (): Effect.Effect<string, Error, never> =>
     (runtime) =>
       Effect.gen(function* () {
         const environment = yield* Effect.gen(function* () {
-          const resolveExecutionEnvironment = yield* RuntimeExecutionResolverService;
+          const resolveExecutionEnvironment = yield* ExecutionEnvironmentResolver;
           return yield* resolveExecutionEnvironment({
             workspaceId: runtime.localInstallation.workspaceId,
             accountId: runtime.localInstallation.accountId,
@@ -406,6 +410,18 @@ const isServerReachable = (baseUrl: string) =>
     Effect.flatMap((client) => client.local.installation({})),
     Effect.as(true),
     Effect.catchAll(() => Effect.succeed(false)),
+  );
+
+const getCurrentWorkspaceInstallation = () =>
+  resolveLocalWorkspaceContext().pipe(
+    Effect.map((context) => deriveLocalInstallation(context)),
+    Effect.mapError(toError),
+  );
+
+const getReachableServerInstallation = (baseUrl: string) =>
+  getBootstrapClient(baseUrl).pipe(
+    Effect.flatMap((client) => client.local.installation({})),
+    Effect.catchAll(() => Effect.succeed(null)),
   );
 
 const getDefaultServerOptions = (port: number = DEFAULT_SERVER_PORT) => {
@@ -694,7 +710,24 @@ const ensureServer = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
   Effect.gen(function* () {
     const reachable = yield* isServerReachable(baseUrl);
     if (reachable) {
-      return;
+      const [expectedInstallation, activeInstallation] = yield* Effect.all([
+        getCurrentWorkspaceInstallation(),
+        getReachableServerInstallation(baseUrl),
+      ]);
+
+      if (activeInstallation?.workspaceId === expectedInstallation.workspaceId) {
+        return;
+      }
+
+      const stopped = yield* stopServer(baseUrl);
+      if (!stopped) {
+        return yield* executorAppEffectError(
+          "cli/main",
+          activeInstallation === null
+            ? `Executor server at ${baseUrl} is reachable but did not report a local installation, and it could not be stopped automatically.`
+            : `Executor server at ${baseUrl} is serving workspace ${activeInstallation.workspaceId}, but the current cwd expects ${expectedInstallation.workspaceId}. The daemon could not be stopped automatically.`,
+        );
+      }
     }
 
     const url = new URL(baseUrl);
