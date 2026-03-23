@@ -4,6 +4,36 @@ import * as Effect from "effect/Effect"
 import * as FileSystem from "@effect/platform/FileSystem"
 import { NodeFileSystem } from "@effect/platform-node"
 
+import { LocalFileSystemError, unknownLocalErrorDetails } from "../runtime/local/errors"
+import type {
+  AccountId,
+  AuthArtifactId,
+  AuthArtifactKind,
+  AuthArtifactSlot,
+  AuthLeaseId,
+  CredentialSlot,
+  ExecutionId,
+  ExecutionInteractionId,
+  ExecutionInteractionStatus,
+  ExecutionSessionId,
+  ExecutionStatus,
+  ExecutionStepId,
+  ExecutionStepKind,
+  ExecutionStepStatus,
+  OAuth2ClientAuthenticationMethod,
+  ProviderAuthGrantId,
+  SecretMaterialId,
+  SecretMaterialPurpose,
+  SourceAuthSessionId,
+  SourceAuthSessionProviderKind,
+  SourceAuthSessionStatus,
+  SourceId,
+  SourceStatus,
+  WorkspaceId,
+  WorkspaceOauthClientId,
+  WorkspaceSourceOauthClientId,
+} from "#schema";
+
 import {
   auth_artifact,
   auth_lease,
@@ -16,7 +46,6 @@ import {
   execution_interaction,
   execution_step,
   source,
-  policy,
 } from "./schema"
 
 // ---------------------------------------------------------------------------
@@ -34,24 +63,24 @@ import {
 interface JsonControlPlaneState {
   version: number
   authArtifacts: Array<{
-    id: string
-    workspaceId: string
-    sourceId: string
-    actorAccountId: string | null
-    slot: string
-    artifactKind: string
+    id: AuthArtifactId
+    workspaceId: WorkspaceId
+    sourceId: SourceId
+    actorAccountId: AccountId | null
+    slot: AuthArtifactSlot
+    artifactKind: AuthArtifactKind
     configJson: string
     grantSetJson: string | null
     createdAt: number
     updatedAt: number
   }>
   authLeases: Array<{
-    id: string
-    authArtifactId: string
-    workspaceId: string
-    sourceId: string
-    actorAccountId: string | null
-    slot: string
+    id: AuthLeaseId
+    authArtifactId: AuthArtifactId
+    workspaceId: WorkspaceId
+    sourceId: SourceId
+    actorAccountId: AccountId | null
+    slot: AuthArtifactSlot
     placementsTemplateJson: string
     expiresAt: number | null
     refreshAfter: number | null
@@ -59,9 +88,9 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   sourceOauthClients: Array<{
-    id: string
-    workspaceId: string
-    sourceId: string
+    id: WorkspaceSourceOauthClientId
+    workspaceId: WorkspaceId
+    sourceId: SourceId
     providerKey: string
     clientId: string
     clientSecretProviderId: string | null
@@ -71,8 +100,8 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   workspaceOauthClients: Array<{
-    id: string
-    workspaceId: string
+    id: WorkspaceOauthClientId
+    workspaceId: WorkspaceId
     providerKey: string
     label: string | null
     clientId: string
@@ -83,13 +112,13 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   providerAuthGrants: Array<{
-    id: string
-    workspaceId: string
-    actorAccountId: string | null
+    id: ProviderAuthGrantId
+    workspaceId: WorkspaceId
+    actorAccountId: AccountId | null
     providerKey: string
-    oauthClientId: string
+    oauthClientId: WorkspaceOauthClientId
     tokenEndpoint: string
-    clientAuthentication: string
+    clientAuthentication: OAuth2ClientAuthenticationMethod
     headerName: string
     prefix: string
     refreshToken: { providerId: string; handle: string }
@@ -100,15 +129,15 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   sourceAuthSessions: Array<{
-    id: string
-    workspaceId: string
-    sourceId: string
-    actorAccountId: string | null
-    credentialSlot: string
-    executionId: string | null
-    interactionId: string | null
-    providerKind: string
-    status: string
+    id: SourceAuthSessionId
+    workspaceId: WorkspaceId
+    sourceId: SourceId
+    actorAccountId: AccountId | null
+    credentialSlot: CredentialSlot
+    executionId: ExecutionId | null
+    interactionId: ExecutionInteractionId | null
+    providerKind: SourceAuthSessionProviderKind
+    status: SourceAuthSessionStatus
     state: string
     sessionDataJson: string
     errorText: string | null
@@ -117,9 +146,9 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   secretMaterials: Array<{
-    id: string
+    id: SecretMaterialId
     name: string | null
-    purpose: string
+    purpose: SecretMaterialPurpose
     providerId: string
     handle: string
     value: string | null
@@ -127,10 +156,11 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   executions: Array<{
-    id: string
-    workspaceId: string
-    createdByAccountId: string
-    status: string
+    id: ExecutionId
+    workspaceId: WorkspaceId
+    createdByAccountId: AccountId
+    executionSessionId?: ExecutionSessionId | null
+    status: ExecutionStatus
     code: string
     resultJson: string | null
     errorText: string | null
@@ -141,9 +171,9 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   executionInteractions: Array<{
-    id: string
-    executionId: string
-    status: string
+    id: ExecutionInteractionId
+    executionId: ExecutionId
+    status: ExecutionInteractionStatus
     kind: string
     purpose: string
     payloadJson: string
@@ -153,16 +183,16 @@ interface JsonControlPlaneState {
     updatedAt: number
   }>
   executionSteps: Array<{
-    id: string
-    executionId: string
+    id: ExecutionStepId
+    executionId: ExecutionId
     sequence: number
-    kind: string
-    status: string
+    kind: ExecutionStepKind
+    status: ExecutionStepStatus
     path: string
     argsJson: string
     resultJson: string | null
     errorText: string | null
-    interactionId: string | null
+    interactionId: ExecutionInteractionId | null
     createdAt: number
     updatedAt: number
   }>
@@ -175,7 +205,7 @@ interface JsonControlPlaneState {
 interface JsonWorkspaceState {
   version: number
   sources: Record<string, {
-    status: string
+    status: SourceStatus
     lastError: string | null
     sourceHash: string | null
     createdAt: number
@@ -205,33 +235,45 @@ const tryParseJson = (value: string | null | undefined): unknown => {
 }
 
 /**
- * Read a file as a string using NodeFileSystem. Returns null if the file
- * does not exist or cannot be read.
+ * Read a file as a string using NodeFileSystem, returning null only when the
+ * file does not exist.
  */
-const readFileOrNull = (path: string): Effect.Effect<string | null, never, never> =>
+const readFileIfExists = (
+  path: string,
+  action: {
+    check: string
+    read: string
+  },
+): Effect.Effect<string | null, LocalFileSystemError, never> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    return yield* fs.readFileString(path, "utf8")
-  }).pipe(
-    Effect.provide(NodeFileSystem.layer),
-    Effect.catchAll(() => Effect.succeed(null)),
-  )
+    const exists = yield* fs.exists(path).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to ${action.check} ${path}: ${unknownLocalErrorDetails(cause)}`,
+            action: action.check,
+            path,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+    if (!exists) {
+      return null
+    }
 
-// ---------------------------------------------------------------------------
-// Migration marker check
-// ---------------------------------------------------------------------------
-
-/**
- * Check if JSON migration has already been completed.
- * Uses a simple marker row in the `_migration_meta` table.
- */
-const isMigrationComplete = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient
-  const rows = yield* sql`SELECT value FROM _migration_meta WHERE key = 'json_migrated'`.pipe(
-    Effect.catchAll(() => Effect.succeed([]))
-  )
-  return rows.length > 0
-})
+    return yield* fs.readFileString(path, "utf8").pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to ${action.read} ${path}: ${unknownLocalErrorDetails(cause)}`,
+            action: action.read,
+            path,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+  }).pipe(Effect.provide(NodeFileSystem.layer))
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -245,8 +287,8 @@ const isMigrationComplete = Effect.gen(function* () {
  * then marks the migration complete. Idempotent: if the marker row already
  * exists the function returns immediately.
  *
- * File-read errors are tolerated — a fresh install will have no JSON files
- * and the migration simply records itself as done.
+ * Missing JSON files are treated as absent input for fresh installs.
+ * Unexpected read/parse/write failures are surfaced immediately.
  *
  * @param input.controlPlaneStatePath — absolute path to control-plane-state.json
  * @param input.workspaceStatePath — absolute path to workspace-state.json
@@ -256,41 +298,48 @@ export const migrateJsonToSqlite = (input: {
   workspaceStatePath: string
 }) =>
   Effect.gen(function* () {
-    const alreadyDone = yield* isMigrationComplete
-    if (alreadyDone) return
-
     const db = yield* SqliteDrizzle
     const sql = yield* SqlClient.SqlClient
 
+    yield* sql`CREATE TABLE IF NOT EXISTS _migration_meta (key TEXT PRIMARY KEY, value TEXT)`
+
+    const alreadyDone = yield* sql`SELECT value FROM _migration_meta WHERE key = 'json_migrated'`
+    if (alreadyDone.length > 0) return
+
     yield* sql.withTransaction(
       Effect.gen(function* () {
-        // Ensure marker table exists
-        yield* sql`CREATE TABLE IF NOT EXISTS _migration_meta (key TEXT PRIMARY KEY, value TEXT)`
-
         // -----------------------------------------------------------------
         // Read control-plane-state.json
         // -----------------------------------------------------------------
-        const cpStateRaw = yield* readFileOrNull(input.controlPlaneStatePath)
+        const cpStateRaw = yield* readFileIfExists(
+          input.controlPlaneStatePath,
+          {
+            check: "check control plane state path",
+            read: "read control plane state",
+          },
+        )
 
         if (cpStateRaw !== null) {
           const cpState: JsonControlPlaneState = JSON.parse(cpStateRaw)
 
           // --- auth_artifact ---
           for (const item of cpState.authArtifacts ?? []) {
+            const row = {
+              id: item.id,
+              workspaceId: item.workspaceId,
+              sourceId: item.sourceId,
+              actorAccountId: item.actorAccountId ?? null,
+              slot: item.slot,
+              artifactKind: item.artifactKind,
+              configJson: tryParseJson(item.configJson),
+              grantSetJson: tryParseJson(item.grantSetJson),
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+            } satisfies typeof auth_artifact.$inferInsert
+
             yield* db
               .insert(auth_artifact)
-              .values({
-                id: item.id,
-                workspace_id: item.workspaceId,
-                source_id: item.sourceId,
-                actor_account_id: item.actorAccountId ?? null,
-                slot: item.slot,
-                artifact_kind: item.artifactKind,
-                config_json: tryParseJson(item.configJson),
-                grant_set_json: tryParseJson(item.grantSetJson),
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
-              })
+              .values(row)
               .onConflictDoNothing()
           }
 
@@ -300,16 +349,16 @@ export const migrateJsonToSqlite = (input: {
               .insert(auth_lease)
               .values({
                 id: item.id,
-                auth_artifact_id: item.authArtifactId,
-                workspace_id: item.workspaceId,
-                source_id: item.sourceId,
-                actor_account_id: item.actorAccountId ?? null,
+                authArtifactId: item.authArtifactId,
+                workspaceId: item.workspaceId,
+                sourceId: item.sourceId,
+                actorAccountId: item.actorAccountId ?? null,
                 slot: item.slot,
-                placements_template_json: tryParseJson(item.placementsTemplateJson),
-                expires_at: item.expiresAt ?? null,
-                refresh_after: item.refreshAfter ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                placementsTemplateJson: tryParseJson(item.placementsTemplateJson),
+                expiresAt: item.expiresAt ?? null,
+                refreshAfter: item.refreshAfter ?? null,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -320,15 +369,15 @@ export const migrateJsonToSqlite = (input: {
               .insert(source_oauth_client)
               .values({
                 id: item.id,
-                workspace_id: item.workspaceId,
-                source_id: item.sourceId,
-                provider_key: item.providerKey,
-                client_id: item.clientId,
-                client_secret_provider_id: item.clientSecretProviderId ?? null,
-                client_secret_handle: item.clientSecretHandle ?? null,
-                client_metadata_json: tryParseJson(item.clientMetadataJson),
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                workspaceId: item.workspaceId,
+                sourceId: item.sourceId,
+                providerKey: item.providerKey,
+                clientId: item.clientId,
+                clientSecretProviderId: item.clientSecretProviderId ?? null,
+                clientSecretHandle: item.clientSecretHandle ?? null,
+                clientMetadataJson: tryParseJson(item.clientMetadataJson),
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -340,42 +389,42 @@ export const migrateJsonToSqlite = (input: {
               .insert(workspace_oauth_client)
               .values({
                 id: item.id,
-                workspace_id: item.workspaceId,
-                provider_key: item.providerKey,
+                workspaceId: item.workspaceId,
+                providerKey: item.providerKey,
                 label: item.label ?? null,
-                client_id: item.clientId,
-                client_secret_provider_id: item.clientSecretProviderId ?? null,
-                client_secret_handle: item.clientSecretHandle ?? null,
-                client_metadata_json: tryParseJson(item.clientMetadataJson),
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                clientId: item.clientId,
+                clientSecretProviderId: item.clientSecretProviderId ?? null,
+                clientSecretHandle: item.clientSecretHandle ?? null,
+                clientMetadataJson: tryParseJson(item.clientMetadataJson),
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
 
           // --- provider_auth_grant ---
           for (const item of cpState.providerAuthGrants ?? []) {
+            const row = {
+              id: item.id,
+              workspaceId: item.workspaceId,
+              actorAccountId: item.actorAccountId ?? null,
+              providerKey: item.providerKey,
+              oauthClientId: item.oauthClientId,
+              tokenEndpoint: item.tokenEndpoint,
+              clientAuthentication: item.clientAuthentication,
+              headerName: item.headerName,
+              prefix: item.prefix,
+              refreshTokenRef: item.refreshToken,
+              grantedScopes: item.grantedScopes,
+              lastRefreshedAt: item.lastRefreshedAt ?? null,
+              orphanedAt: item.orphanedAt ?? null,
+              createdAt: item.createdAt,
+              updatedAt: item.updatedAt,
+            } satisfies typeof provider_auth_grant.$inferInsert
+
             yield* db
               .insert(provider_auth_grant)
-              .values({
-                id: item.id,
-                workspace_id: item.workspaceId,
-                actor_account_id: item.actorAccountId ?? null,
-                provider_key: item.providerKey,
-                oauth_client_id: item.oauthClientId,
-                token_endpoint: item.tokenEndpoint,
-                client_authentication: item.clientAuthentication,
-                header_name: item.headerName,
-                prefix: item.prefix,
-                // refreshToken is an object { providerId, handle } in JSON.
-                // The DB column is `{ mode: "json" }`, so pass the object directly.
-                refresh_token_ref: item.refreshToken,
-                granted_scopes: item.grantedScopes,
-                last_refreshed_at: item.lastRefreshedAt ?? null,
-                orphaned_at: item.orphanedAt ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
-              })
+              .values(row)
               .onConflictDoNothing()
           }
 
@@ -385,20 +434,20 @@ export const migrateJsonToSqlite = (input: {
               .insert(source_auth_session)
               .values({
                 id: item.id,
-                workspace_id: item.workspaceId,
-                source_id: item.sourceId,
-                actor_account_id: item.actorAccountId ?? null,
-                credential_slot: item.credentialSlot,
-                execution_id: item.executionId ?? null,
-                interaction_id: item.interactionId ?? null,
-                provider_kind: item.providerKind,
+                workspaceId: item.workspaceId,
+                sourceId: item.sourceId,
+                actorAccountId: item.actorAccountId ?? null,
+                credentialSlot: item.credentialSlot,
+                executionId: item.executionId ?? null,
+                interactionId: item.interactionId ?? null,
+                providerKind: item.providerKind,
                 status: item.status,
                 state: item.state,
-                session_data_json: tryParseJson(item.sessionDataJson),
-                error_text: item.errorText ?? null,
-                completed_at: item.completedAt ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                sessionDataJson: tryParseJson(item.sessionDataJson),
+                errorText: item.errorText ?? null,
+                completedAt: item.completedAt ?? null,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -411,11 +460,11 @@ export const migrateJsonToSqlite = (input: {
                 id: item.id,
                 name: item.name ?? null,
                 purpose: item.purpose,
-                provider_id: item.providerId,
+                providerId: item.providerId,
                 handle: item.handle,
                 value: item.value ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -428,17 +477,18 @@ export const migrateJsonToSqlite = (input: {
               .insert(execution)
               .values({
                 id: item.id,
-                workspace_id: item.workspaceId,
-                created_by_account_id: item.createdByAccountId,
+                workspaceId: item.workspaceId,
+                createdByAccountId: item.createdByAccountId,
+                executionSessionId: item.executionSessionId ?? null,
                 status: item.status,
                 code: item.code,
-                result_json: tryParseJson(item.resultJson),
-                error_text: item.errorText ?? null,
-                logs_json: tryParseJson(item.logsJson),
-                started_at: item.startedAt ?? null,
-                completed_at: item.completedAt ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                resultJson: tryParseJson(item.resultJson),
+                errorText: item.errorText ?? null,
+                logsJson: tryParseJson(item.logsJson),
+                startedAt: item.startedAt ?? null,
+                completedAt: item.completedAt ?? null,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -449,15 +499,15 @@ export const migrateJsonToSqlite = (input: {
               .insert(execution_interaction)
               .values({
                 id: item.id,
-                execution_id: item.executionId,
+                executionId: item.executionId,
                 status: item.status,
                 kind: item.kind,
                 purpose: item.purpose,
-                payload_json: tryParseJson(item.payloadJson),
-                response_json: tryParseJson(item.responseJson),
-                response_private_json: tryParseJson(item.responsePrivateJson),
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                payloadJson: tryParseJson(item.payloadJson),
+                responseJson: tryParseJson(item.responseJson),
+                responsePrivateJson: tryParseJson(item.responsePrivateJson),
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -468,17 +518,17 @@ export const migrateJsonToSqlite = (input: {
               .insert(execution_step)
               .values({
                 id: item.id,
-                execution_id: item.executionId,
+                executionId: item.executionId,
                 sequence: item.sequence,
                 kind: item.kind,
                 status: item.status,
                 path: item.path,
-                args_json: tryParseJson(item.argsJson),
-                result_json: tryParseJson(item.resultJson),
-                error_text: item.errorText ?? null,
-                interaction_id: item.interactionId ?? null,
-                time_created: item.createdAt,
-                time_updated: item.updatedAt,
+                argsJson: tryParseJson(item.argsJson),
+                resultJson: tryParseJson(item.resultJson),
+                errorText: item.errorText ?? null,
+                interactionId: item.interactionId ?? null,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
               })
               .onConflictDoNothing()
           }
@@ -487,10 +537,24 @@ export const migrateJsonToSqlite = (input: {
         // -----------------------------------------------------------------
         // Read workspace-state.json — source status and policies
         // -----------------------------------------------------------------
-        const wsStateRaw = yield* readFileOrNull(input.workspaceStatePath)
+        const wsStateRaw = yield* readFileIfExists(
+          input.workspaceStatePath,
+          {
+            check: "check workspace state path",
+            read: "read workspace state",
+          },
+        )
 
         if (wsStateRaw !== null) {
           const wsState: JsonWorkspaceState = JSON.parse(wsStateRaw)
+
+          if (Object.keys(wsState.policies ?? {}).length > 0) {
+            return yield* Effect.fail(
+              new Error(
+                "workspace-state.json policies cannot be migrated into SQLite without losing data",
+              ),
+            )
+          }
 
           // Source status updates.
           // The `source` table row may already exist (created by the indexer).
@@ -503,18 +567,11 @@ export const migrateJsonToSqlite = (input: {
                 SET status      = ${info.status},
                     last_error  = ${info.lastError},
                     source_hash = ${info.sourceHash},
-                    time_updated = ${info.updatedAt}
+                    updated_at = ${info.updatedAt}
                 WHERE id = ${sourceId}
-              `.pipe(Effect.catchAll(() => Effect.void))
+              `
             }
           }
-
-          // Policy records from workspace state.
-          // The workspace-state only stores { id, createdAt, updatedAt } keyed
-          // by a string key. We cannot reconstruct the full policy row (missing
-          // resource_pattern, effect, approval_mode, etc.), so we skip policy
-          // migration here — the full policy data would need to come from
-          // another source. Log a note for debugging.
         }
 
         // -----------------------------------------------------------------
