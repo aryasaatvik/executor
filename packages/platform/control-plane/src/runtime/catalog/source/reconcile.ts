@@ -60,7 +60,13 @@ export const reconcileMissingSourceCatalogArtifacts = (input: {
       yield* sourceCatalogSync.sync({
         source,
         actorAccountId: input.actorAccountId,
-      });
+      }).pipe(
+        Effect.catchAll((error) =>
+          Effect.logWarning(
+            `Failed reconciling source catalog for ${source.id}: ${error instanceof Error ? error.message : String(error)}`,
+          ).pipe(Effect.asVoid),
+        ),
+      );
     }
   }).pipe(
     Effect.withSpan("source.catalog.reconcile_missing", {

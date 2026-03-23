@@ -729,7 +729,7 @@ export const migrateJsonToSqlite = (input: {
               .insert(workspace_state)
               .values({
                 workspaceId: input.workspaceId as WorkspaceId,
-                key: "semanticSearchSignature",
+                key: "catalog.semanticSearchSignature",
                 value: wsState.catalog.semanticSearchSignature,
                 updatedAt: Date.now(),
               })

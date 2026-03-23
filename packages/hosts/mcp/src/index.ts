@@ -156,8 +156,10 @@ const buildExecuteWorkflowText = (namespaces: readonly string[] = []): string =>
     "Do not use fetch; use tools.* only.",
   ].join("\n");
 
-const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> =>
-  runControlPlane(
+const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> => {
+  const defaultDescription = buildExecuteWorkflowText();
+
+  return runControlPlane(
     runtime,
     Effect.gen(function* () {
       const resolveExecutionEnvironment = yield* RuntimeExecutionResolverService;
@@ -169,20 +171,22 @@ const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> =
 
       const catalog = environment.catalog as CatalogLike | undefined;
       if (!catalog) {
-        return yield* Effect.fail(
-          new Error("Workspace tool catalog is unavailable."),
-        );
+        return defaultDescription;
       }
 
       const namespaces = yield* catalog.listNamespaces({ limit: 200 }).pipe(
         Effect.map((items) =>
           items.map((item) => item.displayName ?? item.namespace),
         ),
+        Effect.catchAll(() => Effect.succeed(["none discovered yet"])),
       );
 
       return buildExecuteWorkflowText(namespaces);
-    }),
+    }).pipe(
+      Effect.catchAll(() => Effect.succeed(defaultDescription)),
+    ),
   );
+};
 
 const summarizeExecution = (execution: ExecutionEnvelope["execution"]): string => {
   switch (execution.status) {
