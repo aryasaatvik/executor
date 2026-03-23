@@ -4,8 +4,9 @@ import * as Effect from "effect/Effect"
 
 import type {
   SourceId,
-  SourceKind,
   SourceStatus,
+  SourceCatalogId,
+  SourceCatalogRevisionId,
   WorkspaceId,
 } from "#schema"
 
@@ -22,12 +23,12 @@ export type SourceStatusRecord = {
 export type SourceLifecycleRecord = {
   sourceId: SourceId
   workspaceId: WorkspaceId
-  name: string
-  kind: SourceKind
-  endpoint: string
+  catalogId: SourceCatalogId | null
+  catalogRevisionId: SourceCatalogRevisionId | null
   status: SourceStatus
   enabled: boolean
-  namespace: string | null
+  sourceHash: string | null
+  lastError: string | null
   createdAt: number
   updatedAt: number
 }
@@ -59,12 +60,10 @@ export const loadSourceStatus = (
 export const upsertSourceStatus = (input: {
   sourceId: SourceId
   workspaceId: WorkspaceId
-  name: string
-  kind: SourceKind
-  endpoint: string
+  catalogId?: SourceCatalogId | null
+  catalogRevisionId?: SourceCatalogRevisionId | null
   status: SourceStatus
   enabled: boolean
-  namespace: string | null
   lastError: string | null
   sourceHash: string | null
   createdAt: number
@@ -76,12 +75,10 @@ export const upsertSourceStatus = (input: {
     yield* db.insert(source).values({
       id: input.sourceId,
       workspaceId: input.workspaceId,
-      name: input.name,
-      kind: input.kind,
-      endpoint: input.endpoint,
+      catalogId: input.catalogId ?? null,
+      catalogRevisionId: input.catalogRevisionId ?? null,
       status: input.status,
       enabled: input.enabled,
-      namespace: input.namespace,
       sourceHash: input.sourceHash,
       lastError: input.lastError,
       createdAt: input.createdAt,
@@ -89,6 +86,8 @@ export const upsertSourceStatus = (input: {
     }).onConflictDoUpdate({
       target: source.id,
       set: {
+        catalogId: input.catalogId ?? null,
+        catalogRevisionId: input.catalogRevisionId ?? null,
         status: input.status,
         enabled: input.enabled,
         lastError: input.lastError,
@@ -108,12 +107,12 @@ export const syncSourceLifecycle = (input: {
     const sourceRow = {
       id: input.source.sourceId,
       workspaceId: input.source.workspaceId,
-      name: input.source.name,
-      kind: input.source.kind,
-      endpoint: input.source.endpoint,
+      catalogId: input.source.catalogId,
+      catalogRevisionId: input.source.catalogRevisionId,
       status: input.source.status,
       enabled: input.source.enabled,
-      namespace: input.source.namespace,
+      sourceHash: input.source.sourceHash,
+      lastError: input.source.lastError,
       createdAt: input.source.createdAt,
       updatedAt: input.source.updatedAt,
     } satisfies typeof source.$inferInsert
@@ -122,12 +121,12 @@ export const syncSourceLifecycle = (input: {
       target: source.id,
       set: {
         workspaceId: input.source.workspaceId,
-        name: input.source.name,
-        kind: input.source.kind,
-        endpoint: input.source.endpoint,
+        catalogId: input.source.catalogId,
+        catalogRevisionId: input.source.catalogRevisionId,
         status: input.source.status,
         enabled: input.source.enabled,
-        namespace: input.source.namespace,
+        sourceHash: input.source.sourceHash,
+        lastError: input.source.lastError,
         updatedAt: input.source.updatedAt,
       },
     })

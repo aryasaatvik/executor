@@ -90,9 +90,9 @@ export const SourceBindingSchema = Schema.Struct({
   payload: JsonObjectSchema,
 });
 
-const SourceStorageRowSchema = Schema.Struct({
+export const SourceDefinitionSnapshotSchema = Schema.Struct({
+  id: SourceIdSchema,
   workspaceId: WorkspaceIdSchema,
-  sourceId: SourceIdSchema,
   catalogId: SourceCatalogIdSchema,
   catalogRevisionId: SourceCatalogRevisionIdSchema,
   name: Schema.String,
@@ -109,70 +109,6 @@ const SourceStorageRowSchema = Schema.Struct({
   createdAt: TimestampMsSchema,
   updatedAt: TimestampMsSchema,
 });
-
-export const StoredSourceRecordSchema = Schema.transform(
-  SourceStorageRowSchema,
-  Schema.Struct({
-    id: SourceIdSchema,
-    workspaceId: WorkspaceIdSchema,
-    catalogId: SourceCatalogIdSchema,
-    catalogRevisionId: SourceCatalogRevisionIdSchema,
-    name: Schema.String,
-    kind: SourceKindSchema,
-    endpoint: Schema.String,
-    status: SourceStatusSchema,
-    enabled: Schema.Boolean,
-    namespace: Schema.NullOr(Schema.String),
-    iconUrl: Schema.NullOr(Schema.String),
-    importAuthPolicy: SourceImportAuthPolicySchema,
-    bindingConfigJson: Schema.String,
-    sourceHash: Schema.NullOr(Schema.String),
-    lastError: Schema.NullOr(Schema.String),
-    createdAt: TimestampMsSchema,
-    updatedAt: TimestampMsSchema,
-  }),
-  {
-    strict: false,
-    decode: (row) => ({
-      id: row.sourceId,
-      workspaceId: row.workspaceId,
-      catalogId: row.catalogId,
-      catalogRevisionId: row.catalogRevisionId,
-      name: row.name,
-      kind: row.kind,
-      endpoint: row.endpoint,
-      status: row.status,
-      enabled: row.enabled,
-      namespace: row.namespace,
-      iconUrl: row.iconUrl,
-      importAuthPolicy: row.importAuthPolicy,
-      bindingConfigJson: row.bindingConfigJson,
-      sourceHash: row.sourceHash,
-      lastError: row.lastError,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-    }),
-    encode: (source) => ({
-      workspaceId: source.workspaceId,
-      sourceId: source.id,
-      catalogId: source.catalogId,
-      catalogRevisionId: source.catalogRevisionId,
-      name: source.name,
-      kind: source.kind,
-      endpoint: source.endpoint,
-      status: source.status,
-      enabled: source.enabled,
-      namespace: source.namespace,
-      iconUrl: source.iconUrl,
-      importAuthPolicy: source.importAuthPolicy,
-      bindingConfigJson: source.bindingConfigJson,
-      sourceHash: source.sourceHash,
-      lastError: source.lastError,
-      createdAt: source.createdAt,
-      updatedAt: source.updatedAt,
-    }),
-  },
-);
 
 export const SourceSchema = Schema.Struct({
   id: SourceIdSchema,
@@ -201,6 +137,6 @@ export type SourceTransport = typeof SourceTransportSchema.Type;
 export type SourceImportAuthPolicy = typeof SourceImportAuthPolicySchema.Type;
 export type SourceAuth = typeof SourceAuthSchema.Type;
 export type SourceBinding = typeof SourceBindingSchema.Type;
-export type StoredSourceRecord = typeof StoredSourceRecordSchema.Type;
+export type SourceDefinitionSnapshot = typeof SourceDefinitionSnapshotSchema.Type;
 export type StringMap = typeof StringMapSchema.Type;
 export type Source = typeof SourceSchema.Type;

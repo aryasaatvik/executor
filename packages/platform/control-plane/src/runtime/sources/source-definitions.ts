@@ -9,12 +9,12 @@ import type {
   AuthArtifact,
   Source,
   SourceAuth,
+  SourceDefinitionSnapshot,
   SourceImportAuthPolicy,
   SourceCatalogAdapterKey,
   SourceCatalogId,
   SourceCatalogKind,
   SourceCatalogRevisionId,
-  StoredSourceRecord,
   StoredSourceCatalogRecord,
   StoredSourceCatalogRevisionRecord,
   WorkspaceId,
@@ -410,11 +410,11 @@ export const splitSourceForStorage = (input: {
   existingRuntimeAuthArtifactId?: AuthArtifact["id"] | null;
   existingImportAuthArtifactId?: AuthArtifact["id"] | null;
 }): {
-  sourceRecord: StoredSourceRecord;
+  sourceDefinitionSnapshot: SourceDefinitionSnapshot;
   runtimeAuthArtifact: AuthArtifact | null;
   importAuthArtifact: AuthArtifact | null;
 } => {
-  const sourceRecord: StoredSourceRecord = {
+  const sourceDefinitionSnapshot: SourceDefinitionSnapshot = {
     id: input.source.id,
     workspaceId: input.source.workspaceId,
     catalogId: input.catalogId,
@@ -435,7 +435,7 @@ export const splitSourceForStorage = (input: {
   };
 
   return {
-    sourceRecord,
+    sourceDefinitionSnapshot,
     runtimeAuthArtifact: authArtifactFromSourceAuth({
       source: input.source,
       auth: input.source.auth,
@@ -458,39 +458,39 @@ export const splitSourceForStorage = (input: {
 };
 
 export const projectSourceFromStorage = (input: {
-  sourceRecord: StoredSourceRecord;
+  sourceDefinitionSnapshot: SourceDefinitionSnapshot;
   runtimeAuthArtifact: AuthArtifact | null;
   importAuthArtifact: AuthArtifact | null;
 }): Effect.Effect<Source, Error, never> =>
   Effect.gen(function* () {
-    const adapter = getSourceAdapter(input.sourceRecord.kind);
+    const adapter = getSourceAdapter(input.sourceDefinitionSnapshot.kind);
     const bindingConfig = yield* adapter.deserializeBindingConfig({
-      id: input.sourceRecord.id,
-      bindingConfigJson: input.sourceRecord.bindingConfigJson,
+      id: input.sourceDefinitionSnapshot.id,
+      bindingConfigJson: input.sourceDefinitionSnapshot.bindingConfigJson,
     });
 
     return {
-      id: input.sourceRecord.id,
-      workspaceId: input.sourceRecord.workspaceId,
-      name: input.sourceRecord.name,
-      kind: input.sourceRecord.kind,
-      endpoint: input.sourceRecord.endpoint,
-      status: input.sourceRecord.status,
-      enabled: input.sourceRecord.enabled,
-      namespace: input.sourceRecord.namespace,
-      iconUrl: input.sourceRecord.iconUrl,
+      id: input.sourceDefinitionSnapshot.id,
+      workspaceId: input.sourceDefinitionSnapshot.workspaceId,
+      name: input.sourceDefinitionSnapshot.name,
+      kind: input.sourceDefinitionSnapshot.kind,
+      endpoint: input.sourceDefinitionSnapshot.endpoint,
+      status: input.sourceDefinitionSnapshot.status,
+      enabled: input.sourceDefinitionSnapshot.enabled,
+      namespace: input.sourceDefinitionSnapshot.namespace,
+      iconUrl: input.sourceDefinitionSnapshot.iconUrl,
       bindingVersion: bindingConfig.version,
       binding: bindingConfig.payload,
-      importAuthPolicy: input.sourceRecord.importAuthPolicy,
+      importAuthPolicy: input.sourceDefinitionSnapshot.importAuthPolicy,
       importAuth:
-        input.sourceRecord.importAuthPolicy === "separate"
+        input.sourceDefinitionSnapshot.importAuthPolicy === "separate"
           ? sourceAuthFromAuthArtifact(input.importAuthArtifact)
           : { kind: "none" },
       auth: sourceAuthFromAuthArtifact(input.runtimeAuthArtifact),
-      sourceHash: input.sourceRecord.sourceHash,
-      lastError: input.sourceRecord.lastError,
-      createdAt: input.sourceRecord.createdAt,
-      updatedAt: input.sourceRecord.updatedAt,
+      sourceHash: input.sourceDefinitionSnapshot.sourceHash,
+      lastError: input.sourceDefinitionSnapshot.lastError,
+      createdAt: input.sourceDefinitionSnapshot.createdAt,
+      updatedAt: input.sourceDefinitionSnapshot.updatedAt,
     } satisfies Source;
   }).pipe(
     Effect.mapError((cause) =>
@@ -499,7 +499,7 @@ export const projectSourceFromStorage = (input: {
   );
 
 export const projectSourcesFromStorage = (input: {
-  sourceRecords: ReadonlyArray<StoredSourceRecord>;
+  sourceDefinitionSnapshots: ReadonlyArray<SourceDefinitionSnapshot>;
   authArtifacts: ReadonlyArray<AuthArtifact>;
 }): Effect.Effect<ReadonlyArray<Source>, Error, never> => {
   const authArtifactsBySourceId = new Map<string, {
@@ -521,10 +521,10 @@ export const projectSourcesFromStorage = (input: {
     }
   }
 
-  return Effect.forEach(input.sourceRecords, (sourceRecord) =>
+  return Effect.forEach(input.sourceDefinitionSnapshots, (sourceDefinitionSnapshot) =>
     projectSourceFromStorage({
-      sourceRecord,
-      runtimeAuthArtifact: authArtifactsBySourceId.get(sourceRecord.id)?.runtime ?? null,
-      importAuthArtifact: authArtifactsBySourceId.get(sourceRecord.id)?.import ?? null,
+      sourceDefinitionSnapshot,
+      runtimeAuthArtifact: authArtifactsBySourceId.get(sourceDefinitionSnapshot.id)?.runtime ?? null,
+      importAuthArtifact: authArtifactsBySourceId.get(sourceDefinitionSnapshot.id)?.import ?? null,
     }));
 };

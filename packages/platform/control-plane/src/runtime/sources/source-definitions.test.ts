@@ -466,7 +466,7 @@ describe("source-definitions", () => {
         const catalogRevisionId = stableSourceCatalogRevisionId(source);
         const existingCredentialId = CredentialIdSchema.make("cred_existing");
 
-        const { sourceRecord, runtimeAuthArtifact } = splitSourceForStorage({
+        const { sourceDefinitionSnapshot, runtimeAuthArtifact } = splitSourceForStorage({
           source,
           catalogId,
           catalogRevisionId,
@@ -478,14 +478,14 @@ describe("source-definitions", () => {
           ? decodeBuiltInAuthArtifactConfig(runtimeAuthArtifact)
           : null;
         expect(decoded?.artifactKind).toBe("static_bearer");
-        expect(JSON.parse(sourceRecord.bindingConfigJson ?? "{}")).toEqual({
+        expect(JSON.parse(sourceDefinitionSnapshot.bindingConfigJson ?? "{}")).toEqual({
           adapterKey: "mcp",
           version: 1,
           payload: source.binding,
         });
 
         const projected = yield* projectSourceFromStorage({
-          sourceRecord,
+          sourceDefinitionSnapshot,
           runtimeAuthArtifact: runtimeAuthArtifact ?? null,
           importAuthArtifact: null,
         });
@@ -532,13 +532,13 @@ describe("source-definitions", () => {
         });
 
         for (const source of [withRefresh, withoutRefresh]) {
-          const { sourceRecord, runtimeAuthArtifact } = splitSourceForStorage({
+          const { sourceDefinitionSnapshot, runtimeAuthArtifact } = splitSourceForStorage({
             source,
             catalogId: stableSourceCatalogId(source),
             catalogRevisionId: stableSourceCatalogRevisionId(source),
           });
           const projected = yield* projectSourceFromStorage({
-            sourceRecord,
+            sourceDefinitionSnapshot,
             runtimeAuthArtifact: runtimeAuthArtifact ?? null,
             importAuthArtifact: null,
           });
@@ -566,21 +566,21 @@ describe("source-definitions", () => {
           auth: { kind: "none" },
         });
 
-        const { sourceRecord, runtimeAuthArtifact } = splitSourceForStorage({
+        const { sourceDefinitionSnapshot, runtimeAuthArtifact } = splitSourceForStorage({
           source,
           catalogId: stableSourceCatalogId(source),
           catalogRevisionId: stableSourceCatalogRevisionId(source),
         });
 
         expect(runtimeAuthArtifact).toBeNull();
-        expect(JSON.parse(sourceRecord.bindingConfigJson ?? "{}")).toEqual({
+        expect(JSON.parse(sourceDefinitionSnapshot.bindingConfigJson ?? "{}")).toEqual({
           adapterKey: "mcp",
           version: 1,
           payload: source.binding,
         });
 
         const projected = yield* projectSourceFromStorage({
-          sourceRecord,
+          sourceDefinitionSnapshot,
           runtimeAuthArtifact: null,
           importAuthArtifact: null,
         });
@@ -596,7 +596,7 @@ describe("source-definitions", () => {
           const source = makeSource({
             auth: { kind: "none" },
           });
-          const { sourceRecord, runtimeAuthArtifact } = splitSourceForStorage({
+          const { sourceDefinitionSnapshot, runtimeAuthArtifact } = splitSourceForStorage({
             source,
             catalogId: stableSourceCatalogId(source),
             catalogRevisionId: stableSourceCatalogRevisionId(source),
@@ -605,7 +605,7 @@ describe("source-definitions", () => {
           expect(runtimeAuthArtifact).toBeNull();
 
           const projected = yield* projectSourceFromStorage({
-            sourceRecord,
+            sourceDefinitionSnapshot,
             runtimeAuthArtifact: null,
             importAuthArtifact: null,
           });
