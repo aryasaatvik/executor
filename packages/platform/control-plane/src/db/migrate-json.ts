@@ -1,5 +1,6 @@
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite"
 import { SqlClient } from "@effect/sql"
+import { eq } from "drizzle-orm"
 import * as Effect from "effect/Effect"
 import * as FileSystem from "@effect/platform/FileSystem"
 import { NodeFileSystem } from "@effect/platform-node"
@@ -55,7 +56,6 @@ import {
   catalog_tool,
   workspace_state,
 } from "./schema"
-
 // ---------------------------------------------------------------------------
 // Types for the JSON state files
 // ---------------------------------------------------------------------------
@@ -712,6 +712,20 @@ export const migrateJsonToSqlite = (input: {
           // using a raw upsert to avoid inserting incomplete rows.
           if (wsState.sources) {
             for (const [sourceId, info] of Object.entries(wsState.sources)) {
+              const existingSourceRows = yield* db
+                .select({ id: source.id })
+                .from(source)
+                .where(eq(source.id, sourceId as SourceId))
+                .limit(1)
+
+              if (existingSourceRows.length === 0) {
+                return yield* Effect.fail(
+                  new Error(
+                    `workspace-state.json contains source state for ${sourceId}, but no source row exists to receive it; migration cannot preserve this state losslessly`,
+                  ),
+                )
+              }
+
               yield* sql`
                 UPDATE ${source}
                 SET status      = ${info.status},
