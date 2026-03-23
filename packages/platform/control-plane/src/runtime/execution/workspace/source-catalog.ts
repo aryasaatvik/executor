@@ -460,6 +460,9 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
       }),
       Effect.asVoid,
     ),
+    input.embedder
+      ? { embeddingDimensions: input.embedder.dimensions }
+      : undefined,
   );
 };
 

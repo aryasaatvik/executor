@@ -6,8 +6,7 @@ Each fixture directory should contain:
 
 - `fixture.json`: release metadata and the expected artifact outcome
 - `.executor/executor.jsonc`: a trimmed project config with only the captured source
-- `.executor/state/workspace-state.json`: a trimmed workspace state with only the captured source
-- `.executor/artifacts/sources/...`: the real artifact JSON and any sidecar files that release wrote
+- `.executor/state/executor.db`: the captured SQLite state for that workspace
 
 `src/runtime/local/source-artifacts.test.ts` auto-discovers every fixture directory here that has a `fixture.json` file. Adding a new release fixture should not require changing the test.
 

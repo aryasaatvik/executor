@@ -40,7 +40,6 @@ import {
   resolveLocalWorkspaceContext,
   writeProjectLocalExecutorConfig,
 } from "./local/config";
-import { writeLocalControlPlaneState } from "./local/control-plane-store";
 import { deriveLocalInstallation } from "./local/installation";
 import { syncSourceToSqlite, hasSourceCatalogData } from "../db/indexer";
 import { makeWorkspaceCatalogDbLayer } from "../db/setup";
@@ -825,23 +824,6 @@ describe("control-plane-runtime", () => {
       yield* syncSourceToSqlite({ source, syncResult }).pipe(
         Effect.provide(dbLayer),
       );
-
-      yield* writeLocalControlPlaneState({
-        context,
-        state: {
-          version: 1,
-          authArtifacts: [],
-          authLeases: [],
-          sourceOauthClients: [],
-          workspaceOauthClients: [],
-          providerAuthGrants: [],
-          sourceAuthSessions: [],
-          secretMaterials: [],
-          executions: [],
-          executionInteractions: [],
-          executionSteps: [],
-        },
-      });
 
       const runtime = yield* Effect.acquireRelease(
         createControlPlaneRuntime({
