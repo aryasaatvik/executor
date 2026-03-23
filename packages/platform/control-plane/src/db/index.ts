@@ -4,9 +4,12 @@ export {
   hasSourceCatalogData,
   loadSemanticSearchSignature,
   writeSemanticSearchSignature,
-  loadSourceStatusFromDb,
-  upsertSourceStatusToDb,
-  removeSourceFromDb,
-  type DbSourceStatus,
 } from "./indexer"
+export {
+  loadSourceStatus,
+  upsertSourceStatus,
+  removeSource,
+  syncSourceLifecycle,
+  type SourceStatusRecord,
+} from "./source-state"
 export { makeWorkspaceCatalogDbLayer, makeWorkspaceCatalogQueryDbLayer } from "./setup"
