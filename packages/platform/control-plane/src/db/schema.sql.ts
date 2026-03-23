@@ -1,10 +1,10 @@
 import { integer } from "drizzle-orm/sqlite-core"
 
 export const Timestamps = {
-  time_created: integer()
+  createdAt: integer("created_at")
     .notNull()
     .$default(() => Date.now()),
-  time_updated: integer()
+  updatedAt: integer("updated_at")
     .notNull()
     .$onUpdate(() => Date.now()),
 }

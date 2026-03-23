@@ -1,52 +1,67 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
+
+import type {
+  AccountId,
+  ExecutionId,
+  ExecutionInteractionId,
+  ExecutionInteractionStatus,
+  ExecutionSessionId,
+  ExecutionStatus,
+  ExecutionStepId,
+  ExecutionStepKind,
+  ExecutionStepStatus,
+  WorkspaceId,
+} from "#schema";
+
 import { Timestamps } from "../schema.sql"
 
 export const execution = sqliteTable("execution", {
-  id:                    text().primaryKey(),
-  workspace_id:          text().notNull(),
-  created_by_account_id: text().notNull(),
-  status:                text().notNull().default("pending"),
-  code:                  text().notNull(),
-  result_json:           text({ mode: "json" }),
-  error_text:            text(),
-  logs_json:             text({ mode: "json" }),
-  started_at:            integer(),
-  completed_at:          integer(),
+  id:                 text().$type<ExecutionId>().primaryKey(),
+  workspaceId:        text("workspace_id").$type<WorkspaceId>().notNull(),
+  createdByAccountId: text("created_by_account_id").$type<AccountId>().notNull(),
+  executionSessionId: text("execution_session_id").$type<ExecutionSessionId | null>(),
+  status:             text().$type<ExecutionStatus>().notNull().default("pending"),
+  code:               text().notNull(),
+  resultJson:         text("result_json", { mode: "json" }),
+  errorText:          text("error_text"),
+  logsJson:           text("logs_json", { mode: "json" }),
+  startedAt:          integer("started_at"),
+  completedAt:        integer("completed_at"),
   ...Timestamps,
 }, (table) => [
-  index("execution_workspace_idx").on(table.workspace_id),
-  index("execution_status_idx").on(table.workspace_id, table.status),
+  index("execution_workspace_idx").on(table.workspaceId),
+  index("execution_status_idx").on(table.workspaceId, table.status),
 ])
 
 export const execution_interaction = sqliteTable("execution_interaction", {
-  id:                    text().primaryKey(),
-  execution_id:          text().notNull()
+  id:                  text().$type<ExecutionInteractionId>().primaryKey(),
+  executionId:         text("execution_id").$type<ExecutionId>().notNull()
                            .references(() => execution.id, { onDelete: "cascade" }),
-  status:                text().notNull().default("pending"),
-  kind:                  text().notNull(),
-  purpose:               text().notNull(),
-  payload_json:          text({ mode: "json" }).notNull(),
-  response_json:         text({ mode: "json" }),
-  response_private_json: text({ mode: "json" }),
+  status:              text().$type<ExecutionInteractionStatus>().notNull().default("pending"),
+  kind:                text().notNull(),
+  purpose:             text().notNull(),
+  payloadJson:         text("payload_json", { mode: "json" }).notNull(),
+  responseJson:        text("response_json", { mode: "json" }),
+  responsePrivateJson: text("response_private_json", { mode: "json" }),
   ...Timestamps,
 }, (table) => [
-  index("interaction_execution_idx").on(table.execution_id),
+  index("interaction_execution_idx").on(table.executionId),
 ])
 
 export const execution_step = sqliteTable("execution_step", {
-  id:              text().primaryKey(),
-  execution_id:    text().notNull()
+  id:             text().$type<ExecutionStepId>().primaryKey(),
+  executionId:    text("execution_id").$type<ExecutionId>().notNull()
                      .references(() => execution.id, { onDelete: "cascade" }),
-  sequence:        integer().notNull(),
-  kind:            text().notNull(),
-  status:          text().notNull().default("pending"),
-  path:            text().notNull(),
-  args_json:       text({ mode: "json" }).notNull(),
-  result_json:     text({ mode: "json" }),
-  error_text:      text(),
-  interaction_id:  text(),
+  sequence:       integer().notNull(),
+  kind:           text().$type<ExecutionStepKind>().notNull(),
+  status:         text().$type<ExecutionStepStatus>().notNull().default("pending"),
+  path:           text().notNull(),
+  argsJson:       text("args_json", { mode: "json" }).notNull(),
+  resultJson:     text("result_json", { mode: "json" }),
+  errorText:      text("error_text"),
+  interactionId:  text("interaction_id").$type<ExecutionInteractionId | null>(),
   ...Timestamps,
 }, (table) => [
-  index("step_execution_idx").on(table.execution_id),
-  index("step_execution_seq_idx").on(table.execution_id, table.sequence),
+  index("step_execution_idx").on(table.executionId),
+  index("step_execution_seq_idx").on(table.executionId, table.sequence),
 ])

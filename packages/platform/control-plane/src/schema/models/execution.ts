@@ -5,6 +5,7 @@ import {
   AccountIdSchema,
   ExecutionIdSchema,
   ExecutionInteractionIdSchema,
+  ExecutionSessionIdSchema,
   ExecutionStepIdSchema,
   WorkspaceIdSchema,
 } from "../ids";
@@ -22,6 +23,7 @@ export const ExecutionSchema = Schema.Struct({
   id: ExecutionIdSchema,
   workspaceId: WorkspaceIdSchema,
   createdByAccountId: AccountIdSchema,
+  executionSessionId: Schema.NullOr(ExecutionSessionIdSchema),
   status: ExecutionStatusSchema,
   code: Schema.String,
   resultJson: Schema.NullOr(Schema.String),
@@ -39,6 +41,7 @@ export const ExecutionUpdateSchema = Schema.partial(
   Schema.Struct({
     status: ExecutionStatusSchema,
     code: Schema.String,
+    executionSessionId: Schema.NullOr(ExecutionSessionIdSchema),
     resultJson: Schema.NullOr(Schema.String),
     errorText: Schema.NullOr(Schema.String),
     logsJson: Schema.NullOr(Schema.String),

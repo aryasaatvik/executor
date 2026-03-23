@@ -146,7 +146,7 @@ CREATE TABLE `workspace_oauth_client` (
 --> statement-breakpoint
 CREATE TABLE `policy` (
 	`id` text PRIMARY KEY,
-	`key` text NOT NULL,
+	`slug` text NOT NULL,
 	`workspace_id` text NOT NULL,
 	`resource_pattern` text NOT NULL,
 	`effect` text NOT NULL,
@@ -183,3 +183,5 @@ CREATE INDEX `provider_grant_client_idx` ON `provider_auth_grant` (`oauth_client
 CREATE INDEX `provider_grant_workspace_idx` ON `provider_auth_grant` (`workspace_id`,`provider_key`);--> statement-breakpoint
 CREATE INDEX `source_oauth_client_source_idx` ON `source_oauth_client` (`workspace_id`,`source_id`);--> statement-breakpoint
 CREATE INDEX `policy_workspace_idx` ON `policy` (`workspace_id`);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `policy_workspace_slug_idx` ON `policy` (`workspace_id`,`slug`);

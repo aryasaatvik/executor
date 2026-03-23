@@ -8,7 +8,7 @@ export const LocalWorkspacePolicyApprovalModeSchema = Schema.Literal("auto", "re
 
 export const LocalWorkspacePolicySchema = Schema.Struct({
   id: PolicyIdSchema,
-  key: Schema.String,
+  slug: Schema.String,
   workspaceId: WorkspaceIdSchema,
   resourcePattern: Schema.String,
   effect: LocalWorkspacePolicyEffectSchema,

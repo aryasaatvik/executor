@@ -31,6 +31,11 @@ export const SecretMaterialIdSchema = Schema.String.pipe(
 );
 export const PolicyIdSchema = Schema.String.pipe(Schema.brand("PolicyId"));
 export const ExecutionIdSchema = Schema.String.pipe(Schema.brand("ExecutionId"));
+export const ExecutionSessionIdSchema = Schema.Trim.pipe(
+  Schema.nonEmptyString(),
+  Schema.maxLength(200),
+  Schema.brand("ExecutionSessionId"),
+);
 export const ExecutionInteractionIdSchema = Schema.String.pipe(
   Schema.brand("ExecutionInteractionId"),
 );
@@ -53,5 +58,6 @@ export type ProviderAuthGrantId = typeof ProviderAuthGrantIdSchema.Type;
 export type SecretMaterialId = typeof SecretMaterialIdSchema.Type;
 export type PolicyId = typeof PolicyIdSchema.Type;
 export type ExecutionId = typeof ExecutionIdSchema.Type;
+export type ExecutionSessionId = typeof ExecutionSessionIdSchema.Type;
 export type ExecutionInteractionId = typeof ExecutionInteractionIdSchema.Type;
 export type ExecutionStepId = typeof ExecutionStepIdSchema.Type;

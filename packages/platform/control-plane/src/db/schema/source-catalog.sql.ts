@@ -1,28 +1,36 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
+
+import type {
+  SourceCatalogKind,
+  SourceCatalogId,
+  SourceCatalogRevisionId,
+  SourceCatalogVisibility,
+} from "#schema"
+
 import { Timestamps } from "../schema.sql"
 
 export const source_catalog = sqliteTable("source_catalog", {
-  id:                    text().primaryKey(),
-  kind:                  text().notNull(),
-  adapter_key:           text().notNull(),
-  provider_key:          text().notNull(),
-  name:                  text().notNull(),
-  summary:               text(),
-  visibility:            text().notNull().default("private"),
-  latest_revision_id:    text(),
+  id:               text().$type<SourceCatalogId>().primaryKey(),
+  kind:             text().$type<SourceCatalogKind>().notNull(),
+  adapterKey:       text("adapter_key").notNull(),
+  providerKey:      text("provider_key").notNull(),
+  name:             text().notNull(),
+  summary:          text(),
+  visibility:       text().$type<SourceCatalogVisibility>().notNull().default("private"),
+  latestRevisionId: text("latest_revision_id").$type<SourceCatalogRevisionId | null>(),
   ...Timestamps,
 })
 
 export const source_catalog_revision = sqliteTable("source_catalog_revision", {
-  id:                    text().primaryKey(),
-  catalog_id:            text().notNull()
+  id:                 text().$type<SourceCatalogRevisionId>().primaryKey(),
+  catalogId:          text("catalog_id").$type<SourceCatalogId>().notNull()
                            .references(() => source_catalog.id, { onDelete: "cascade" }),
-  revision_number:       integer().notNull(),
-  source_config_json:    text({ mode: "json" }),
-  import_metadata_json:  text({ mode: "json" }),
-  import_metadata_hash:  text(),
-  snapshot_hash:         text(),
+  revisionNumber:     integer("revision_number").notNull(),
+  sourceConfigJson:   text("source_config_json", { mode: "json" }),
+  importMetadataJson: text("import_metadata_json", { mode: "json" }),
+  importMetadataHash: text("import_metadata_hash"),
+  snapshotHash:       text("snapshot_hash"),
   ...Timestamps,
 }, (table) => [
-  index("catalog_revision_catalog_idx").on(table.catalog_id),
+  index("catalog_revision_catalog_idx").on(table.catalogId),
 ])

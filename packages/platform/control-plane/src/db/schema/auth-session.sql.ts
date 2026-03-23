@@ -1,22 +1,35 @@
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core"
+
+import type {
+  AccountId,
+  CredentialSlot,
+  ExecutionId,
+  ExecutionInteractionId,
+  SourceAuthSessionId,
+  SourceAuthSessionProviderKind,
+  SourceAuthSessionStatus,
+  SourceId,
+  WorkspaceId,
+} from "#schema";
+
 import { Timestamps } from "../schema.sql"
 
 export const source_auth_session = sqliteTable("source_auth_session", {
-  id:                text().primaryKey(),
-  workspace_id:      text().notNull(),
-  source_id:         text().notNull(), // FK: source.id (added in migration)
-  actor_account_id:  text(),
-  credential_slot:   text().notNull(),
-  execution_id:      text(),
-  interaction_id:    text(),
-  provider_kind:     text().notNull(),
-  status:            text().notNull().default("pending"),
-  state:             text().notNull(),
-  session_data_json: text({ mode: "json" }).notNull(),
-  error_text:        text(),
-  completed_at:      integer(),
+  id:              text().$type<SourceAuthSessionId>().primaryKey(),
+  workspaceId:     text("workspace_id").$type<WorkspaceId>().notNull(),
+  sourceId:        text("source_id").$type<SourceId>().notNull(), // FK: source.id (added in migration)
+  actorAccountId:  text("actor_account_id").$type<AccountId | null>(),
+  credentialSlot:  text("credential_slot").$type<CredentialSlot>().notNull(),
+  executionId:     text("execution_id").$type<ExecutionId | null>(),
+  interactionId:   text("interaction_id").$type<ExecutionInteractionId | null>(),
+  providerKind:    text("provider_kind").$type<SourceAuthSessionProviderKind>().notNull(),
+  status:          text().$type<SourceAuthSessionStatus>().notNull().default("pending"),
+  state:           text().notNull(),
+  sessionDataJson: text("session_data_json", { mode: "json" }).notNull(),
+  errorText:       text("error_text"),
+  completedAt:     integer("completed_at"),
   ...Timestamps,
 }, (table) => [
-  index("auth_session_source_idx").on(table.workspace_id, table.source_id),
+  index("auth_session_source_idx").on(table.workspaceId, table.sourceId),
   index("auth_session_status_idx").on(table.status),
 ])
