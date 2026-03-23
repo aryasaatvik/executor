@@ -14,7 +14,7 @@ import * as Layer from "effect/Layer"
 // This runs at module load time (top-level await) and is a no-op on non-macOS
 // or when Homebrew SQLite isn't installed.
 // ---------------------------------------------------------------------------
-if (process.platform === "darwin") {
+if (process.platform === "darwin" && process.versions.bun && !process.env.VITEST) {
   try {
     const bunSqlite = "bun:" + "sqlite"
     const { Database } = await import(/* @vite-ignore */ bunSqlite)
