@@ -33,6 +33,19 @@ export type SourceLifecycleRecord = {
   updatedAt: number
 }
 
+const selectSourceLifecycle = {
+  sourceId: source.id,
+  workspaceId: source.workspaceId,
+  catalogId: source.catalogId,
+  catalogRevisionId: source.catalogRevisionId,
+  status: source.status,
+  enabled: source.enabled,
+  sourceHash: source.sourceHash,
+  lastError: source.lastError,
+  createdAt: source.createdAt,
+  updatedAt: source.updatedAt,
+} as const
+
 export const loadSourceStatus = (
   sourceId: SourceId,
 ) =>
@@ -55,6 +68,37 @@ export const loadSourceStatus = (
     }
 
     return rows[0] as SourceStatusRecord
+  })
+
+export const loadSourceLifecycle = (
+  sourceId: SourceId,
+) =>
+  Effect.gen(function* () {
+    const db = yield* SqliteDrizzle
+    const rows = yield* db
+      .select(selectSourceLifecycle)
+      .from(source)
+      .where(eq(source.id, sourceId))
+      .limit(1)
+
+    if (rows.length === 0) {
+      return null
+    }
+
+    return rows[0] as SourceLifecycleRecord
+  })
+
+export const listSourceLifecycles = (
+  workspaceId: WorkspaceId,
+) =>
+  Effect.gen(function* () {
+    const db = yield* SqliteDrizzle
+    const rows = yield* db
+      .select(selectSourceLifecycle)
+      .from(source)
+      .where(eq(source.workspaceId, workspaceId))
+
+    return rows as ReadonlyArray<SourceLifecycleRecord>
   })
 
 export const upsertSourceStatus = (input: {

@@ -5,12 +5,16 @@ import type {
 } from "#schema";
 import * as Effect from "effect/Effect";
 
-import { RuntimeLocalWorkspace } from "../../local/runtime-context";
 import { WorkspaceDatabase } from "../../local/workspace-database";
 import { getSourceAdapterForSource } from "../../sources/source-adapters";
+import {
+  stableSourceCatalogId,
+  stableSourceCatalogRevisionId,
+} from "../../sources/source-definitions";
 import { SourceStore } from "../../sources/source-store";
 import { SourceCatalogSync } from "./sync";
 import { hasSourceCatalogData } from "../../../db/indexer";
+import { loadSourceLifecycle } from "../../../db/source-state";
 
 
 const shouldReconcileSource = (source: Source): boolean =>
@@ -24,13 +28,11 @@ export const reconcileMissingSourceCatalogArtifacts = (input: {
 }): Effect.Effect<
   void,
   Error,
-  | RuntimeLocalWorkspace
   | WorkspaceDatabase
   | SourceStore
   | SourceCatalogSync
 > =>
   Effect.gen(function* () {
-    yield* RuntimeLocalWorkspace;
     const workspaceDatabase = yield* WorkspaceDatabase;
     const sourceStore = yield* SourceStore;
     const sourceCatalogSync = yield* SourceCatalogSync;
@@ -43,10 +45,21 @@ export const reconcileMissingSourceCatalogArtifacts = (input: {
         continue;
       }
 
-      const hasCatalog = yield* workspaceDatabase.provideWrite(
+      const lifecycle = yield* workspaceDatabase.provideQuery(
+        loadSourceLifecycle(source.id),
+      ).pipe(Effect.catchAll(() => Effect.succeed(null)));
+      const hasCatalog = yield* workspaceDatabase.provideQuery(
         hasSourceCatalogData(source.id),
       ).pipe(Effect.catchAll(() => Effect.succeed(false)));
-      if (hasCatalog) {
+      const expectedCatalogId = stableSourceCatalogId(source);
+      const expectedCatalogRevisionId = stableSourceCatalogRevisionId(source);
+      const hasCurrentCatalog =
+        hasCatalog
+        && lifecycle !== null
+        && lifecycle.catalogId === expectedCatalogId
+        && lifecycle.catalogRevisionId === expectedCatalogRevisionId;
+
+      if (hasCurrentCatalog) {
         continue;
       }
 

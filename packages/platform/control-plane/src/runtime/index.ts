@@ -287,6 +287,7 @@ export const createControlPlaneRuntime = (
 
     const effectiveLocalConfig = yield* synchronizeLocalWorkspaceState({
       context: localWorkspaceContext,
+      workspaceId: localInstallation.workspaceId,
       loadedConfig: loadedLocalConfig,
     }).pipe(
       Effect.mapError(toLocalRuntimeBootstrapError),

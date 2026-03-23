@@ -4,8 +4,10 @@ import { join } from "node:path";
 
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
+import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 import { describe, expect, it } from "@effect/vitest";
 import { assertTrue } from "@effect/vitest/utils";
+import { eq } from "drizzle-orm";
 import * as Either from "effect/Either";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -43,7 +45,7 @@ import {
 import { deriveLocalInstallation } from "./local/installation";
 import { syncSourceToSqlite, hasSourceCatalogData } from "../db/indexer";
 import { makeWorkspaceCatalogDbLayer } from "../db/setup";
-import { upsertSourceStatus } from "../db/source-state";
+import { source as sourceTable } from "../db/schema";
 
 const makeRuntime = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -909,25 +911,8 @@ describe("control-plane-runtime", () => {
           },
         },
       });
-      // Write source status to SQLite so the runtime can find it
       const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
       const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
-      yield* upsertSourceStatus({
-        sourceId,
-        workspaceId: source.workspaceId,
-        name: source.name,
-        kind: source.kind,
-        endpoint: source.endpoint,
-        status: source.status,
-        enabled: source.enabled,
-        namespace: source.namespace,
-        lastError: source.lastError,
-        sourceHash: source.sourceHash,
-        createdAt: source.createdAt,
-        updatedAt: source.updatedAt,
-      }).pipe(
-        Effect.provide(dbLayer),
-      );
 
       const runtime = yield* Effect.acquireRelease(
         createControlPlaneRuntime({
@@ -938,6 +923,18 @@ describe("control-plane-runtime", () => {
         (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
       );
 
+      const sourceRows = yield* Effect.gen(function* () {
+        const db = yield* SqliteDrizzle;
+        return yield* db
+          .select()
+          .from(sourceTable)
+          .where(eq(sourceTable.id, sourceId))
+          .limit(1);
+      }).pipe(
+        Effect.provide(dbLayer),
+      );
+
+      expect(sourceRows).toHaveLength(1);
       const hasCatalog = yield* hasSourceCatalogData(sourceId).pipe(
         Effect.provide(dbLayer),
       );
@@ -954,6 +951,195 @@ describe("control-plane-runtime", () => {
           }),
       );
       expect(inspection.tools.length).toBeGreaterThan(0);
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+    60_000,
+  );
+
+  it.scoped("resyncs source catalogs on startup when the source definition drifts", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const oldServer = yield* makeOpenApiSpecServer;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "executor-control-plane-runtime-startup-drift-",
+      });
+      const homeConfigPath = join(workspaceRoot, ".executor-home.jsonc");
+      const homeStateDirectory = join(workspaceRoot, ".executor-home-state");
+      const context = yield* resolveLocalWorkspaceContext({
+        workspaceRoot,
+        homeConfigPath,
+        homeStateDirectory,
+      });
+      const installation = deriveLocalInstallation(context);
+      const sourceId = SourceIdSchema.make("github");
+      const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
+      const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+
+      const readSourceRow = () =>
+        Effect.gen(function* () {
+          const db = yield* SqliteDrizzle;
+          const rows = yield* db
+            .select()
+            .from(sourceTable)
+            .where(eq(sourceTable.id, sourceId))
+            .limit(1);
+          return rows[0] ?? null;
+        }).pipe(Effect.provide(dbLayer));
+
+      yield* writeProjectLocalExecutorConfig({
+        context,
+        config: {
+          sources: {
+            [sourceId]: {
+              kind: "openapi",
+              name: "GitHub",
+              namespace: "github",
+              connection: {
+                endpoint: oldServer.baseUrl,
+              },
+              binding: {
+                specUrl: oldServer.specUrl,
+                defaultHeaders: null,
+              },
+            },
+          },
+        },
+      });
+
+      const firstRuntime = yield* Effect.acquireRelease(
+        createControlPlaneRuntime({
+          workspaceRoot,
+          homeConfigPath,
+          homeStateDirectory,
+        }),
+        (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
+      );
+      void firstRuntime;
+
+      const firstRow = yield* readSourceRow();
+      expect(firstRow?.catalogId).toBeTruthy();
+      expect(firstRow?.catalogRevisionId).toBeTruthy();
+
+      const newServer = yield* makeOpenApiSpecServer;
+      yield* writeProjectLocalExecutorConfig({
+        context,
+        config: {
+          sources: {
+            [sourceId]: {
+              kind: "openapi",
+              name: "GitHub",
+              namespace: "github",
+              connection: {
+                endpoint: newServer.baseUrl,
+              },
+              binding: {
+                specUrl: newServer.specUrl,
+                defaultHeaders: null,
+              },
+            },
+          },
+        },
+      });
+
+      const secondRuntime = yield* Effect.acquireRelease(
+        createControlPlaneRuntime({
+          workspaceRoot,
+          homeConfigPath,
+          homeStateDirectory,
+        }),
+        (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
+      );
+      void secondRuntime;
+
+      const secondRow = yield* readSourceRow();
+      expect(secondRow?.catalogId).toBeTruthy();
+      expect(secondRow?.catalogRevisionId).toBeTruthy();
+      expect(secondRow?.catalogId).not.toBe(firstRow?.catalogId);
+      expect(secondRow?.catalogRevisionId).not.toBe(firstRow?.catalogRevisionId);
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+    60_000,
+  );
+
+  it.scoped("removes deleted config sources from the startup lifecycle registry", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const openApiServer = yield* makeOpenApiSpecServer;
+      const workspaceRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "executor-control-plane-runtime-startup-delete-",
+      });
+      const homeConfigPath = join(workspaceRoot, ".executor-home.jsonc");
+      const homeStateDirectory = join(workspaceRoot, ".executor-home-state");
+      const context = yield* resolveLocalWorkspaceContext({
+        workspaceRoot,
+        homeConfigPath,
+        homeStateDirectory,
+      });
+      const sourceId = SourceIdSchema.make("github");
+      const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
+      const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+
+      const readSourceRow = () =>
+        Effect.gen(function* () {
+          const db = yield* SqliteDrizzle;
+          const rows = yield* db
+            .select()
+            .from(sourceTable)
+            .where(eq(sourceTable.id, sourceId))
+            .limit(1);
+          return rows[0] ?? null;
+        }).pipe(Effect.provide(dbLayer));
+
+      yield* writeProjectLocalExecutorConfig({
+        context,
+        config: {
+          sources: {
+            [sourceId]: {
+              kind: "openapi",
+              name: "GitHub",
+              namespace: "github",
+              connection: {
+                endpoint: openApiServer.baseUrl,
+              },
+              binding: {
+                specUrl: openApiServer.specUrl,
+                defaultHeaders: null,
+              },
+            },
+          },
+        },
+      });
+
+      const firstRuntime = yield* Effect.acquireRelease(
+        createControlPlaneRuntime({
+          workspaceRoot,
+          homeConfigPath,
+          homeStateDirectory,
+        }),
+        (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
+      );
+      void firstRuntime;
+
+      expect(yield* readSourceRow()).not.toBeNull();
+      expect(yield* hasSourceCatalogData(sourceId).pipe(Effect.provide(dbLayer))).toBe(true);
+
+      yield* writeProjectLocalExecutorConfig({
+        context,
+        config: {
+          sources: {},
+        },
+      });
+
+      const secondRuntime = yield* Effect.acquireRelease(
+        createControlPlaneRuntime({
+          workspaceRoot,
+          homeConfigPath,
+          homeStateDirectory,
+        }),
+        (createdRuntime) => Effect.promise(() => createdRuntime.close()).pipe(Effect.orDie),
+      );
+      void secondRuntime;
+
+      expect(yield* readSourceRow()).toBeNull();
+      expect(yield* hasSourceCatalogData(sourceId).pipe(Effect.provide(dbLayer))).toBe(false);
     }).pipe(Effect.provide(NodeFileSystem.layer)),
     60_000,
   );

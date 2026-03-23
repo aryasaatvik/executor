@@ -3,9 +3,18 @@ import { describe, expect, it } from "@effect/vitest"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 
-import { SourceIdSchema, WorkspaceIdSchema } from "#schema"
+import {
+  SourceCatalogIdSchema,
+  SourceCatalogRevisionIdSchema,
+  SourceIdSchema,
+  WorkspaceIdSchema,
+} from "#schema"
+
+import type { SourceToIndex } from "./indexer"
 
 import {
+  listSourceLifecycles,
+  loadSourceLifecycle,
   loadSourceStatus,
   removeSource,
   syncSourceLifecycle,
@@ -17,12 +26,12 @@ import {
 const baseSource: SourceLifecycleRecord = {
   sourceId: SourceIdSchema.make("source-github"),
   workspaceId: WorkspaceIdSchema.make("workspace-1"),
-  name: "GitHub",
-  kind: "openapi",
-  endpoint: "https://api.github.com",
+  catalogId: SourceCatalogIdSchema.make("catalog-github"),
+  catalogRevisionId: SourceCatalogRevisionIdSchema.make("catalog-revision-github"),
   status: "connected",
   enabled: true,
-  namespace: "github",
+  sourceHash: "hash-github",
+  lastError: null,
   createdAt: 1,
   updatedAt: 2,
 }
@@ -80,6 +89,57 @@ describe("loadSourceStatus", () => {
   )
 })
 
+describe("loadSourceLifecycle", () => {
+  it.effect("returns the full lifecycle row when the source exists", () =>
+    Effect.gen(function* () {
+      const lifecycleRow: SourceLifecycleRecord = {
+        ...baseSource,
+        status: "error",
+        enabled: false,
+      }
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: () => ({
+              limit: () => Effect.succeed([lifecycleRow]),
+            }),
+          }),
+        }),
+      }
+
+      const result = yield* loadSourceLifecycle(
+        SourceIdSchema.make("existing-source"),
+      ).pipe(
+        Effect.provide(Layer.succeed(SqliteDrizzle, db as never)),
+      )
+
+      expect(result).toEqual(lifecycleRow)
+    }),
+  )
+})
+
+describe("listSourceLifecycles", () => {
+  it.effect("lists lifecycle rows for a workspace", () =>
+    Effect.gen(function* () {
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: () => Effect.succeed([baseSource]),
+          }),
+        }),
+      }
+
+      const result = yield* listSourceLifecycles(
+        WorkspaceIdSchema.make("workspace-1"),
+      ).pipe(
+        Effect.provide(Layer.succeed(SqliteDrizzle, db as never)),
+      )
+
+      expect(result).toEqual([baseSource])
+    }),
+  )
+})
+
 describe("upsertSourceStatus", () => {
   it.effect("inserts source status with conflict update", () =>
     Effect.gen(function* () {
@@ -100,12 +160,10 @@ describe("upsertSourceStatus", () => {
       yield* upsertSourceStatus({
         sourceId: SourceIdSchema.make("src-1"),
         workspaceId: WorkspaceIdSchema.make("ws-1"),
-        name: "Test Source",
-        kind: "mcp",
-        endpoint: "https://example.com",
+        catalogId: SourceCatalogIdSchema.make("catalog-src-1"),
+        catalogRevisionId: SourceCatalogRevisionIdSchema.make("catalog-revision-src-1"),
         status: "connected",
         enabled: true,
-        namespace: "test",
         lastError: null,
         sourceHash: "hash-abc",
         createdAt: 1000,
@@ -116,8 +174,8 @@ describe("upsertSourceStatus", () => {
 
       expect(inserted).toHaveLength(1)
       expect(inserted[0]).toMatchObject({
-        name: "Test Source",
-        kind: "mcp",
+        catalogId: "catalog-src-1",
+        catalogRevisionId: "catalog-revision-src-1",
         status: "connected",
         enabled: true,
       })

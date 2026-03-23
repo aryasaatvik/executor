@@ -20,10 +20,26 @@ const makeFakeSql = () =>
     },
   );
 
+const makeFakeDrizzle = () => ({
+  select: () => ({
+    from: () => ({
+      where: () => Effect.succeed([]),
+    }),
+  }),
+  insert: () => ({
+    values: () => ({
+      onConflictDoUpdate: () => Effect.void,
+    }),
+  }),
+  delete: () => ({
+    where: () => Effect.void,
+  }),
+});
+
 const makeFakeDbLayer = () =>
   Layer.mergeAll(
     Layer.succeed(SqlClient.SqlClient, makeFakeSql() as never),
-    Layer.succeed(SqliteDrizzle, {} as never),
+    Layer.succeed(SqliteDrizzle, makeFakeDrizzle() as never),
   );
 
 vi.mock("../db/client", () => ({
