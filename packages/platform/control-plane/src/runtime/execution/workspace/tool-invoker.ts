@@ -10,10 +10,10 @@ import {
 import type { AccountId, Source } from "#schema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { RuntimeSourceStoreService } from "../../sources/source-store";
+import { SourceStore } from "../../sources/source-store";
 
-import { RuntimeSourceAuthMaterialService } from "../../auth/source-auth-material";
-import { RuntimeSourceCatalogStoreService } from "../../catalog/source/runtime";
+import { SourceAuthMaterial } from "../../auth/source-auth-material";
+import { SourceCatalogStore } from "../../catalog/source/runtime";
 import type { RuntimeLocalWorkspaceState } from "../../local/runtime-context";
 import {
   type LocalToolRuntime,
@@ -42,11 +42,11 @@ import { runtimeEffectError } from "../../effect-errors";
 export const createWorkspaceToolInvoker = (input: {
   workspaceId: Source["workspaceId"];
   accountId: AccountId;
-  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
-  sourceStore: Effect.Effect.Success<typeof RuntimeSourceStoreService>;
+  sourceCatalogStore: Effect.Effect.Success<typeof SourceCatalogStore>;
+  sourceStore: Effect.Effect.Success<typeof SourceStore>;
   sourceCatalog: ToolCatalog;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
+  sourceAuthMaterialService: Effect.Effect.Success<typeof SourceAuthMaterial>;
   sourceAuthService: RuntimeSourceAuthService;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   localToolRuntime: LocalToolRuntime;

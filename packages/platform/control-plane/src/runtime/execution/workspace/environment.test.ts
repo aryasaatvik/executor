@@ -11,6 +11,7 @@ import {
   clearWorkspaceExecutionCachesForTests,
   createWorkspaceExecutionEnvironmentResolver,
   loadConfiguredSemanticSearchEmbedder,
+  makeWorkspaceSourceCatalogManager,
 } from "./environment";
 import {
   makeWorkspaceSourceCatalogManagerTestHandle,
@@ -409,5 +410,45 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
 
     expect(workspaceSourceCatalogManagerTest.calls.getOrRefresh).toHaveLength(2);
     expect(managedSourceCatalog.calls.close).toBe(0);
+  });
+
+  it("reuses the cached managed source catalog when the workspace signature is unchanged", async () => {
+    const acquiredCatalog = makeWorkspaceSourceCatalogManagerTestHandle();
+    const indexWorkspaceToolsIntoSqliteMock = vi.fn(() => Effect.void);
+    const acquireWorkspaceSourceCatalogMock = vi.fn(() =>
+      Effect.succeed(acquiredCatalog.managedSourceCatalog)
+    );
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const manager = yield* makeWorkspaceSourceCatalogManager({
+            indexWorkspaceToolsIntoSqlite:
+              indexWorkspaceToolsIntoSqliteMock as never,
+            acquireWorkspaceSourceCatalog:
+              acquireWorkspaceSourceCatalogMock as never,
+          });
+
+          const input = {
+            workspaceId: "workspace-1" as never,
+            accountId: "account-1" as never,
+            runtimeLocalWorkspace: {
+              context: { stateDirectory: "/tmp/executor-tests" },
+            } as never,
+            sourceCatalogStore: {} as never,
+            workspaceConfigStore: {} as never,
+            embedder: undefined,
+          };
+
+          const first = yield* manager.getOrRefresh(input);
+          const second = yield* manager.getOrRefresh(input);
+
+          expect(first).toBe(second);
+        }),
+      ),
+    );
+
+    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(1);
+    expect(acquireWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
   });
 });

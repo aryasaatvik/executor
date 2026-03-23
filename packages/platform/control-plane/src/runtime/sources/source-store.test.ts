@@ -6,10 +6,10 @@ import {
   WorkspaceIdSchema,
   type Source,
 } from "#schema";
+import type { SourceStatusRecord } from "../../db/source-state";
 
 import type { LoadedLocalExecutorConfig } from "../local/config";
 import { buildLocalSourceRecord } from "./source-store";
-import type { DbSourceStatus } from "../../db/indexer";
 
 const workspaceId = WorkspaceIdSchema.make("ws_source_store");
 const sourceId = SourceIdSchema.make("linear");
@@ -36,7 +36,7 @@ const loadedConfig: LoadedLocalExecutorConfig = {
   projectConfigPath: "/tmp/project-config.jsonc",
 };
 
-const sourceStatus: DbSourceStatus = {
+const sourceStatus: SourceStatusRecord = {
   status: "connected",
   lastError: null,
   sourceHash: "hash_linear",

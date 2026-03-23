@@ -12,14 +12,14 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { submitExecutionInteractionResponse } from "../execution/service";
-import { LiveExecutionManagerService } from "../execution/live";
+import { ExecutionManager } from "../execution/live";
 import {
   operationErrors,
 } from "../policy/operation-errors";
 import { resolveLocalWorkspaceContext } from "./config";
 import { InstallationStore, LocalInstallationStore } from "./storage";
 import { getRuntimeLocalWorkspaceOption } from "./runtime-context";
-import { RuntimeSourceAuthServiceTag } from "../sources/source-auth-service";
+import { SourceAuthService } from "../sources/source-auth-service";
 import {
   createSourceCredentialSelectionBearerContent,
   createSourceCredentialSelectionNoneContent,
@@ -125,7 +125,7 @@ const loadSourceCredentialInteraction = (input: {
 }) =>
   Effect.gen(function* () {
     const store = yield* ControlPlaneStore;
-    const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+    const sourceAuthService = yield* SourceAuthService;
 
     const stored = yield* store.executionInteractions.getById(input.interactionId).pipe(
       Effect.mapError((error) =>
@@ -228,7 +228,7 @@ export const submitSourceCredentialInteraction = (input: {
         );
     }
 
-    const liveExecutionManager = yield* LiveExecutionManagerService;
+    const liveExecutionManager = yield* ExecutionManager;
 
     if (input.action === "cancel") {
       const resumed = yield* liveExecutionManager.resolveInteraction({
@@ -316,7 +316,7 @@ export const submitSourceCredentialInteraction = (input: {
         );
     }
 
-    const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+    const sourceAuthService = yield* SourceAuthService;
     const tokenRef = yield* sourceAuthService.storeSecretMaterial({
       purpose: "auth_material",
       value: token,
@@ -376,7 +376,7 @@ export const completeSourceCredentialSetup = (input: {
   errorDescription?: string | null;
 }) =>
   Effect.gen(function* () {
-    const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+    const sourceAuthService = yield* SourceAuthService;
 
     return yield* sourceAuthService.completeSourceCredentialSetup(input).pipe(
       Effect.mapError((error) =>
