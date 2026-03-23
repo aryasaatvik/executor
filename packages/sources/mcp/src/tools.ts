@@ -51,6 +51,7 @@ export type McpClientLike = {
 export type McpConnection = {
   client: McpClientLike;
   close?: () => Promise<void>;
+  invalidate?: () => Promise<void>;
 };
 
 export type McpConnector = Effect.Effect<McpConnection, unknown, never>;
@@ -64,7 +65,7 @@ export type McpDiscoveryElicitationContext = {
   invocation?: ToolInvocationContext;
 };
 
-type McpDiscoveryStage = "connect" | "list_tools" | "call_tool";
+type McpDiscoveryStage = "connect" | "list_tools" | "manifest" | "call_tool";
 
 export class McpToolsError extends Data.TaggedError("McpToolsError")<{
   stage: McpDiscoveryStage;
@@ -101,14 +102,15 @@ const inputSchemaFromManifest = (inputSchema: unknown) => {
     return unknownInputSchema;
   }
 
-  try {
-    return standardSchemaFromJsonSchema(inputSchema, {
-      vendor: "mcp",
-      fallback: unknownInputSchema,
-    });
-  } catch {
-    return unknownInputSchema;
+  const schema = standardSchemaFromJsonSchema(inputSchema, {
+    vendor: "mcp",
+    fallback: unknownInputSchema,
+  });
+  if (schema === unknownInputSchema) {
+    throw new Error("Invalid MCP tool input schema");
   }
+
+  return schema;
 };
 
 const closeConnection = (connection: McpConnection): Effect.Effect<void> =>
@@ -116,6 +118,22 @@ const closeConnection = (connection: McpConnection): Effect.Effect<void> =>
     try: () => connection.close?.() ?? Promise.resolve(),
     catch: (cause) =>
       cause instanceof Error ? cause : new Error(String(cause ?? "mcp connection close failed")),
+  }).pipe(
+    Effect.asVoid,
+    Effect.catchAll(() => Effect.void),
+  );
+
+const shouldInvalidateConnection = (cause: unknown): boolean => {
+  const details = causeText(cause);
+  return /404|session not found|disconnect|closed|econnreset|epipe|terminated/i.test(
+    details,
+  );
+};
+
+const invalidateConnection = (connection: McpConnection): Effect.Effect<void> =>
+  Effect.tryPromise({
+    try: () => connection.invalidate?.() ?? Promise.resolve(),
+    catch: () => Promise.resolve(),
   }).pipe(
     Effect.asVoid,
     Effect.catchAll(() => Effect.void),
@@ -223,11 +241,15 @@ const installMcpElicitationHandler = (input: {
                 return Effect.fail(error);
               }
 
-              console.error(
-                `[mcp-tools] elicitation failed for ${input.toolName}, treating as cancel:`,
-                error instanceof Error ? error.message : String(error),
+              return Effect.fail(
+                error instanceof McpToolsError
+                  ? error
+                  : new McpToolsError({
+                      stage: "call_tool",
+                      message: `Failed resolving elicitation for ${input.toolName}`,
+                      details: toDetails(error),
+                    }),
               );
-              return Effect.succeed({ action: "cancel" as const });
             }),
           ),
         );
@@ -367,6 +389,10 @@ const runMcpListToolsEffect = (input: {
         continue;
       }
 
+      if (shouldInvalidateConnection(attempt.left)) {
+        yield* invalidateConnection(input.connection);
+      }
+
       return yield* new McpToolsError({
           stage: "list_tools",
           message: "Failed listing MCP tools",
@@ -433,6 +459,10 @@ const runMcpToolCallEffect = (input: {
         continue;
       }
 
+      if (shouldInvalidateConnection(attempt.left)) {
+        yield* invalidateConnection(input.connection);
+      }
+
       return yield* new McpToolsError({
           stage: "call_tool",
           message: `Failed invoking MCP tool: ${input.toolName}`,
@@ -488,9 +518,7 @@ export const createMcpToolsFromManifest = (input: {
                       executionContext,
                     });
 
-                    return executionContext?.onElicitation
-                      ? withElicitationClientLock(connection.client, callEffect)
-                      : callEffect;
+                    return withElicitationClientLock(connection.client, callEffect);
                   },
                 }),
               );
@@ -535,10 +563,10 @@ export const discoverMcpToolsFromConnector = (input: {
           connection,
           mcpDiscoveryElicitation: input.mcpDiscoveryElicitation,
         });
-
-        const settledListEffect = input.mcpDiscoveryElicitation
-          ? withElicitationClientLock(connection.client, listEffect)
-          : listEffect;
+        const settledListEffect = withElicitationClientLock(
+          connection.client,
+          listEffect,
+        );
 
         return Effect.map(settledListEffect, (listed) => ({
           listed,
@@ -557,15 +585,25 @@ export const discoverMcpToolsFromConnector = (input: {
         instructions: listed.instructions,
       },
     );
+    const tools = yield* Effect.try({
+      try: () =>
+        createMcpToolsFromManifest({
+          manifest,
+          connect: input.connect,
+          namespace: input.namespace,
+          sourceKey: input.sourceKey,
+        }),
+      catch: (cause) =>
+        new McpToolsError({
+          stage: "manifest",
+          message: "Failed building MCP tools from manifest",
+          details: toDetails(cause),
+        }),
+    });
 
     return {
       manifest,
-      tools: createMcpToolsFromManifest({
-        manifest,
-        connect: input.connect,
-        namespace: input.namespace,
-        sourceKey: input.sourceKey,
-      }),
+      tools,
     };
   });
 

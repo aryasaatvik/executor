@@ -1,8 +1,11 @@
 export {
   clearAllMcpConnectionPools,
   clearMcpConnectionPoolRun,
+  clearMcpConnectionPoolSession,
   createPooledMcpConnector,
+  MCP_SESSION_IDLE_TTL_MS,
   McpConnectionPoolError,
+  sweepIdleMcpConnectionPools,
 } from "./connection-pool";
 export {
   createSdkMcpConnector,

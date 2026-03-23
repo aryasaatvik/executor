@@ -22,6 +22,7 @@ import { createSdkMcpConnector } from "./connection";
 import { detectMcpSource } from "./discovery";
 import {
   McpToolsError,
+  type McpClientLike,
   discoverMcpToolsFromConnector,
   extractMcpToolManifestFromListToolsResult,
 } from "./tools";
@@ -698,13 +699,15 @@ describe("codemode-mcp", () => {
       expect(unauthenticated?.detectedKind).toBe("mcp");
       expect(unauthenticated?.authInference.suggestedKind).toBe("oauth2");
 
-      const explicitHeader = yield* detectMcpSource({
-        normalizedUrl: oauthServer.endpoint,
-        headers: {
-          Authorization: "Bearer wrong-token",
-        },
-      });
-      expect(explicitHeader).toBeNull();
+      const explicitHeader = yield* Effect.either(
+        detectMcpSource({
+          normalizedUrl: oauthServer.endpoint,
+          headers: {
+            Authorization: "Bearer wrong-token",
+          },
+        }),
+      );
+      assertTrue(Either.isLeft(explicitHeader));
     }),
   );
 
@@ -728,6 +731,41 @@ describe("codemode-mcp", () => {
       assertTrue(Either.isLeft(outcome));
       assertInstanceOf(outcome.left, McpToolsError);
       expect(outcome.left.stage).toBe("list_tools");
+    }),
+  );
+
+  it.effect("returns typed errors when an MCP manifest has an invalid input schema", () =>
+    Effect.gen(function* () {
+      const outcome = yield* Effect.either(
+        discoverMcpToolsFromConnector({
+          connect: Effect.succeed({
+            client: {
+              listTools: async () => ({
+                tools: [
+                  {
+                    name: "Echo",
+                    description: "Echo payload",
+                    inputSchema: {
+                      type: "object",
+                      properties: {
+                        value: {
+                          type: "not-a-real-type",
+                        },
+                      },
+                    },
+                  },
+                ],
+              }),
+              callTool: async () => ({ ok: true }),
+            },
+            close: async () => undefined,
+          }),
+        }),
+      );
+
+      assertTrue(Either.isLeft(outcome));
+      assertInstanceOf(outcome.left, McpToolsError);
+      expect(outcome.left.stage).toBe("manifest");
     }),
   );
 
@@ -793,6 +831,74 @@ describe("codemode-mcp", () => {
       expect(attempts).toBe(2);
       expect(elicitationMessages).toEqual(["Authorize tool discovery"]);
       expect(Object.keys(discovered.tools)).toEqual(["source.mcp.echo"]);
+    }),
+  );
+
+  it.effect("surfaces elicitation callback failures during discovery", () =>
+    Effect.gen(function* () {
+      let requestHandler:
+        | ((request: { params: unknown }) => Promise<unknown>)
+        | undefined;
+
+      const outcome = yield* Effect.either(
+        discoverMcpToolsFromConnector({
+          connect: Effect.succeed({
+            client: {
+              setRequestHandler: (
+                _schema: unknown,
+                handler: NonNullable<
+                  McpClientLike & {
+                    setRequestHandler: (
+                      schema: unknown,
+                      handler: (request: { params: unknown }) => Promise<unknown>,
+                    ) => void;
+                  }
+                >["setRequestHandler"] extends (
+                  schema: unknown,
+                  handler: infer THandler,
+                ) => void
+                  ? THandler
+                  : never,
+              ) => {
+                requestHandler = handler;
+              },
+              listTools: async () => {
+                if (!requestHandler) {
+                  throw new Error("missing request handler");
+                }
+
+                await requestHandler({
+                  params: {
+                    mode: "form",
+                    message: "Authorize discovery",
+                    requestedSchema: {},
+                  },
+                });
+
+                return { tools: [] };
+              },
+              callTool: async () => ({ ok: true }),
+            },
+            close: async () => undefined,
+          }),
+          namespace: "source.mcp",
+          sourceKey: "mcp.discovery",
+          mcpDiscoveryElicitation: {
+            onElicitation: () => Effect.fail(new Error("elicitation callback failed")),
+            path: "executor.sources.add" as ToolPath,
+            sourceKey: "executor",
+            args: {
+              endpoint: "https://example.com/mcp",
+            },
+          },
+        }),
+      );
+
+      assertTrue(Either.isLeft(outcome));
+      assertInstanceOf(outcome.left, McpToolsError);
+      expect(outcome.left.stage).toBe("list_tools");
+      expect(outcome.left.message).toContain("Failed listing MCP tools");
+      expect(outcome.left.details).toContain("Failed resolving elicitation");
     }),
   );
 });

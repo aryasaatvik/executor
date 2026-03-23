@@ -241,8 +241,6 @@ export const createSdkMcpConnector = (
       return yield* connectSse;
     }
 
-    return yield* connectStreamableHttp.pipe(
-      Effect.catchAll(() => connectSse),
-    );
+    return yield* connectStreamableHttp;
   });
 };

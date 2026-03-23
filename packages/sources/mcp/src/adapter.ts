@@ -496,6 +496,15 @@ export const mcpSourceAdapter = {
         })) as McpExecutableBinding;
 
         const bindingConfig = yield* mcpBindingConfigFromSource(input.source);
+        const executionSessionId =
+          typeof input.context?.executionSessionId === "string"
+          && input.context.executionSessionId.length > 0
+            ? input.context.executionSessionId
+            : undefined;
+        const actorAccountId =
+          typeof input.context?.actor === "string" && input.context.actor.length > 0
+            ? input.context.actor
+            : undefined;
         const connector = createPooledMcpConnector({
           connect: createSdkMcpConnector({
             endpoint: input.source.endpoint,
@@ -518,6 +527,14 @@ export const mcpSourceAdapter = {
           runId:
             typeof input.context?.runId === "string" && input.context.runId.length > 0
               ? input.context.runId
+              : undefined,
+          sessionOwner:
+            executionSessionId && actorAccountId
+              ? {
+                  workspaceId: input.source.workspaceId,
+                  accountId: actorAccountId,
+                  executionSessionId,
+                }
               : undefined,
           sourceKey: input.source.id,
         });
