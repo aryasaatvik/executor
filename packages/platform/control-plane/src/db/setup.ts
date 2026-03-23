@@ -35,6 +35,8 @@ const runSetup = (options?: {
   jsonPaths?: {
     controlPlaneStatePath: string
     workspaceStatePath: string
+    artifactsDirectory?: string
+    workspaceId?: string
   }
   embeddingDimensions?: number
   loadSqliteVecExtension?: typeof loadSqliteVecExtension
@@ -72,7 +74,12 @@ const runSetup = (options?: {
   // JSON → SQLite one-time migration
   // -----------------------------------------------------------------------
   if (options?.jsonPaths) {
-    yield* migrateJsonToSqlite(options.jsonPaths)
+    yield* migrateJsonToSqlite({
+      controlPlaneStatePath: options.jsonPaths.controlPlaneStatePath,
+      workspaceStatePath: options.jsonPaths.workspaceStatePath,
+      artifactsDirectory: options.jsonPaths.artifactsDirectory,
+      workspaceId: options.jsonPaths.workspaceId,
+    })
   }
 })
 
@@ -110,6 +117,8 @@ export const makeWorkspaceCatalogDbLayer = (
     jsonPaths?: {
       controlPlaneStatePath: string
       workspaceStatePath: string
+      artifactsDirectory?: string
+      workspaceId?: string
     }
     embeddingDimensions?: number
     loadSqliteVecExtension?: typeof loadSqliteVecExtension
