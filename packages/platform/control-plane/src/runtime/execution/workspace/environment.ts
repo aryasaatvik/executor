@@ -1,7 +1,3 @@
-import {
-  createToolCatalogFromTools,
-  makeToolInvokerFromTools,
-} from "@executor/codemode-core";
 import { createHash } from "node:crypto";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -17,7 +13,8 @@ import {
 } from "../runtime";
 import { createWorkspaceToolInvoker } from "./tool-invoker";
 import {
-  createWorkspaceSourceCatalog,
+  acquireWorkspaceSourceCatalog,
+  type ManagedWorkspaceSourceCatalog,
   indexWorkspaceToolsIntoSqlite,
 } from "./source-catalog";
 import {
@@ -29,6 +26,7 @@ import {
 import { RuntimeSourceAuthMaterialService } from "../../auth/source-auth-material";
 import {
   getRuntimeLocalWorkspaceOption,
+  type RuntimeLocalWorkspaceState,
 } from "../../local/runtime-context";
 import {
   SecretMaterialResolverService,
@@ -37,7 +35,6 @@ import {
 import {
   LocalToolRuntimeLoaderService,
   type LocalToolRuntimeLoaderShape,
-  type LocalToolRuntime,
 } from "../../local/tools";
 import {
   SourceArtifactStore,
@@ -48,19 +45,12 @@ import {
   type WorkspaceStateStoreShape,
 } from "../../local/storage";
 import { createEmbedder, type Embedder } from "../../../db/embedder";
-import type { LocalExecutorConfig, SecretRef } from "#schema";
+import type { AccountId, LocalExecutorConfig, SecretRef, Source } from "#schema";
 import type { LocalWorkspaceState } from "../../local/workspace-state";
 export {
   createCodeExecutorForRuntime,
   resolveConfiguredExecutionRuntime,
 } from "../runtime";
-
-const createEmptyLocalToolRuntime = (): LocalToolRuntime => ({
-  tools: {},
-  catalog: createToolCatalogFromTools({ tools: {} }),
-  toolInvoker: makeToolInvokerFromTools({ tools: {} }),
-  toolPaths: new Set<string>(),
-});
 
 const semanticSearchEmbedderCache = new Map<
   string,
@@ -69,15 +59,40 @@ const semanticSearchEmbedderCache = new Map<
 
 type WorkspaceCatalogCacheEntry = {
   indexSignature: string
-  sourceCatalog: ReturnType<typeof createWorkspaceSourceCatalog>
+  managedSourceCatalog: ManagedWorkspaceSourceCatalog
 }
-
-const workspaceCatalogCache = new Map<string, WorkspaceCatalogCacheEntry>()
 
 type SemanticSearchConfig = NonNullable<LocalExecutorConfig["semanticSearch"]>
 type ResolvedSemanticSearchConfig = Omit<SemanticSearchConfig, "apiKeyRef"> & {
   apiKey?: string
 }
+
+type WorkspaceSourceCatalogManager = {
+  getOrRefresh: (input: {
+    workspaceId: Source["workspaceId"]
+    accountId: AccountId
+    runtimeLocalWorkspace: RuntimeLocalWorkspaceState
+    workspaceState: LocalWorkspaceState
+    sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>
+    workspaceConfigStore: WorkspaceConfigStoreShape
+    workspaceStateStore: WorkspaceStateStoreShape
+    sourceArtifactStore: SourceArtifactStoreShape
+    embedder?: Embedder
+  }) => Effect.Effect<ManagedWorkspaceSourceCatalog, unknown, never>
+  clear: Effect.Effect<void, never, never>
+}
+
+type WorkspaceEnvironmentDependencies = {
+  createEmbedder?: typeof createEmbedder;
+  loadConfiguredSemanticSearchEmbedder?: typeof loadConfiguredSemanticSearchEmbedder;
+  getRuntimeLocalWorkspaceOption?: typeof getRuntimeLocalWorkspaceOption;
+  workspaceSourceCatalogManager?: WorkspaceSourceCatalogManager;
+  createWorkspaceToolInvoker?: typeof createWorkspaceToolInvoker;
+}
+
+export class WorkspaceSourceCatalogManagerService extends Context.Tag(
+  "#runtime/WorkspaceSourceCatalogManagerService",
+)<WorkspaceSourceCatalogManagerService, WorkspaceSourceCatalogManager>() {}
 
 const semanticSearchEmbedderCacheKey = (
   config: ResolvedSemanticSearchConfig,
@@ -154,6 +169,7 @@ const resolveConfiguredSemanticSearchConfig = (
 
 const getCachedSemanticSearchEmbedder = (
   config: ResolvedSemanticSearchConfig,
+  createEmbedderImpl: typeof createEmbedder,
 ): Promise<Embedder | undefined> => {
   const cacheKey = semanticSearchEmbedderCacheKey(config)
   const existing = semanticSearchEmbedderCache.get(cacheKey)
@@ -161,7 +177,7 @@ const getCachedSemanticSearchEmbedder = (
     return existing
   }
 
-  const pending = createEmbedder(config).then(async (embedder) => {
+  const pending = createEmbedderImpl(config).then(async (embedder) => {
     if (!embedder) {
       return undefined
     }
@@ -187,7 +203,6 @@ export const clearSemanticSearchEmbedderCacheForTests = (): void => {
 
 export const clearWorkspaceExecutionCachesForTests = (): void => {
   semanticSearchEmbedderCache.clear()
-  workspaceCatalogCache.clear()
 }
 
 const workspaceCatalogCacheKey = (input: {
@@ -202,7 +217,7 @@ const workspaceCatalogIndexSignature = (input: {
   embedder?: Embedder
 }): string =>
   JSON.stringify({
-    semanticSearchSignature: input.workspaceState.catalog?.semanticSearchSignature ?? null,
+    semanticSearchSignature: input.workspaceState.catalog.semanticSearchSignature,
     embedder: input.embedder
       ? {
           provider: input.embedder.provider,
@@ -223,6 +238,9 @@ const workspaceCatalogIndexSignature = (input: {
 export const loadConfiguredSemanticSearchEmbedder = (
   resolveSecretMaterial: ResolveSecretMaterial,
   config: LocalExecutorConfig | null | undefined,
+  options?: {
+    createEmbedder?: typeof createEmbedder
+  },
 ): Effect.Effect<Embedder | undefined, unknown, never> =>
   Effect.flatMap(
     resolveConfiguredSemanticSearchConfig(resolveSecretMaterial, config),
@@ -232,7 +250,11 @@ export const loadConfiguredSemanticSearchEmbedder = (
       }
 
       return Effect.tryPromise({
-        try: () => getCachedSemanticSearchEmbedder(semanticSearchConfig),
+        try: () =>
+          getCachedSemanticSearchEmbedder(
+            semanticSearchConfig,
+            options?.createEmbedder ?? createEmbedder,
+          ),
         catch: (cause) =>
           cause instanceof Error ? cause : new Error(String(cause)),
       }).pipe(
@@ -240,6 +262,89 @@ export const loadConfiguredSemanticSearchEmbedder = (
       )
     },
   )
+
+const closeWorkspaceCatalogCache = (
+  cache: Map<string, WorkspaceCatalogCacheEntry>,
+): Effect.Effect<void, never, never> =>
+  Effect.forEach(
+    [...cache.values()],
+    (entry) => entry.managedSourceCatalog.close,
+    { discard: true },
+  ).pipe(
+    Effect.zipRight(Effect.sync(() => {
+      cache.clear()
+    })),
+    Effect.ignore,
+  )
+
+const makeWorkspaceSourceCatalogManager = (dependencies: {
+  indexWorkspaceToolsIntoSqlite?: typeof indexWorkspaceToolsIntoSqlite
+  acquireWorkspaceSourceCatalog?: typeof acquireWorkspaceSourceCatalog
+} = {}) =>
+  Effect.gen(function* () {
+    const cache = new Map<string, WorkspaceCatalogCacheEntry>()
+    yield* Effect.addFinalizer(() => closeWorkspaceCatalogCache(cache))
+
+    const indexWorkspaceToolsIntoSqliteImpl =
+      dependencies.indexWorkspaceToolsIntoSqlite ?? indexWorkspaceToolsIntoSqlite
+    const acquireWorkspaceSourceCatalogImpl =
+      dependencies.acquireWorkspaceSourceCatalog ?? acquireWorkspaceSourceCatalog
+
+    return {
+      getOrRefresh: (input) =>
+        Effect.gen(function* () {
+          const cacheKey = workspaceCatalogCacheKey({
+            stateDirectory: input.runtimeLocalWorkspace.context.stateDirectory,
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+          })
+          const nextIndexSignature = workspaceCatalogIndexSignature({
+            workspaceState: input.workspaceState,
+            embedder: input.embedder,
+          })
+          const cached = cache.get(cacheKey)
+
+          if (cached?.indexSignature === nextIndexSignature) {
+            return cached.managedSourceCatalog
+          }
+
+          if (cached) {
+            cache.delete(cacheKey)
+            yield* cached.managedSourceCatalog.close
+          }
+
+          yield* indexWorkspaceToolsIntoSqliteImpl({
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            sourceCatalogStore: input.sourceCatalogStore,
+            workspaceConfigStore: input.workspaceConfigStore,
+            workspaceStateStore: input.workspaceStateStore,
+            sourceArtifactStore: input.sourceArtifactStore,
+            runtimeLocalWorkspace: input.runtimeLocalWorkspace,
+            embedder: input.embedder,
+          })
+
+          const managedSourceCatalog = yield* acquireWorkspaceSourceCatalogImpl({
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            sourceCatalogStore: input.sourceCatalogStore,
+            workspaceConfigStore: input.workspaceConfigStore,
+            workspaceStateStore: input.workspaceStateStore,
+            sourceArtifactStore: input.sourceArtifactStore,
+            runtimeLocalWorkspace: input.runtimeLocalWorkspace,
+            embedder: input.embedder,
+          })
+
+          cache.set(cacheKey, {
+            indexSignature: nextIndexSignature,
+            managedSourceCatalog,
+          })
+
+          return managedSourceCatalog
+        }),
+      clear: closeWorkspaceCatalogCache(cache),
+    } satisfies WorkspaceSourceCatalogManager
+  })
 
 export const createWorkspaceExecutionEnvironmentResolver = (input: {
   resolveSecretMaterial: ResolveSecretMaterial;
@@ -250,108 +355,62 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
   workspaceConfigStore: WorkspaceConfigStoreShape;
   workspaceStateStore: WorkspaceStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
+  dependencies?: WorkspaceEnvironmentDependencies;
 }): ResolveExecutionEnvironment =>
   ({ workspaceId, accountId, onElicitation }) =>
     Effect.gen(function* () {
-      const runtimeLocalWorkspace = yield* getRuntimeLocalWorkspaceOption();
-      const loadedConfig =
-        runtimeLocalWorkspace === null
-          ? null
-          : yield* input.workspaceConfigStore.load(runtimeLocalWorkspace.context);
-      const loadedWorkspaceState =
-        runtimeLocalWorkspace === null
-          ? null
-          : yield* input.workspaceStateStore.load(runtimeLocalWorkspace.context);
-      const localToolRuntime =
-        runtimeLocalWorkspace === null
-          ? createEmptyLocalToolRuntime()
-          : yield* input.localToolRuntimeLoader.load(runtimeLocalWorkspace.context);
-      const embedder = yield* loadConfiguredSemanticSearchEmbedder(
+      const dependencies = {
+        createEmbedder,
+        loadConfiguredSemanticSearchEmbedder,
+        getRuntimeLocalWorkspaceOption,
+        createWorkspaceToolInvoker,
+        ...input.dependencies,
+      };
+      const runtimeLocalWorkspace = yield* dependencies.getRuntimeLocalWorkspaceOption();
+      if (runtimeLocalWorkspace === null) {
+        return yield* Effect.fail(
+          new Error(
+            "Runtime local workspace is required for execution environment resolution.",
+          ),
+        );
+      }
+      const loadedConfig = yield* input.workspaceConfigStore.load(
+        runtimeLocalWorkspace.context,
+      );
+      const loadedWorkspaceState = yield* input.workspaceStateStore.load(
+        runtimeLocalWorkspace.context,
+      );
+      const localToolRuntime = yield* input.localToolRuntimeLoader.load(
+        runtimeLocalWorkspace.context,
+      );
+      const embedder = yield* dependencies.loadConfiguredSemanticSearchEmbedder(
         input.resolveSecretMaterial,
         loadedConfig?.config,
+        {
+          createEmbedder: dependencies.createEmbedder,
+        },
       );
-      const cachedWorkspaceCatalog =
-        runtimeLocalWorkspace === null || loadedWorkspaceState === null
-          ? undefined
-          : workspaceCatalogCache.get(
-              workspaceCatalogCacheKey({
-                stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
-                workspaceId,
-                accountId,
-              }),
-            );
-      const nextWorkspaceCatalogSignature =
-        runtimeLocalWorkspace === null || loadedWorkspaceState === null
-          ? null
-          : workspaceCatalogIndexSignature({
-              workspaceState: loadedWorkspaceState,
-              embedder,
-            });
-      const canReuseCachedSqliteCatalog =
-        cachedWorkspaceCatalog?.indexSignature === nextWorkspaceCatalogSignature;
-      if (runtimeLocalWorkspace !== null && !canReuseCachedSqliteCatalog) {
-        yield* indexWorkspaceToolsIntoSqlite({
+      if (!dependencies.workspaceSourceCatalogManager) {
+        return yield* Effect.dieMessage(
+          "WorkspaceSourceCatalogManager is required for local workspace resolution.",
+        )
+      }
+      const managedSourceCatalog =
+        yield* dependencies.workspaceSourceCatalogManager.getOrRefresh({
           workspaceId,
           accountId,
+          runtimeLocalWorkspace,
+          workspaceState: loadedWorkspaceState,
           sourceCatalogStore: input.sourceCatalogStore,
           workspaceConfigStore: input.workspaceConfigStore,
           workspaceStateStore: input.workspaceStateStore,
           sourceArtifactStore: input.sourceArtifactStore,
-          runtimeLocalWorkspace,
           embedder,
-        });
-      }
-      const sourceCatalog =
-        runtimeLocalWorkspace === null
-          ? createWorkspaceSourceCatalog({
-              workspaceId,
-              accountId,
-              sourceCatalogStore: input.sourceCatalogStore,
-              workspaceConfigStore: input.workspaceConfigStore,
-              workspaceStateStore: input.workspaceStateStore,
-              sourceArtifactStore: input.sourceArtifactStore,
-              runtimeLocalWorkspace,
-              embedder,
-            })
-          : canReuseCachedSqliteCatalog
-            ? cachedWorkspaceCatalog.sourceCatalog
-            : createWorkspaceSourceCatalog({
-                workspaceId,
-                accountId,
-                sourceCatalogStore: input.sourceCatalogStore,
-                workspaceConfigStore: input.workspaceConfigStore,
-                workspaceStateStore: input.workspaceStateStore,
-                sourceArtifactStore: input.sourceArtifactStore,
-                runtimeLocalWorkspace,
-                embedder,
-              });
+        })
 
-      if (
-        runtimeLocalWorkspace !== null &&
-        nextWorkspaceCatalogSignature !== null
-      ) {
-        workspaceCatalogCache.set(
-          workspaceCatalogCacheKey({
-            stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
-            workspaceId,
-            accountId,
-          }),
-          {
-            indexSignature: nextWorkspaceCatalogSignature,
-            sourceCatalog,
-          },
-        );
-      } else if (runtimeLocalWorkspace !== null) {
-        workspaceCatalogCache.delete(
-          workspaceCatalogCacheKey({
-            stateDirectory: runtimeLocalWorkspace.context.stateDirectory,
-            workspaceId,
-            accountId,
-          }),
-        );
-      }
+      const sourceCatalog = managedSourceCatalog.catalog
 
-      const { catalog, toolInvoker } = createWorkspaceToolInvoker({
+      const { catalog, toolInvoker } = dependencies.createWorkspaceToolInvoker({
         workspaceId,
         accountId,
         sourceCatalogStore: input.sourceCatalogStore,
@@ -403,6 +462,8 @@ export const RuntimeExecutionResolverLive = (
           const workspaceConfigStore = yield* WorkspaceConfigStore;
           const workspaceStateStore = yield* WorkspaceStateStore;
           const sourceArtifactStore = yield* SourceArtifactStore;
+          const workspaceSourceCatalogManager =
+            yield* WorkspaceSourceCatalogManagerService;
 
           return createWorkspaceExecutionEnvironmentResolver({
             resolveSecretMaterial,
@@ -413,6 +474,16 @@ export const RuntimeExecutionResolverLive = (
             workspaceConfigStore,
             workspaceStateStore,
             sourceArtifactStore,
+            dependencies: {
+              workspaceSourceCatalogManager,
+            },
           });
         }),
+      ).pipe(
+        Layer.provideMerge(
+          Layer.scoped(
+            WorkspaceSourceCatalogManagerService,
+            makeWorkspaceSourceCatalogManager(),
+          ),
+        ),
       );

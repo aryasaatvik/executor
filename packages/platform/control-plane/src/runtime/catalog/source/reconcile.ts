@@ -52,9 +52,7 @@ export const reconcileMissingSourceCatalogArtifacts = (input: {
       yield* sourceCatalogSync.sync({
         source,
         actorAccountId: input.actorAccountId,
-      }).pipe(
-        Effect.catchAll(() => Effect.void),
-      );
+      });
     }
   }).pipe(
     Effect.withSpan("source.catalog.reconcile_missing", {

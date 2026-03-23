@@ -1,8 +1,12 @@
 import type {
   ToolCatalog,
 } from "@executor/codemode-core";
-import type { AccountId, Source } from "#schema";
+import type { AccountId, Source, SourceId } from "#schema";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 
 import {
   RuntimeSourceCatalogStoreService,
@@ -17,8 +21,14 @@ import {
   type WorkspaceStorageServices,
 } from "../../local/storage";
 import { provideRuntimeLocalWorkspace } from "./local";
-import { createSqliteToolCatalog } from "../../../db/catalog";
-import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+import {
+  SqliteToolCatalogLive,
+  SqliteToolCatalogService,
+} from "../../../db/catalog";
+import {
+  makeWorkspaceCatalogDbLayer,
+  makeWorkspaceCatalogQueryDbLayer,
+} from "../../../db/setup";
 import {
   indexSource,
   removeSourceTools,
@@ -30,6 +40,28 @@ import { embedSourceTools, removeSourceEmbeddings } from "../../../db/embed-inde
 import { catalog_tool } from "../../../db/schema";
 import { join } from "node:path";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
+
+type SourceCatalogDependencies = {
+  makeSqliteToolCatalogLive?: typeof SqliteToolCatalogLive;
+  makeWorkspaceCatalogDbLayer?: typeof makeWorkspaceCatalogDbLayer;
+  makeWorkspaceCatalogQueryDbLayer?: typeof makeWorkspaceCatalogQueryDbLayer;
+  indexSource?: typeof indexSource;
+  removeSourceTools?: typeof removeSourceTools;
+  syncSourceLifecycle?: typeof syncSourceLifecycle;
+  embedSourceTools?: typeof embedSourceTools;
+  removeSourceEmbeddings?: typeof removeSourceEmbeddings;
+};
+
+const defaultSourceCatalogDependencies: Required<SourceCatalogDependencies> = {
+  makeSqliteToolCatalogLive: SqliteToolCatalogLive,
+  makeWorkspaceCatalogDbLayer,
+  makeWorkspaceCatalogQueryDbLayer,
+  indexSource,
+  removeSourceTools,
+  syncSourceLifecycle,
+  embedSourceTools,
+  removeSourceEmbeddings,
+};
 
 // ---------------------------------------------------------------------------
 // DB path resolution
@@ -101,6 +133,11 @@ const semanticSearchSignature = (
     })
     : null;
 
+export type ManagedWorkspaceSourceCatalog = {
+  catalog: ToolCatalog;
+  close: Effect.Effect<void, never, never>;
+};
+
 // ---------------------------------------------------------------------------
 // Existing helper: load tools from JSON artifacts (kept for indexing + invocation)
 // ---------------------------------------------------------------------------
@@ -169,7 +206,12 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   embedder?: Embedder;
+  dependencies?: SourceCatalogDependencies;
 }): Effect.Effect<void, unknown, never> => {
+  const dependencies = {
+    ...defaultSourceCatalogDependencies,
+    ...input.dependencies,
+  };
   const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
   if (!dbPath) {
     return Effect.fail(new Error("Workspace catalog DB path is unavailable."));
@@ -180,7 +222,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     workspaceStateStore: input.workspaceStateStore,
     sourceArtifactStore: input.sourceArtifactStore,
   });
-  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
+  const dbLayer = dependencies.makeWorkspaceCatalogDbLayer(dbPath, {
     ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
   });
 
@@ -190,12 +232,12 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
     includeSchemas: true,
   }).pipe(
     Effect.flatMap((allTools) => {
-      const activeSourceIds = new Set<string>();
+      const activeSourceIds = new Set<SourceId>();
       const nextSemanticSearchSignature = semanticSearchSignature(input.embedder);
 
       // Group tools by source for indexing
-      const toolsBySource = new Map<string, {
-        sourceId: string;
+      const toolsBySource = new Map<SourceId, {
+        sourceId: SourceId;
         sourceKey: string;
         source: SourceToIndex;
         tools: ToolToIndex[];
@@ -223,13 +265,13 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
           input.runtimeLocalWorkspace.context,
         );
         const previousSemanticSearchSignature =
-          workspaceState.catalog?.semanticSearchSignature ?? null;
+          workspaceState.catalog.semanticSearchSignature;
         const shouldRebuildEmbeddings =
           previousSemanticSearchSignature !== nextSemanticSearchSignature;
         const indexedSources = yield* db
           .selectDistinct({
-            sourceId: catalog_tool.source_id,
-            sourceKey: catalog_tool.source_key,
+            sourceId: catalog_tool.sourceId,
+            sourceKey: catalog_tool.sourceKey,
           })
           .from(catalog_tool);
 
@@ -238,8 +280,8 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
             continue;
           }
 
-          yield* removeSourceTools(indexedSource.sourceId);
-          yield* removeSourceEmbeddings(indexedSource.sourceKey);
+          yield* dependencies.removeSourceTools(indexedSource.sourceId);
+          yield* dependencies.removeSourceEmbeddings(indexedSource.sourceKey);
         }
 
         yield* Effect.forEach(
@@ -247,14 +289,14 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
           (group) =>
             Effect.gen(function* () {
               if (!group.source.enabled || group.source.status !== "connected") {
-                yield* syncSourceLifecycle({
+                yield* dependencies.syncSourceLifecycle({
                   sourceId: group.sourceId,
                   source: group.source,
                 });
                 return;
               }
 
-              const result = yield* indexSource({
+              const result = yield* dependencies.indexSource({
                 sourceId: group.sourceId,
                 sourceKey: group.sourceKey,
                 source: group.source,
@@ -266,7 +308,7 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
                 : result.changedTools;
 
               if (input.embedder && toolsToEmbed.length > 0) {
-                yield* embedSourceTools({
+                yield* dependencies.embedSourceTools({
                   embedder: input.embedder,
                   tools: toolsToEmbed,
                   sourceKey: group.sourceKey,
@@ -282,7 +324,6 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
             state: {
               ...workspaceState,
               catalog: {
-                ...(workspaceState.catalog ?? {}),
                 semanticSearchSignature: nextSemanticSearchSignature,
               },
             },
@@ -300,6 +341,53 @@ export const indexWorkspaceToolsIntoSqlite = (input: {
 // SQLite-backed workspace source catalog
 // ---------------------------------------------------------------------------
 
+export const acquireWorkspaceSourceCatalog = (input: {
+  workspaceId: Source["workspaceId"];
+  accountId: AccountId;
+  sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  workspaceConfigStore: WorkspaceConfigStoreShape;
+  workspaceStateStore: WorkspaceStateStoreShape;
+  sourceArtifactStore: SourceArtifactStoreShape;
+  runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
+  embedder?: Embedder;
+  dependencies?: SourceCatalogDependencies;
+}): Effect.Effect<ManagedWorkspaceSourceCatalog, unknown, never> => {
+  const dependencies = {
+    ...defaultSourceCatalogDependencies,
+    ...input.dependencies,
+  };
+  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
+
+  if (!dbPath) {
+    return Effect.fail(
+      new Error("Runtime local workspace is required for the SQLite source catalog."),
+    );
+  }
+
+  return Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const sqliteCatalogContext = yield* Layer.buildWithScope(
+      dependencies.makeSqliteToolCatalogLive(input.embedder).pipe(
+        Layer.provide(
+          dependencies.makeWorkspaceCatalogQueryDbLayer(dbPath, {
+            ...(input.embedder
+              ? { embeddingDimensions: input.embedder.dimensions }
+              : {}),
+          }),
+        ),
+      ),
+      scope,
+    );
+
+    const catalog = Context.get(sqliteCatalogContext, SqliteToolCatalogService);
+
+    return {
+      catalog,
+      close: Scope.close(scope, Exit.void),
+    } satisfies ManagedWorkspaceSourceCatalog;
+  });
+};
+
 export const createWorkspaceSourceCatalog = (input: {
   workspaceId: Source["workspaceId"];
   accountId: AccountId;
@@ -309,80 +397,50 @@ export const createWorkspaceSourceCatalog = (input: {
   sourceArtifactStore: SourceArtifactStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState | null;
   embedder?: Embedder;
+  dependencies?: SourceCatalogDependencies;
 }): ToolCatalog => {
-  const dbPath = resolveWorkspaceCatalogDbPath(input.runtimeLocalWorkspace);
-
-  if (!dbPath) {
-    return createEmptySourceCatalog();
-  }
-
-  const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
-    ...(input.embedder ? { embeddingDimensions: input.embedder.dimensions } : {}),
-  });
-
-  const sqliteCatalogEffect = Effect.runSync(
-    Effect.cached(
-      createSqliteToolCatalog(input.embedder).pipe(
-        Effect.provide(dbLayer),
+  const withManagedSqliteCatalog = <A>(
+    useCatalog: (catalog: ToolCatalog) => Effect.Effect<A, unknown, never>,
+  ): Effect.Effect<A, unknown, never> =>
+    provideRuntimeLocalWorkspace(
+      Effect.acquireUseRelease(
+        acquireWorkspaceSourceCatalog(input),
+        ({ catalog }) => useCatalog(catalog),
+        ({ close }) => close,
       ),
-    ),
-  );
+      input.runtimeLocalWorkspace,
+    );
 
   return {
     searchTools: ({ query, namespace, sourceKey, limit }) =>
-      provideRuntimeLocalWorkspace(
-        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-          catalog.searchTools({
-            query,
-            ...(namespace !== undefined ? { namespace } : {}),
-            ...(sourceKey !== undefined ? { sourceKey } : {}),
-            limit,
-          }),
-        ),
-        input.runtimeLocalWorkspace,
+      withManagedSqliteCatalog((catalog) =>
+        catalog.searchTools({
+          query,
+          ...(namespace !== undefined ? { namespace } : {}),
+          ...(sourceKey !== undefined ? { sourceKey } : {}),
+          limit,
+        }),
       ),
 
     listTools: ({ namespace, query, limit, includeSchemas = false }) =>
-      provideRuntimeLocalWorkspace(
-        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-          catalog.listTools({
-            ...(namespace !== undefined ? { namespace } : {}),
-            ...(query !== undefined ? { query } : {}),
-            limit,
-            includeSchemas,
-          }),
-        ),
-        input.runtimeLocalWorkspace,
+      withManagedSqliteCatalog((catalog) =>
+        catalog.listTools({
+          ...(namespace !== undefined ? { namespace } : {}),
+          ...(query !== undefined ? { query } : {}),
+          limit,
+          includeSchemas,
+        }),
       ),
 
     listNamespaces: ({ limit }) =>
-      provideRuntimeLocalWorkspace(
-        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-          catalog.listNamespaces({ limit }),
-        ),
-        input.runtimeLocalWorkspace,
-      ),
+      withManagedSqliteCatalog((catalog) => catalog.listNamespaces({ limit })),
 
     getToolByPath: ({ path, includeSchemas }) =>
-      provideRuntimeLocalWorkspace(
-        Effect.flatMap(sqliteCatalogEffect, (catalog) =>
-          catalog.getToolByPath({ path, includeSchemas }),
-        ),
-        input.runtimeLocalWorkspace,
+      withManagedSqliteCatalog((catalog) =>
+        catalog.getToolByPath({ path, includeSchemas }),
       ),
   } satisfies ToolCatalog;
 };
-
-// ---------------------------------------------------------------------------
-// Empty catalog fallback (no local workspace)
-// ---------------------------------------------------------------------------
-
-const createEmptySourceCatalog = (): ToolCatalog => ({
-  searchTools: () => Effect.succeed([]),
-  listTools: () => Effect.succeed([]),
-  listNamespaces: () => Effect.succeed([]),
-  getToolByPath: () => Effect.succeed(null),
-});
 
 // ---------------------------------------------------------------------------
 // Re-export indexer functions for use in sync flow

@@ -2,6 +2,7 @@ import {
   ControlPlaneNotFoundError,
   ControlPlaneStorageError,
 } from "../../api/errors";
+import { clearMcpConnectionPoolSession } from "@executor/source-mcp";
 import type {
   ElicitationResponse,
   OnElicitation,
@@ -100,6 +101,8 @@ const decodeElicitationResponse = Schema.decodeUnknown(ElicitationResponseSchema
 
 const withExecutionInvocationContext = (input: {
   executionId: Execution["id"];
+  executionSessionId: Execution["executionSessionId"];
+  actorAccountId: Execution["createdByAccountId"];
   toolInvoker: ToolInvoker;
 }): ToolInvoker => {
   let sequence = 0;
@@ -114,6 +117,8 @@ const withExecutionInvocationContext = (input: {
         context: {
           ...context,
           runId: input.executionId,
+          executionSessionId: input.executionSessionId ?? undefined,
+          actor: input.actorAccountId,
           callId:
             typeof context?.callId === "string" && context.callId.length > 0
               ? context.callId
@@ -676,6 +681,8 @@ const runExecutionAttemptWithDependencies = (
       executor: environment.executor,
       toolInvoker: withExecutionInvocationContext({
         executionId: execution.id,
+        executionSessionId: execution.executionSessionId,
+        actorAccountId: execution.createdByAccountId,
         toolInvoker: createReplayToolInvoker({
           rows: store,
           executionId: execution.id,
@@ -824,6 +831,7 @@ const createExecutionWithDependencies = (
       id: ExecutionIdSchema.make(`exec_${crypto.randomUUID()}`),
       workspaceId: input.workspaceId,
       createdByAccountId: input.createdByAccountId,
+      executionSessionId: input.payload.executionSessionId ?? null,
       status: "pending",
       code,
       resultJson: null,
@@ -1040,3 +1048,20 @@ export const listExecutionSteps = (input: {
       store.executionSteps.listByExecutionId(input.executionId),
     );
   });
+
+export const closeExecutionSession = (input: {
+  workspaceId: WorkspaceId;
+  executionSessionId: Execution["executionSessionId"] extends infer T
+    ? Exclude<T, null>
+    : never;
+  accountId: AccountId;
+}) =>
+  clearMcpConnectionPoolSession({
+    workspaceId: input.workspaceId,
+    accountId: input.accountId,
+    executionSessionId: input.executionSessionId,
+  }).pipe(
+    Effect.as({
+      closed: true,
+    }),
+  );

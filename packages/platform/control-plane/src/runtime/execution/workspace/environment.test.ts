@@ -1,40 +1,79 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
-const createEmbedderMock = vi.fn();
-const createWorkspaceToolInvokerMock = vi.fn();
-const indexWorkspaceToolsIntoSqliteMock = vi.fn();
-const createWorkspaceSourceCatalogMock = vi.fn();
-const getRuntimeLocalWorkspaceOptionMock = vi.fn();
+vi.mock("../../../db/setup", () => ({
+  makeWorkspaceCatalogDbLayer: () => Layer.empty,
+  makeWorkspaceCatalogQueryDbLayer: () => Layer.empty,
+}));
+
+import {
+  clearWorkspaceExecutionCachesForTests,
+  createWorkspaceExecutionEnvironmentResolver,
+  loadConfiguredSemanticSearchEmbedder,
+} from "./environment";
+import {
+  makeWorkspaceSourceCatalogManagerTestHandle,
+} from "./workspace-source-catalog-manager.test-support";
+
 const resolveSecretMaterialMock = vi.fn();
 
-vi.mock("../../../db/embedder", () => ({
-  createEmbedder: createEmbedderMock,
-}));
+const makeWorkspaceToolInvokerFake = (sourceCatalog: unknown) => ({
+  catalog: sourceCatalog,
+  toolInvoker: {
+    invoke: vi.fn(() => Effect.succeed(undefined)),
+  },
+});
 
-vi.mock("./tool-invoker", () => ({
-  createWorkspaceToolInvoker: createWorkspaceToolInvokerMock,
-}));
+const makeResolverInput = (input?: {
+  workspaceConfigStore?: unknown;
+  workspaceStateStore?: unknown;
+  localToolRuntimeLoader?: unknown;
+  dependencies?: Record<string, unknown>;
+}) => {
+  const localToolRuntimeLoader =
+    input?.localToolRuntimeLoader ?? {
+      load: () =>
+        Effect.succeed({
+          tools: {},
+          catalog: {},
+          toolInvoker: {},
+          toolPaths: new Set<string>(),
+        } as never),
+    };
+  const workspaceConfigStore =
+    input?.workspaceConfigStore ?? {
+      load: () => Effect.succeed({ config: null }),
+    };
+  const workspaceStateStore =
+    input?.workspaceStateStore ?? {
+      load: () =>
+        Effect.succeed({
+          version: 1,
+          sources: {},
+          catalog: {
+            semanticSearchSignature: null,
+          },
+        }),
+    };
 
-vi.mock("./source-catalog", () => ({
-  indexWorkspaceToolsIntoSqlite: indexWorkspaceToolsIntoSqliteMock,
-  createWorkspaceSourceCatalog: createWorkspaceSourceCatalogMock,
-}));
-
-vi.mock("../../local/runtime-context", () => ({
-  getRuntimeLocalWorkspaceOption: getRuntimeLocalWorkspaceOptionMock,
-}));
+  return createWorkspaceExecutionEnvironmentResolver({
+    resolveSecretMaterial: resolveSecretMaterialMock as never,
+    sourceAuthMaterialService: {} as never,
+    sourceAuthService: {} as never,
+    sourceCatalogStore: {} as never,
+    localToolRuntimeLoader: localToolRuntimeLoader as never,
+    workspaceConfigStore: workspaceConfigStore as never,
+    workspaceStateStore: workspaceStateStore as never,
+    sourceArtifactStore: {} as never,
+    dependencies: input?.dependencies as never,
+  });
+};
 
 describe("loadConfiguredSemanticSearchEmbedder", () => {
-  beforeEach(async () => {
-    createEmbedderMock.mockReset();
-    createWorkspaceToolInvokerMock.mockReset();
-    indexWorkspaceToolsIntoSqliteMock.mockReset();
-    createWorkspaceSourceCatalogMock.mockReset();
-    getRuntimeLocalWorkspaceOptionMock.mockReset();
+  beforeEach(() => {
     resolveSecretMaterialMock.mockReset();
-    const environmentModule = await import("./environment");
-    environmentModule.clearWorkspaceExecutionCachesForTests();
+    clearWorkspaceExecutionCachesForTests();
   });
 
   it("reuses the same embedder for repeated identical configs", async () => {
@@ -46,9 +85,7 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
       embed,
       embedBatch: async () => [[1, 2, 3]],
     };
-    createEmbedderMock.mockResolvedValue(embedder);
-
-    const environmentModule = await import("./environment");
+    const createEmbedderMock = vi.fn(async () => embedder);
     const config = {
       semanticSearch: {
         provider: "local",
@@ -57,15 +94,17 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
     };
 
     const first = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(
+      loadConfiguredSemanticSearchEmbedder(
         resolveSecretMaterialMock as never,
         config as never,
+        { createEmbedder: createEmbedderMock as never },
       ),
     );
     const second = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(
+      loadConfiguredSemanticSearchEmbedder(
         resolveSecretMaterialMock as never,
         config as never,
+        { createEmbedder: createEmbedderMock as never },
       ),
     );
 
@@ -85,13 +124,11 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
       embed,
       embedBatch: async () => [[1, 2, 3]],
     };
-    createEmbedderMock.mockResolvedValue(embedder);
+    const createEmbedderMock = vi.fn(async () => embedder);
     resolveSecretMaterialMock.mockReturnValue(Effect.succeed("google-api-key"));
 
-    const environmentModule = await import("./environment");
-
     const loaded = await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
+      loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "google",
           model: "gemini-embedding-2-preview",
@@ -100,7 +137,9 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
             handle: "secret_google",
           },
         },
-      } as never),
+      } as never, {
+        createEmbedder: createEmbedderMock as never,
+      }),
     );
 
     expect(loaded).toBe(embedder);
@@ -114,7 +153,8 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
   });
 
   it("creates a new embedder when the semantic search config changes", async () => {
-    createEmbedderMock
+    const createEmbedderMock = vi
+      .fn()
       .mockResolvedValueOnce({
         provider: "openai",
         model: "text-embedding-3-small",
@@ -133,10 +173,8 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
       .mockReturnValueOnce(Effect.succeed("openai-key-small"))
       .mockReturnValueOnce(Effect.succeed("openai-key-large"));
 
-    const environmentModule = await import("./environment");
-
     await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
+      loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "openai",
           model: "text-embedding-3-small",
@@ -145,11 +183,13 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
             handle: "secret_small",
           },
         },
-      } as never),
+      } as never, {
+        createEmbedder: createEmbedderMock as never,
+      }),
     );
 
     await Effect.runPromise(
-      environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
+      loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
         semanticSearch: {
           provider: "openai",
           model: "text-embedding-3-large",
@@ -158,21 +198,23 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
             handle: "secret_large",
           },
         },
-      } as never),
+      } as never, {
+        createEmbedder: createEmbedderMock as never,
+      }),
     );
 
     expect(createEmbedderMock).toHaveBeenCalledTimes(2);
   });
 
   it("fails when semantic search is configured and embedder initialization errors", async () => {
-    createEmbedderMock.mockRejectedValue(new Error("missing provider package"));
+    const createEmbedderMock = vi.fn(async () => {
+      throw new Error("missing provider package");
+    });
     resolveSecretMaterialMock.mockReturnValue(Effect.succeed("openai-key"));
-
-    const environmentModule = await import("./environment");
 
     await expect(
       Effect.runPromise(
-        environmentModule.loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
+        loadConfiguredSemanticSearchEmbedder(resolveSecretMaterialMock as never, {
           semanticSearch: {
             provider: "openai",
             model: "text-embedding-3-small",
@@ -181,63 +223,51 @@ describe("loadConfiguredSemanticSearchEmbedder", () => {
               handle: "secret_openai",
             },
           },
-        } as never),
+        } as never, {
+          createEmbedder: createEmbedderMock as never,
+        }),
       ),
     ).rejects.toThrow("missing provider package");
   });
 });
 
 describe("createWorkspaceExecutionEnvironmentResolver", () => {
-  beforeEach(async () => {
-    createEmbedderMock.mockReset();
-    createWorkspaceToolInvokerMock.mockReset();
-    indexWorkspaceToolsIntoSqliteMock.mockReset();
-    createWorkspaceSourceCatalogMock.mockReset();
-    getRuntimeLocalWorkspaceOptionMock.mockReset();
+  beforeEach(() => {
     resolveSecretMaterialMock.mockReset();
-    const environmentModule = await import("./environment");
-    environmentModule.clearWorkspaceExecutionCachesForTests();
+    clearWorkspaceExecutionCachesForTests();
+  });
+
+  it("fails when no runtime local workspace is available", async () => {
+    const resolver = makeResolverInput({
+      dependencies: {
+        getRuntimeLocalWorkspaceOption: () => Effect.succeed(null),
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        resolver({
+          workspaceId: "workspace-1" as never,
+          accountId: "account-1" as never,
+        } as never),
+      ),
+    ).rejects.toThrow(
+      "Runtime local workspace is required for execution environment resolution.",
+    );
   });
 
   it("reuses the SQLite index and source catalog when workspace state is unchanged", async () => {
-    const environmentModule = await import("./environment");
     const runtimeLocalWorkspace = {
       context: {
         stateDirectory: "/tmp/executor-tests",
       },
     };
-    const sourceCatalog = {
-      searchTools: vi.fn(),
-      listTools: vi.fn(),
-      listNamespaces: vi.fn(),
-      getToolByPath: vi.fn(),
-    };
+    const sourceCatalogTest = makeWorkspaceSourceCatalogManagerTestHandle();
+    const createWorkspaceToolInvokerMock = vi.fn(({ sourceCatalog }: { sourceCatalog: unknown }) =>
+      makeWorkspaceToolInvokerFake(sourceCatalog),
+    );
 
-    getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
-    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.void);
-    createWorkspaceSourceCatalogMock.mockReturnValue(sourceCatalog);
-    createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
-      catalog: sourceCatalog,
-      toolInvoker: { invoke: vi.fn() },
-    }));
-
-    const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
-      resolveSecretMaterial: resolveSecretMaterialMock as never,
-      sourceAuthMaterialService: {} as never,
-      sourceAuthService: {} as never,
-      sourceCatalogStore: {} as never,
-      localToolRuntimeLoader: {
-        load: () =>
-          Effect.succeed({
-            tools: {},
-            catalog: {},
-            toolInvoker: {},
-            toolPaths: new Set<string>(),
-          } as never),
-      },
-      workspaceConfigStore: {
-        load: () => Effect.succeed({ config: null }),
-      } as never,
+    const resolver = makeResolverInput({
       workspaceStateStore: {
         load: () =>
           Effect.succeed({
@@ -251,13 +281,18 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
                 updatedAt: 2,
               },
             },
-            policies: {},
             catalog: {
               semanticSearchSignature: null,
             },
           }),
-      } as never,
-      sourceArtifactStore: {} as never,
+      },
+      dependencies: {
+        getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
+        loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
+        workspaceSourceCatalogManager:
+          sourceCatalogTest.workspaceSourceCatalogManager as never,
+        createWorkspaceToolInvoker: createWorkspaceToolInvokerMock,
+      },
     });
 
     await Effect.runPromise(
@@ -273,40 +308,34 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
       } as never),
     );
 
-    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(1);
-    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
+    expect(sourceCatalogTest.calls.getOrRefresh).toHaveLength(2);
     expect(createWorkspaceToolInvokerMock).toHaveBeenCalledTimes(2);
-    expect(createWorkspaceToolInvokerMock.mock.calls[0]?.[0]?.sourceCatalog).toBe(sourceCatalog);
-    expect(createWorkspaceToolInvokerMock.mock.calls[1]?.[0]?.sourceCatalog).toBe(sourceCatalog);
+    expect(createWorkspaceToolInvokerMock.mock.calls[0]?.[0]?.sourceCatalog).toBe(
+      sourceCatalogTest.managedSourceCatalog.catalog,
+    );
+    expect(createWorkspaceToolInvokerMock.mock.calls[1]?.[0]?.sourceCatalog).toBe(
+      sourceCatalogTest.managedSourceCatalog.catalog,
+    );
+    expect(sourceCatalogTest.calls.close).toBe(0);
   });
 
   it("rebuilds the SQLite index and source catalog when workspace state changes", async () => {
-    const environmentModule = await import("./environment");
     const runtimeLocalWorkspace = {
       context: {
         stateDirectory: "/tmp/executor-tests",
       },
     };
-
-    getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
-    indexWorkspaceToolsIntoSqliteMock.mockReturnValue(Effect.void);
-    createWorkspaceSourceCatalogMock
-      .mockReturnValueOnce({
-        searchTools: vi.fn(),
-        listTools: vi.fn(),
-        listNamespaces: vi.fn(),
-        getToolByPath: vi.fn(),
-      })
-      .mockReturnValueOnce({
-        searchTools: vi.fn(),
-        listTools: vi.fn(),
-        listNamespaces: vi.fn(),
-        getToolByPath: vi.fn(),
-      });
-    createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
-      catalog: sourceCatalog,
-      toolInvoker: { invoke: vi.fn() },
-    }));
+    const firstManagedSourceCatalog = makeWorkspaceSourceCatalogManagerTestHandle();
+    const secondManagedSourceCatalog = makeWorkspaceSourceCatalogManagerTestHandle();
+    const workspaceSourceCatalogManagerTest = makeWorkspaceSourceCatalogManagerTestHandle({
+      getOrRefresh: vi
+        .fn()
+        .mockReturnValueOnce(Effect.succeed(firstManagedSourceCatalog.managedSourceCatalog))
+        .mockReturnValueOnce(Effect.succeed(secondManagedSourceCatalog.managedSourceCatalog)),
+    });
+    const createWorkspaceToolInvokerMock = vi.fn(({ sourceCatalog }: { sourceCatalog: unknown }) =>
+      makeWorkspaceToolInvokerFake(sourceCatalog),
+    );
 
     const workspaceStates = [
       {
@@ -320,7 +349,6 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
             updatedAt: 2,
           },
         },
-        policies: {},
         catalog: {
           semanticSearchSignature: null,
         },
@@ -336,34 +364,23 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
             updatedAt: 3,
           },
         },
-        policies: {},
         catalog: {
           semanticSearchSignature: null,
         },
       },
     ];
 
-    const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
-      resolveSecretMaterial: resolveSecretMaterialMock as never,
-      sourceAuthMaterialService: {} as never,
-      sourceAuthService: {} as never,
-      sourceCatalogStore: {} as never,
-      localToolRuntimeLoader: {
-        load: () =>
-          Effect.succeed({
-            tools: {},
-            catalog: {},
-            toolInvoker: {},
-            toolPaths: new Set<string>(),
-          } as never),
-      },
-      workspaceConfigStore: {
-        load: () => Effect.succeed({ config: null }),
-      } as never,
+    const resolver = makeResolverInput({
       workspaceStateStore: {
         load: vi.fn(() => Effect.succeed(workspaceStates.shift()!)),
-      } as never,
-      sourceArtifactStore: {} as never,
+      },
+      dependencies: {
+        getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
+        loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
+        workspaceSourceCatalogManager:
+          workspaceSourceCatalogManagerTest.workspaceSourceCatalogManager as never,
+        createWorkspaceToolInvoker: createWorkspaceToolInvokerMock,
+      },
     });
 
     await Effect.runPromise(
@@ -379,32 +396,25 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
       } as never),
     );
 
-    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(2);
-    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(2);
+    expect(workspaceSourceCatalogManagerTest.calls.getOrRefresh).toHaveLength(2);
   });
 
   it("retries SQLite indexing after a failure for the same workspace signature", async () => {
-    const environmentModule = await import("./environment");
     const runtimeLocalWorkspace = {
       context: {
         stateDirectory: "/tmp/executor-tests",
       },
     };
-
-    getRuntimeLocalWorkspaceOptionMock.mockReturnValue(Effect.succeed(runtimeLocalWorkspace));
-    indexWorkspaceToolsIntoSqliteMock
-      .mockReturnValueOnce(Effect.fail(new Error("sqlite unavailable")))
-      .mockReturnValueOnce(Effect.void);
-    createWorkspaceSourceCatalogMock.mockReturnValue({
-      searchTools: vi.fn(),
-      listTools: vi.fn(),
-      listNamespaces: vi.fn(),
-      getToolByPath: vi.fn(),
+    const managedSourceCatalog = makeWorkspaceSourceCatalogManagerTestHandle();
+    const workspaceSourceCatalogManagerTest = makeWorkspaceSourceCatalogManagerTestHandle({
+      getOrRefresh: vi
+        .fn()
+        .mockReturnValueOnce(Effect.fail(new Error("sqlite unavailable")))
+        .mockReturnValueOnce(Effect.succeed(managedSourceCatalog.managedSourceCatalog)),
     });
-    createWorkspaceToolInvokerMock.mockImplementation(({ sourceCatalog }: { sourceCatalog: unknown }) => ({
-      catalog: sourceCatalog,
-      toolInvoker: { invoke: vi.fn() },
-    }));
+    const createWorkspaceToolInvokerMock = vi.fn(({ sourceCatalog }: { sourceCatalog: unknown }) =>
+      makeWorkspaceToolInvokerFake(sourceCatalog),
+    );
 
     const workspaceState = {
       version: 1,
@@ -417,33 +427,22 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
           updatedAt: 2,
         },
       },
-      policies: {},
       catalog: {
         semanticSearchSignature: null,
       },
     };
 
-    const resolver = environmentModule.createWorkspaceExecutionEnvironmentResolver({
-      resolveSecretMaterial: resolveSecretMaterialMock as never,
-      sourceAuthMaterialService: {} as never,
-      sourceAuthService: {} as never,
-      sourceCatalogStore: {} as never,
-      localToolRuntimeLoader: {
-        load: () =>
-          Effect.succeed({
-            tools: {},
-            catalog: {},
-            toolInvoker: {},
-            toolPaths: new Set<string>(),
-          } as never),
-      },
-      workspaceConfigStore: {
-        load: () => Effect.succeed({ config: null }),
-      } as never,
+    const resolver = makeResolverInput({
       workspaceStateStore: {
         load: () => Effect.succeed(workspaceState),
-      } as never,
-      sourceArtifactStore: {} as never,
+      },
+      dependencies: {
+        getRuntimeLocalWorkspaceOption: () => Effect.succeed(runtimeLocalWorkspace),
+        loadConfiguredSemanticSearchEmbedder: () => Effect.succeed(undefined),
+        workspaceSourceCatalogManager:
+          workspaceSourceCatalogManagerTest.workspaceSourceCatalogManager as never,
+        createWorkspaceToolInvoker: createWorkspaceToolInvokerMock,
+      },
     });
 
     await expect(
@@ -461,7 +460,7 @@ describe("createWorkspaceExecutionEnvironmentResolver", () => {
       } as never),
     );
 
-    expect(indexWorkspaceToolsIntoSqliteMock).toHaveBeenCalledTimes(2);
-    expect(createWorkspaceSourceCatalogMock).toHaveBeenCalledTimes(1);
+    expect(workspaceSourceCatalogManagerTest.calls.getOrRefresh).toHaveLength(2);
+    expect(managedSourceCatalog.calls.close).toBe(0);
   });
 });

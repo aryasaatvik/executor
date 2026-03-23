@@ -114,4 +114,47 @@ describe("execution-http", () => {
     }),
     60_000,
   );
+
+  it.scoped("persists executionSessionId and closes execution sessions through the HTTP API", () =>
+    Effect.gen(function* () {
+      const runtime = yield* makeRuntime;
+      const installation = runtime.localInstallation;
+
+      const createExecution = yield* withControlPlaneClient(
+        {
+          runtime,
+          accountId: installation.accountId,
+        },
+        (client) =>
+          client.executions.create({
+            path: {
+              workspaceId: installation.workspaceId,
+            },
+            payload: {
+              code: "return await tools.math.add({ a: 1, b: 2 });",
+              executionSessionId: "sticky-demo" as never,
+            },
+          }),
+      );
+
+      expect(createExecution.execution.executionSessionId).toBe("sticky-demo");
+
+      const closeResult = yield* withControlPlaneClient(
+        {
+          runtime,
+          accountId: installation.accountId,
+        },
+        (client) =>
+          client.executions.closeSession({
+            path: {
+              workspaceId: installation.workspaceId,
+              executionSessionId: "sticky-demo" as never,
+            },
+          }),
+      );
+
+      expect(closeResult.closed).toBe(true);
+    }),
+    60_000,
+  );
 });

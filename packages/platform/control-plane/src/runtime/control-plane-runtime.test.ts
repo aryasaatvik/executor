@@ -559,6 +559,7 @@ describe("control-plane-runtime", () => {
         id: executionId,
         workspaceId: installation.workspaceId,
         createdByAccountId: installation.accountId,
+        executionSessionId: null,
         status: "running",
         code: "return await tools.executor.sources.add(...)",
         resultJson: null,
@@ -836,7 +837,9 @@ describe("control-plane-runtime", () => {
               updatedAt: source.updatedAt,
             },
           },
-          policies: {},
+          catalog: {
+            semanticSearchSignature: null,
+          },
         },
       });
       yield* writeLocalControlPlaneState({
@@ -965,7 +968,9 @@ describe("control-plane-runtime", () => {
               updatedAt: source.updatedAt,
             },
           },
-          policies: {},
+          catalog: {
+            semanticSearchSignature: null,
+          },
         },
       });
 
@@ -1116,6 +1121,7 @@ describe("control-plane-runtime", () => {
         id: executionId,
         workspaceId: installation.workspaceId,
         createdByAccountId: installation.accountId,
+        executionSessionId: null,
         status: "running",
         code: "return await tools.executor.sources.add(...)",
         resultJson: null,

@@ -76,6 +76,9 @@ export type RuntimeControlPlaneOptions = {
   workspaceRoot?: string;
   homeConfigPath?: string;
   homeStateDirectory?: string;
+  dependencies?: {
+    reconcileMissingSourceCatalogArtifacts?: typeof reconcileMissingSourceCatalogArtifacts;
+  };
 };
 
 const detailsFromCause = (cause: unknown): string =>
@@ -231,9 +234,14 @@ export const createControlPlaneRuntime = (
       ),
     );
 
-    const persistence = createLocalControlPlanePersistence(
+    const persistence = yield* createLocalControlPlanePersistence(
       localWorkspaceContext,
       fileSystem,
+    ).pipe(
+      Effect.mapError(toLocalRuntimeBootstrapError),
+      Effect.catchAll((error) =>
+        closeScope(scope).pipe(Effect.zipRight(Effect.fail(error))),
+      ),
     );
     const rows = persistence.rows;
 
@@ -276,13 +284,23 @@ export const createControlPlaneRuntime = (
       liveExecutionManager,
     });
     const managedRuntime = ManagedRuntime.make(concreteRuntimeLayer);
+    const reconcileMissingSourceCatalogArtifactsImpl =
+      options.dependencies?.reconcileMissingSourceCatalogArtifacts
+      ?? reconcileMissingSourceCatalogArtifacts;
     yield* managedRuntime.runtimeEffect;
-    yield* reconcileMissingSourceCatalogArtifacts({
+    yield* reconcileMissingSourceCatalogArtifactsImpl({
       workspaceId: localInstallation.workspaceId,
       actorAccountId: localInstallation.accountId,
     }).pipe(
       Effect.provide(managedRuntime),
-      Effect.catchAll(() => Effect.void),
+      Effect.catchAll((error) =>
+        Effect.promise(() => managedRuntime.dispose())
+          .pipe(
+            Effect.catchAll(() => Effect.void),
+            Effect.zipRight(closeScope(scope)),
+            Effect.zipRight(Effect.fail(error)),
+          ),
+      ),
     );
 
     return {

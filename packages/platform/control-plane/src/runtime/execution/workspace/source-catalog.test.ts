@@ -1,41 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
-import { createSqliteToolCatalog } from "../../../db/catalog";
-
-const {
-  indexSourceMock,
-  embedSourceToolsMock,
-  removeSourceToolsMock,
-  removeSourceEmbeddingsMock,
-  syncSourceLifecycleMock,
-} = vi.hoisted(() => ({
-  indexSourceMock: vi.fn(),
-  embedSourceToolsMock: vi.fn(),
-  removeSourceToolsMock: vi.fn(),
-  removeSourceEmbeddingsMock: vi.fn(),
-  syncSourceLifecycleMock: vi.fn(),
-}));
-
-vi.mock("../../../db/catalog", () => ({
-  createSqliteToolCatalog: vi.fn(),
-}));
+import { SourceIdSchema, WorkspaceIdSchema } from "#schema";
+import { SqliteToolCatalogService } from "../../../db/catalog";
 
 vi.mock("../../../db/setup", () => ({
-  makeWorkspaceCatalogDbLayer: vi.fn(() => Layer.empty),
-}));
-
-vi.mock("../../../db/indexer", () => ({
-  indexSource: indexSourceMock,
-  deactivateSourceTools: vi.fn(),
-  removeSourceTools: removeSourceToolsMock,
-  syncSourceLifecycle: syncSourceLifecycleMock,
-}));
-
-vi.mock("../../../db/embed-indexer", () => ({
-  embedSourceTools: embedSourceToolsMock,
-  removeSourceEmbeddings: removeSourceEmbeddingsMock,
+  makeWorkspaceCatalogDbLayer: () => Layer.empty,
+  makeWorkspaceCatalogQueryDbLayer: () => Layer.empty,
 }));
 
 import {
@@ -61,27 +33,21 @@ const makeTool = (input: {
       ...(input.description ? { description: input.description } : {}),
     },
     source: {
-      id: `${input.sourceKey}-id`,
+      id: SourceIdSchema.make(`${input.sourceKey}-id`),
+      workspaceId: WorkspaceIdSchema.make("workspace-1"),
+      name: input.sourceKey,
+      kind: "mcp",
+      endpoint: `https://${input.sourceKey}.example.com`,
       namespace: input.sourceKey,
       enabled: true,
       status: "connected",
+      createdAt: 1,
+      updatedAt: 2,
     },
     capability: { surface: {} },
   }) as LoadedSourceCatalogToolIndexEntry;
 
 describe("createWorkspaceSourceCatalog", () => {
-  beforeEach(() => {
-    vi.mocked(createSqliteToolCatalog).mockReset();
-    indexSourceMock.mockReset();
-    embedSourceToolsMock.mockReset();
-    removeSourceToolsMock.mockReset();
-    removeSourceEmbeddingsMock.mockReset();
-    syncSourceLifecycleMock.mockReset();
-    removeSourceToolsMock.mockReturnValue(Effect.void);
-    removeSourceEmbeddingsMock.mockReturnValue(Effect.void);
-    syncSourceLifecycleMock.mockReturnValue(Effect.void);
-  });
-
   it("indexes tools with the canonical descriptor sourceKey", () => {
     const tool = makeTool({
       path: "github.issues.create",
@@ -94,7 +60,7 @@ describe("createWorkspaceSourceCatalog", () => {
     expect(toToolToIndex(tool).sourceKey).toBe("src_123");
   });
 
-  it("returns an empty catalog when no local workspace is active", async () => {
+  it("fails when no local workspace is active", async () => {
     const catalog = createWorkspaceSourceCatalog({
       workspaceId: "workspace-1" as never,
       accountId: "account-1" as never,
@@ -108,34 +74,12 @@ describe("createWorkspaceSourceCatalog", () => {
       runtimeLocalWorkspace: null,
     });
 
-    const tools = await Effect.runPromise(
-      catalog.listTools({ limit: 10, includeSchemas: false }),
-    );
-    const searched = await Effect.runPromise(
-      catalog.searchTools({
-        query: "create github issue",
-        sourceKey: "github",
-        limit: 10,
-      }),
-    );
-    const byPath = await Effect.runPromise(
-      catalog.getToolByPath({
-        path: "github.issues.create" as never,
-        includeSchemas: false,
-      }),
-    );
-
-    expect(tools).toEqual([]);
-    expect(searched).toEqual([]);
-    expect(byPath).toBeNull();
+    await expect(
+      Effect.runPromise(catalog.listTools({ limit: 10, includeSchemas: false })),
+    ).rejects.toThrow("Runtime local workspace is required for the SQLite source catalog.");
   });
 
   it("surfaces SQLite catalog failures instead of falling back", async () => {
-    vi.mocked(createSqliteToolCatalog).mockReset();
-    vi.mocked(createSqliteToolCatalog).mockReturnValue(
-      Effect.fail(new Error("sqlite unavailable")) as never,
-    );
-
     const catalog = createWorkspaceSourceCatalog({
       workspaceId: "workspace-1" as never,
       accountId: "account-1" as never,
@@ -151,6 +95,15 @@ describe("createWorkspaceSourceCatalog", () => {
           stateDirectory: "/tmp/executor-tests",
         },
       } as never,
+      dependencies: {
+        makeSqliteToolCatalogLive: () =>
+          Layer.effect(
+            SqliteToolCatalogService,
+            Effect.fail(new Error("sqlite unavailable")) as never,
+          ),
+        makeWorkspaceCatalogDbLayer: () => Layer.empty,
+        makeWorkspaceCatalogQueryDbLayer: () => Layer.empty,
+      },
     });
 
     await expect(
@@ -158,39 +111,39 @@ describe("createWorkspaceSourceCatalog", () => {
     ).rejects.toThrow("sqlite unavailable");
   });
 
-  it("reuses the SQLite catalog across method calls", async () => {
-    vi.mocked(createSqliteToolCatalog).mockReset();
+  it("opens and releases a scoped SQLite catalog for each method call", async () => {
+    let acquisitions = 0;
+    let releases = 0;
 
-    let executions = 0;
-    vi.mocked(createSqliteToolCatalog).mockReturnValue(
-      Effect.sync(() => {
-        executions += 1;
-        return {
-          searchTools: () =>
-            Effect.succeed([
-              { path: "github.issues.create", score: 1 },
-            ] as const),
-          listTools: () =>
-            Effect.succeed([
-              {
+    const createScopedCatalog = () =>
+      Effect.ensuring(
+        Effect.sync(() => {
+          acquisitions += 1;
+          return {
+            searchTools: () =>
+              Effect.succeed([{ path: "github.issues.create", score: 1 }] as const),
+            listTools: () =>
+              Effect.succeed([
+                {
+                  path: "github.issues.create",
+                  sourceKey: "github",
+                  interaction: "auto",
+                },
+              ] as const),
+            listNamespaces: () =>
+              Effect.succeed([{ namespace: "github.issues", toolCount: 1 }] as const),
+            getToolByPath: () =>
+              Effect.succeed({
                 path: "github.issues.create",
                 sourceKey: "github",
                 interaction: "auto",
-              },
-            ] as const),
-          listNamespaces: () =>
-            Effect.succeed([
-              { namespace: "github.issues", toolCount: 1 },
-            ] as const),
-          getToolByPath: () =>
-            Effect.succeed({
-              path: "github.issues.create",
-              sourceKey: "github",
-              interaction: "auto",
-            } as const),
-        };
-      }) as never,
-    );
+              } as const),
+          };
+        }),
+        Effect.sync(() => {
+          releases += 1;
+        }),
+      );
 
     const catalog = createWorkspaceSourceCatalog({
       workspaceId: "workspace-1" as never,
@@ -207,21 +160,29 @@ describe("createWorkspaceSourceCatalog", () => {
           stateDirectory: "/tmp/executor-tests",
         },
       } as never,
+      dependencies: {
+        makeSqliteToolCatalogLive: () =>
+          Layer.scoped(SqliteToolCatalogService, createScopedCatalog() as never),
+        makeWorkspaceCatalogDbLayer: () => Layer.empty,
+        makeWorkspaceCatalogQueryDbLayer: () => Layer.empty,
+      },
     });
 
     await Effect.runPromise(catalog.listTools({ limit: 10, includeSchemas: false }));
     await Effect.runPromise(catalog.searchTools({ query: "create", limit: 10 }));
     await Effect.runPromise(catalog.listNamespaces({ limit: 10 }));
+    await Effect.runPromise(
+      catalog.getToolByPath({ path: "github.issues.create" as never, includeSchemas: false }),
+    );
 
-    expect(executions).toBe(1);
+    expect(acquisitions).toBe(4);
+    expect(releases).toBe(4);
   });
 
   it("re-embeds all tools when the semantic-search signature changes", async () => {
-    indexSourceMock.mockReset();
-    embedSourceToolsMock.mockReset();
-    indexSourceMock.mockReturnValue(Effect.succeed({ changedTools: [] }));
-    embedSourceToolsMock.mockReturnValue(Effect.void);
-
+    const indexSourceMock = vi.fn(() => Effect.succeed({ changedTools: [] }));
+    const embedSourceToolsMock = vi.fn(() => Effect.void);
+    const write = vi.fn(() => Effect.void);
     const tools = [
       makeTool({
         path: "github.issues.create",
@@ -229,7 +190,6 @@ describe("createWorkspaceSourceCatalog", () => {
         namespace: "github.issues",
       }),
     ];
-    const write = vi.fn(() => Effect.void);
     const fakeDb = {
       selectDistinct: () => ({
         from: () => Effect.succeed([]),
@@ -249,7 +209,6 @@ describe("createWorkspaceSourceCatalog", () => {
             Effect.succeed({
               version: 1,
               sources: {},
-              policies: {},
               catalog: {
                 semanticSearchSignature: "old-signature",
               },
@@ -269,9 +228,12 @@ describe("createWorkspaceSourceCatalog", () => {
           embed: async () => [1, 2, 3],
           embedBatch: async () => [[1, 2, 3]],
         },
-      }).pipe(
-        Effect.provide(Layer.succeed(SqliteDrizzle, fakeDb as never)),
-      ),
+        dependencies: {
+          makeWorkspaceCatalogDbLayer: () => Layer.succeed(SqliteDrizzle, fakeDb as never),
+          indexSource: indexSourceMock as never,
+          embedSourceTools: embedSourceToolsMock as never,
+        },
+      }),
     );
 
     expect(result).toBeUndefined();
@@ -289,16 +251,11 @@ describe("createWorkspaceSourceCatalog", () => {
   });
 
   it("keeps disconnected sources indexed instead of purging them", async () => {
-    indexSourceMock.mockReset();
-    embedSourceToolsMock.mockReset();
-    syncSourceLifecycleMock.mockReset();
-    removeSourceToolsMock.mockReset();
-    removeSourceEmbeddingsMock.mockReset();
-    indexSourceMock.mockReturnValue(Effect.succeed({ changedTools: [] }));
-    embedSourceToolsMock.mockReturnValue(Effect.void);
-    syncSourceLifecycleMock.mockReturnValue(Effect.void);
-    removeSourceToolsMock.mockReturnValue(Effect.void);
-    removeSourceEmbeddingsMock.mockReturnValue(Effect.void);
+    const indexSourceMock = vi.fn(() => Effect.succeed({ changedTools: [] }));
+    const embedSourceToolsMock = vi.fn(() => Effect.void);
+    const syncSourceLifecycleMock = vi.fn(() => Effect.void);
+    const removeSourceToolsMock = vi.fn(() => Effect.void);
+    const removeSourceEmbeddingsMock = vi.fn(() => Effect.void);
 
     const connectedTool = makeTool({
       path: "github.issues.create",
@@ -343,7 +300,6 @@ describe("createWorkspaceSourceCatalog", () => {
             Effect.succeed({
               version: 1,
               sources: {},
-              policies: {},
               catalog: {
                 semanticSearchSignature: null,
               },
@@ -363,9 +319,15 @@ describe("createWorkspaceSourceCatalog", () => {
           embed: async () => [1, 2, 3],
           embedBatch: async () => [[1, 2, 3]],
         },
-      }).pipe(
-        Effect.provide(Layer.succeed(SqliteDrizzle, fakeDb as never)),
-      ),
+        dependencies: {
+          makeWorkspaceCatalogDbLayer: () => Layer.succeed(SqliteDrizzle, fakeDb as never),
+          indexSource: indexSourceMock as never,
+          embedSourceTools: embedSourceToolsMock as never,
+          syncSourceLifecycle: syncSourceLifecycleMock as never,
+          removeSourceTools: removeSourceToolsMock as never,
+          removeSourceEmbeddings: removeSourceEmbeddingsMock as never,
+        },
+      }),
     );
 
     expect(removeSourceToolsMock).not.toHaveBeenCalledWith(disconnectedTool.source.id);
