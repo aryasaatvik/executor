@@ -4,7 +4,6 @@ import * as Layer from "effect/Layer"
 import { makeDatabaseLive, loadSqliteVecExtension } from "./client"
 import { setupCatalogToolFts } from "./fts"
 import { applyDrizzleMigrations } from "./migrator"
-import { migrateJsonToSqlite } from "./migrate-json"
 import { setupVecTable, getVecTableDimensions, dropVecTable, VecLive } from "./vec"
 
 const sqliteVecRequiredError = (context: string) =>
@@ -29,15 +28,9 @@ const ensureSqliteVecExtensionLoaded = (
  *
  * Table and index DDL come from Drizzle migration files. This setup step only
  * applies those migrations, then provisions custom SQLite artifacts like FTS5
- * virtual tables / triggers, sqlite-vec, and the one-time JSON→SQLite import.
+ * virtual tables / triggers and sqlite-vec.
  */
 const runSetup = (options?: {
-  jsonPaths?: {
-    controlPlaneStatePath: string
-    workspaceStatePath: string
-    artifactsDirectory?: string
-    workspaceId?: string
-  }
   embeddingDimensions?: number
   loadSqliteVecExtension?: typeof loadSqliteVecExtension
 }) => Effect.gen(function* () {
@@ -69,39 +62,17 @@ const runSetup = (options?: {
 
     yield* setupVecTable(options.embeddingDimensions)
   }
-
-  // -----------------------------------------------------------------------
-  // JSON → SQLite one-time migration
-  // -----------------------------------------------------------------------
-  if (options?.jsonPaths) {
-    yield* migrateJsonToSqlite({
-      controlPlaneStatePath: options.jsonPaths.controlPlaneStatePath,
-      workspaceStatePath: options.jsonPaths.workspaceStatePath,
-      artifactsDirectory: options.jsonPaths.artifactsDirectory,
-      workspaceId: options.jsonPaths.workspaceId,
-    })
-  }
 })
 
 /**
  * Create the full database layer for the workspace catalog, including
- * Drizzle schema migrations, FTS5 setup, optional JSON→SQLite data
- * migration, and optional sqlite-vec vector table setup.
+ * Drizzle schema migrations, FTS5 setup, and optional sqlite-vec vector table
+ * setup.
  *
  * Usage:
  * ```ts
  * const dbLayer = makeWorkspaceCatalogDbLayer(dbPath)
  * const catalog = yield* createSqliteToolCatalog().pipe(Effect.provide(dbLayer))
- * ```
- *
- * To also run the one-time JSON migration, pass the paths:
- * ```ts
- * const dbLayer = makeWorkspaceCatalogDbLayer(dbPath, {
- *   jsonPaths: {
- *     controlPlaneStatePath: "/path/to/control-plane-state.json",
- *     workspaceStatePath: "/path/to/workspace-state.json",
- *   },
- * })
  * ```
  *
  * To enable vector search (sqlite-vec), pass embedding dimensions:
@@ -114,12 +85,6 @@ const runSetup = (options?: {
 export const makeWorkspaceCatalogDbLayer = (
   filename: string,
   options?: {
-    jsonPaths?: {
-      controlPlaneStatePath: string
-      workspaceStatePath: string
-      artifactsDirectory?: string
-      workspaceId?: string
-    }
     embeddingDimensions?: number
     loadSqliteVecExtension?: typeof loadSqliteVecExtension
   },

@@ -1,6 +1,5 @@
 import { EXECUTOR_DB_FILENAME } from "../../db/client.js"
-import { randomUUID } from "node:crypto";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { FileSystem } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
 import { SqlClient } from "@effect/sql";
@@ -15,7 +14,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 
 import {
   auth_artifact,
@@ -31,11 +29,7 @@ import {
 } from "../../db/schema";
 import { makeWorkspaceCatalogDbLayer } from "../../db/setup";
 import type { ResolvedLocalWorkspaceContext } from "./config";
-import { deriveLocalInstallation } from "./installation";
-import {
-  LocalFileSystemError,
-  unknownLocalErrorDetails,
-} from "./errors";
+import { unknownLocalErrorDetails } from "./errors";
 
 import type {
   AuthArtifact,
@@ -49,37 +43,6 @@ import type {
   WorkspaceOauthClient,
   WorkspaceSourceOauthClient,
 } from "#schema";
-import {
-  AuthArtifactSchema,
-  AuthLeaseSchema,
-  ExecutionInteractionSchema,
-  ExecutionSchema,
-  ExecutionStepSchema,
-  ProviderAuthGrantSchema,
-  SecretMaterialSchema,
-  SourceAuthSessionSchema,
-  WorkspaceOauthClientSchema,
-  WorkspaceSourceOauthClientSchema,
-} from "#schema";
-
-const LOCAL_CONTROL_PLANE_STATE_VERSION = 1 as const;
-const LOCAL_CONTROL_PLANE_STATE_BASENAME = "control-plane-state.json";
-
-const LocalControlPlaneStateSchema = Schema.Struct({
-  version: Schema.Literal(LOCAL_CONTROL_PLANE_STATE_VERSION),
-  authArtifacts: Schema.Array(AuthArtifactSchema),
-  authLeases: Schema.Array(AuthLeaseSchema),
-  sourceOauthClients: Schema.Array(WorkspaceSourceOauthClientSchema),
-  workspaceOauthClients: Schema.Array(WorkspaceOauthClientSchema),
-  providerAuthGrants: Schema.Array(ProviderAuthGrantSchema),
-  sourceAuthSessions: Schema.Array(SourceAuthSessionSchema),
-  secretMaterials: Schema.Array(SecretMaterialSchema),
-  executions: Schema.Array(ExecutionSchema),
-  executionInteractions: Schema.Array(ExecutionInteractionSchema),
-  executionSteps: Schema.Array(ExecutionStepSchema),
-});
-
-export type LocalControlPlaneState = typeof LocalControlPlaneStateSchema.Type;
 
 export type LocalControlPlanePersistence = {
   rows: LocalControlPlaneStore;
@@ -95,107 +58,20 @@ type SecretMaterialSummary = {
   updatedAt: number;
 };
 
-const decodeLocalControlPlaneState = Schema.decodeUnknown(
-  LocalControlPlaneStateSchema,
-);
-
-const defaultLocalControlPlaneState = (): LocalControlPlaneState => ({
-  version: LOCAL_CONTROL_PLANE_STATE_VERSION,
-  authArtifacts: [],
-  authLeases: [],
-  sourceOauthClients: [],
-  workspaceOauthClients: [],
-  providerAuthGrants: [],
-  sourceAuthSessions: [],
-  secretMaterials: [],
-  executions: [],
-  executionInteractions: [],
-  executionSteps: [],
-});
-
-const mapFileSystemError = (path: string, action: string) => (cause: unknown) =>
-  new LocalFileSystemError({
-    message: `Failed to ${action} ${path}: ${unknownLocalErrorDetails(cause)}`,
-    action,
-    path,
-    details: unknownLocalErrorDetails(cause),
-  });
-
-const localControlPlaneStatePath = (
-  context: ResolvedLocalWorkspaceContext,
-): string =>
-  join(
-    context.homeStateDirectory,
-    "workspaces",
-    deriveLocalInstallation(context).workspaceId,
-    LOCAL_CONTROL_PLANE_STATE_BASENAME,
-  );
-
 const workspaceDbPath = (context: ResolvedLocalWorkspaceContext): string =>
   join(context.stateDirectory, EXECUTOR_DB_FILENAME);
 
-const bindNodeFileSystem = <A, E>(
-  effect: Effect.Effect<A, E, FileSystem.FileSystem>,
-): Effect.Effect<A, E, never> =>
-  effect.pipe(Effect.provide(NodeFileSystem.layer));
-
-const readStateFromDisk = (
+const ensureWorkspaceStateDirectory = (
   context: ResolvedLocalWorkspaceContext,
-): Effect.Effect<LocalControlPlaneState, LocalFileSystemError, FileSystem.FileSystem> =>
+): Effect.Effect<void, Error, never> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const path = localControlPlaneStatePath(context);
-    const exists = yield* fs.exists(path).pipe(
-      Effect.mapError(mapFileSystemError(path, "check control plane state path")),
+    yield* fs.makeDirectory(context.stateDirectory, { recursive: true }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof Error ? cause : new Error(String(cause)),
+      ),
     );
-    if (!exists) {
-      return defaultLocalControlPlaneState();
-    }
-
-    const content = yield* fs.readFileString(path, "utf8").pipe(
-      Effect.mapError(mapFileSystemError(path, "read control plane state")),
-    );
-    const parsed = yield* Effect.try({
-      try: () => JSON.parse(content) as unknown,
-      catch: mapFileSystemError(path, "parse control plane state"),
-    });
-    return yield* decodeLocalControlPlaneState(parsed).pipe(
-      Effect.mapError(mapFileSystemError(path, "decode control plane state")),
-    );
-  });
-
-const writeStateToDisk = (
-  context: ResolvedLocalWorkspaceContext,
-  state: LocalControlPlaneState,
-): Effect.Effect<void, LocalFileSystemError, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = localControlPlaneStatePath(context);
-    const tempPath = `${path}.${randomUUID()}.tmp`;
-
-    yield* fs.makeDirectory(dirname(path), { recursive: true }).pipe(
-      Effect.mapError(mapFileSystemError(dirname(path), "create control plane state directory")),
-    );
-    yield* fs.writeFileString(tempPath, `${JSON.stringify(state, null, 2)}\n`, {
-      mode: 0o600,
-    }).pipe(
-      Effect.mapError(mapFileSystemError(tempPath, "write control plane state")),
-    );
-    yield* fs.rename(tempPath, path).pipe(
-      Effect.mapError(mapFileSystemError(path, "replace control plane state")),
-    );
-  });
-
-export const loadLocalControlPlaneState = (
-  context: ResolvedLocalWorkspaceContext,
-): Effect.Effect<LocalControlPlaneState, LocalFileSystemError> =>
-  bindNodeFileSystem(readStateFromDisk(context));
-
-export const writeLocalControlPlaneState = (input: {
-  context: ResolvedLocalWorkspaceContext;
-  state: LocalControlPlaneState;
-}): Effect.Effect<void, LocalFileSystemError> =>
-  bindNodeFileSystem(writeStateToDisk(input.context, input.state));
+  }).pipe(Effect.provide(NodeFileSystem.layer));
 
 const toError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -1494,15 +1370,9 @@ export const createLocalControlPlanePersistence = (
   context: ResolvedLocalWorkspaceContext,
 ): Effect.Effect<LocalControlPlanePersistence, Error> =>
   Effect.gen(function* () {
+    yield* ensureWorkspaceStateDirectory(context);
     const runtime = ManagedRuntime.make(
-      makeWorkspaceCatalogDbLayer(workspaceDbPath(context), {
-        jsonPaths: {
-          controlPlaneStatePath: localControlPlaneStatePath(context),
-          workspaceStatePath: join(context.stateDirectory, "workspace-state.json"),
-          artifactsDirectory: context.artifactsDirectory,
-          workspaceId: deriveLocalInstallation(context).workspaceId,
-        },
-      }),
+      makeWorkspaceCatalogDbLayer(workspaceDbPath(context)),
     );
 
     yield* Effect.tryPromise({
@@ -1519,5 +1389,3 @@ export const createLocalControlPlanePersistence = (
       close: () => runtime.dispose(),
     } satisfies LocalControlPlanePersistence;
   });
-
-export { localControlPlaneStatePath };
