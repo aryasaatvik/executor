@@ -266,11 +266,11 @@ export const createLiveExecutionManager = () => {
 
 export type LiveExecutionManager = ReturnType<typeof createLiveExecutionManager>;
 
-export class LiveExecutionManagerService extends Context.Tag(
-  "#runtime/LiveExecutionManagerService",
-)<LiveExecutionManagerService, ReturnType<typeof createLiveExecutionManager>>() {}
+export class ExecutionManager extends Context.Tag(
+  "#runtime/ExecutionManager",
+)<ExecutionManager, ReturnType<typeof createLiveExecutionManager>>() {}
 
 export const LiveExecutionManagerLive = Layer.sync(
-  LiveExecutionManagerService,
+  ExecutionManager,
   createLiveExecutionManager,
 );

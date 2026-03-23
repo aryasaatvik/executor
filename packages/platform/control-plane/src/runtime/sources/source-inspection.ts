@@ -26,7 +26,7 @@ import {
   loadSourceWithCatalogFromDb,
   type LoadedSourceCatalogTool,
 } from "../catalog/source/runtime";
-import { RuntimeSourceStoreService } from "./source-store";
+import { SourceStore } from "./source-store";
 
 const sourceInspectOps = {
   bundle: operationErrors("sources.inspect.bundle"),
@@ -52,7 +52,7 @@ const loadSourceForMissingCatalog = (input: {
   cause: LocalSourceArtifactMissingError;
 }) =>
   Effect.gen(function* () {
-    const sourceStore = yield* RuntimeSourceStoreService;
+    const sourceStore = yield* SourceStore;
     const source = yield* sourceStore.loadSourceById({
       workspaceId: input.workspaceId,
       sourceId: input.sourceId,

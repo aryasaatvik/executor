@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import type { LoadedSourceCatalogToolIndexEntry } from "../../catalog/source/runtime";
 import type { SecretMaterialResolveContext } from "../../local/secret-material-providers";
 import type { WorkspaceStorageServices } from "../../local/storage";
+import type { WorkspaceDatabase } from "../../local/workspace-database";
 import { invocationDescriptorFromTool } from "../ir-execution";
 import { evaluateInvocationPolicy } from "../../policy/invocation-policy-engine";
 import { loadRuntimeLocalWorkspacePolicies } from "../../policy/policies-operations";
@@ -72,7 +73,7 @@ export const authorizePersistedToolInvocation = (input: {
   args: unknown;
   context?: Record<string, unknown>;
   onElicitation?: WorkspaceToolElicitation;
-}): Effect.Effect<void, Error, WorkspaceStorageServices> =>
+}): Effect.Effect<void, Error, WorkspaceStorageServices | WorkspaceDatabase> =>
   Effect.gen(function* () {
     const descriptor = invocationDescriptorFromTool({
       tool: input.tool,

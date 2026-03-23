@@ -9,7 +9,7 @@ import * as Either from "effect/Either";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { RuntimeSourceAuthServiceTag } from "../../runtime/sources/source-auth-service";
+import { SourceAuthService } from "../../runtime/sources/source-auth-service";
 import { ControlPlaneApi } from "../api";
 import {
   ControlPlaneBadRequestError,
@@ -239,7 +239,7 @@ export const ControlPlaneOAuthLive = HttpApiBuilder.group(
           Effect.flatMap((runtimeLocalWorkspace) =>
             Effect.gen(function* () {
               const request = yield* HttpServerRequest.HttpServerRequest;
-              const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+              const sourceAuthService = yield* SourceAuthService;
               return yield* sourceAuthService.startSourceOAuthSession({
                 workspaceId: path.workspaceId,
                 actorAccountId: runtimeLocalWorkspace.installation.accountId,
@@ -270,7 +270,7 @@ export const ControlPlaneOAuthLive = HttpApiBuilder.group(
       )
       .handle("sourceAuthCallback", ({ urlParams }) =>
         Effect.gen(function* () {
-          const sourceAuthService = yield* RuntimeSourceAuthServiceTag;
+          const sourceAuthService = yield* SourceAuthService;
           const completed = yield* Effect.either(
             sourceAuthService.completeSourceOAuthSession({
               state: urlParams.state,

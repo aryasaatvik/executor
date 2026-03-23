@@ -666,16 +666,16 @@ export type LocalToolRuntimeLoaderShape = {
   >;
 };
 
-export class LocalToolRuntimeLoaderService extends Context.Tag(
-  "#runtime/LocalToolRuntimeLoaderService",
-)<LocalToolRuntimeLoaderService, LocalToolRuntimeLoaderShape>() {}
+export class LocalToolRuntimeLoader extends Context.Tag(
+  "#runtime/LocalToolRuntimeLoader",
+)<LocalToolRuntimeLoader, LocalToolRuntimeLoaderShape>() {}
 
 export const LocalToolRuntimeLoaderLive = Layer.effect(
-  LocalToolRuntimeLoaderService,
+  LocalToolRuntimeLoader,
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
 
-    return LocalToolRuntimeLoaderService.of({
+    return LocalToolRuntimeLoader.of({
       load: (context) =>
         loadLocalToolRuntime(context).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),

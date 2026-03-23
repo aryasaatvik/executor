@@ -32,7 +32,7 @@ import * as Schema from "effect/Schema";
 
 import { type ResolveExecutionEnvironment } from "./state";
 import {
-  LiveExecutionManagerService,
+  ExecutionManager,
   sanitizePersistedElicitationResponse,
   type LiveExecutionManager,
 } from "./live";
@@ -49,7 +49,7 @@ import {
   ControlPlaneStore,
   type ControlPlaneStoreShape,
 } from "../store";
-import { RuntimeExecutionResolverService } from "./workspace/environment";
+import { ExecutionEnvironmentResolver } from "./workspace/environment";
 import { runtimeEffectError } from "../effect-errors";
 
 const executionOps = {
@@ -888,8 +888,8 @@ export const createExecution = (input: {
 }) =>
   Effect.gen(function* () {
     const store = yield* ControlPlaneStore;
-    const executionResolver = yield* RuntimeExecutionResolverService;
-    const liveExecutionManager = yield* LiveExecutionManagerService;
+    const executionResolver = yield* ExecutionEnvironmentResolver;
+    const liveExecutionManager = yield* ExecutionManager;
 
     return yield* createExecutionWithDependencies(
       store,
@@ -918,8 +918,8 @@ export const submitExecutionInteractionResponse = (input: {
 }) =>
   Effect.gen(function* () {
     const store = yield* ControlPlaneStore;
-    const executionResolver = yield* RuntimeExecutionResolverService;
-    const liveExecutionManager = yield* LiveExecutionManagerService;
+    const executionResolver = yield* ExecutionEnvironmentResolver;
+    const liveExecutionManager = yield* ExecutionManager;
 
     return yield* submitExecutionInteractionResponseWithDependencies(
       store,
@@ -940,8 +940,8 @@ export const resumeExecution = (input: {
 }) =>
   Effect.gen(function* () {
     const store = yield* ControlPlaneStore;
-    const executionResolver = yield* RuntimeExecutionResolverService;
-    const liveExecutionManager = yield* LiveExecutionManagerService;
+    const executionResolver = yield* ExecutionEnvironmentResolver;
+    const liveExecutionManager = yield* ExecutionManager;
 
     const existing = yield* fetchExecutionEnvelope(store, {
       workspaceId: input.workspaceId,

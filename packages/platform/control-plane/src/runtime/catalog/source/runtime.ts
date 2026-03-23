@@ -1,4 +1,3 @@
-import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import {
   type ToolCatalogEntry,
   type ToolDescriptor as CatalogToolDescriptor,
@@ -48,13 +47,12 @@ import {
 } from "../catalog-typescript";
 import { formatWithPrettier } from "../prettier-format";
 import {
-  RuntimeLocalWorkspaceService,
+  RuntimeLocalWorkspace,
   type RuntimeLocalWorkspaceState,
 } from "../../local/runtime-context";
-import { join } from "node:path";
-import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+import { WorkspaceDatabase } from "../../local/workspace-database";
 import {
-  RuntimeSourceStoreService,
+  SourceStore,
   type RuntimeSourceStore,
 } from "../../sources/source-store";
 import { runtimeEffectError } from "../../effect-errors";
@@ -668,19 +666,21 @@ type RuntimeSourceCatalogStoreShape = {
 
 export type RuntimeSourceCatalogStore = RuntimeSourceCatalogStoreShape;
 
-export class RuntimeSourceCatalogStoreService extends Context.Tag(
-  "#runtime/RuntimeSourceCatalogStoreService",
-)<RuntimeSourceCatalogStoreService, RuntimeSourceCatalogStoreShape>() {}
+export class SourceCatalogStore extends Context.Tag(
+  "#runtime/SourceCatalogStore",
+)<SourceCatalogStore, RuntimeSourceCatalogStoreShape>() {}
 
 
 type RuntimeSourceCatalogStoreDeps = {
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   sourceStore: RuntimeSourceStore;
+  workspaceDatabase: Effect.Effect.Success<typeof WorkspaceDatabase>;
 };
 
 type SourceCatalogRuntimeServices =
-  | RuntimeLocalWorkspaceService
-  | RuntimeSourceStoreService;
+  | RuntimeLocalWorkspace
+  | SourceStore
+  | WorkspaceDatabase;
 
 const ensureRuntimeCatalogWorkspace = (
   deps: RuntimeSourceCatalogStoreDeps,
@@ -697,14 +697,6 @@ const ensureRuntimeCatalogWorkspace = (
   return Effect.succeed(deps.runtimeLocalWorkspace.context);
 };
 
-const makeDbLayerFromDeps = (deps: RuntimeSourceCatalogStoreDeps) => {
-  const dbPath = join(
-    deps.runtimeLocalWorkspace.context.stateDirectory,
-    EXECUTOR_DB_FILENAME,
-  );
-  return makeWorkspaceCatalogDbLayer(dbPath);
-};
-
 const loadWorkspaceSourceCatalogsWithDeps = (deps: RuntimeSourceCatalogStoreDeps, input: {
   workspaceId: WorkspaceId;
   actorAccountId?: AccountId | null;
@@ -716,12 +708,10 @@ const loadWorkspaceSourceCatalogsWithDeps = (deps: RuntimeSourceCatalogStoreDeps
       { actorAccountId: input.actorAccountId },
     );
 
-    const dbLayer = makeDbLayerFromDeps(deps);
-
     const localCatalogs = yield* Effect.forEach(sources, (source) =>
       loadSourceWithCatalogFromDb({ sourceId: source.id }).pipe(
-        Effect.provide(dbLayer),
-        Effect.provideService(RuntimeSourceStoreService, deps.sourceStore),
+        Effect.provide(deps.workspaceDatabase.queryLayer()),
+        Effect.provideService(SourceStore, deps.sourceStore),
         Effect.map((catalog) => catalog as LoadedSourceCatalog | null),
         Effect.catchAll(() => Effect.succeed(null as LoadedSourceCatalog | null)),
       ),
@@ -737,11 +727,10 @@ const loadSourceWithCatalogWithDeps = (deps: RuntimeSourceCatalogStoreDeps, inpu
 }): Effect.Effect<LoadedSourceCatalog, Error | LocalSourceArtifactMissingError, never> =>
   Effect.gen(function* () {
     yield* ensureRuntimeCatalogWorkspace(deps, input.workspaceId);
-    const dbLayer = makeDbLayerFromDeps(deps);
 
     return yield* loadSourceWithCatalogFromDb({ sourceId: input.sourceId as SourceId }).pipe(
-      Effect.provide(dbLayer),
-      Effect.provideService(RuntimeSourceStoreService, deps.sourceStore),
+      Effect.provide(deps.workspaceDatabase.queryLayer()),
+      Effect.provideService(SourceStore, deps.sourceStore),
       Effect.mapError((e) => e instanceof Error ? e : new Error(String(e))),
     );
   });
@@ -751,11 +740,12 @@ export const loadWorkspaceSourceCatalogs = (input: {
   actorAccountId?: AccountId | null;
 }): Effect.Effect<readonly LoadedSourceCatalog[], Error, SourceCatalogRuntimeServices> =>
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     return yield* loadWorkspaceSourceCatalogsWithDeps(
-      { runtimeLocalWorkspace, sourceStore },
+      { runtimeLocalWorkspace, sourceStore, workspaceDatabase },
       input,
     );
   });
@@ -770,11 +760,12 @@ export const loadSourceWithCatalog = (input: {
   SourceCatalogRuntimeServices
 > =>
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     return yield* loadSourceWithCatalogWithDeps(
-      { runtimeLocalWorkspace, sourceStore },
+      { runtimeLocalWorkspace, sourceStore, workspaceDatabase },
       input,
     );
   });
@@ -795,11 +786,11 @@ export const loadSourceWithCatalogFromDb = (input: {
 }): Effect.Effect<
   LoadedSourceCatalog,
   Error | LocalSourceArtifactMissingError,
-  SqliteDrizzle | RuntimeSourceStoreService
+  SqliteDrizzle | SourceStore
 > =>
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle;
-    const sourceStore = yield* RuntimeSourceStoreService;
+    const sourceStore = yield* SourceStore;
 
     // 1. Load the source row from the source store
     //    (We need the workspaceId — look it up via the DB source table.)
@@ -1275,30 +1266,34 @@ export const loadWorkspaceSourceCatalogToolByPath = (input: {
   });
 
 export const RuntimeSourceCatalogStoreLive = Layer.effect(
-  RuntimeSourceCatalogStoreService,
+  SourceCatalogStore,
   Effect.gen(function* () {
-    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const sourceStore = yield* RuntimeSourceStoreService;
+    const runtimeLocalWorkspace = yield* RuntimeLocalWorkspace;
+    const sourceStore = yield* SourceStore;
+    const workspaceDatabase = yield* WorkspaceDatabase;
 
     const deps: RuntimeSourceCatalogStoreDeps = {
       runtimeLocalWorkspace,
       sourceStore,
+      workspaceDatabase,
     };
 
-    return RuntimeSourceCatalogStoreService.of({
+    return SourceCatalogStore.of({
       loadWorkspaceSourceCatalogs: (input) =>
         loadWorkspaceSourceCatalogsWithDeps(deps, input),
       loadSourceWithCatalog: (input) =>
         loadSourceWithCatalogWithDeps(deps, input),
       loadWorkspaceSourceCatalogToolIndex: (input) =>
         loadWorkspaceSourceCatalogToolIndex(input).pipe(
-          Effect.provideService(RuntimeLocalWorkspaceService, runtimeLocalWorkspace),
-          Effect.provideService(RuntimeSourceStoreService, sourceStore),
+          Effect.provideService(RuntimeLocalWorkspace, runtimeLocalWorkspace),
+          Effect.provideService(SourceStore, sourceStore),
+          Effect.provideService(WorkspaceDatabase, workspaceDatabase),
         ),
       loadWorkspaceSourceCatalogToolByPath: (input) =>
         loadWorkspaceSourceCatalogToolByPath(input).pipe(
-          Effect.provideService(RuntimeLocalWorkspaceService, runtimeLocalWorkspace),
-          Effect.provideService(RuntimeSourceStoreService, sourceStore),
+          Effect.provideService(RuntimeLocalWorkspace, runtimeLocalWorkspace),
+          Effect.provideService(SourceStore, sourceStore),
+          Effect.provideService(WorkspaceDatabase, workspaceDatabase),
         ),
     });
   }),

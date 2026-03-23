@@ -1,4 +1,3 @@
-import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import type {
   AccountId,
   AuthArtifact,
@@ -8,7 +7,6 @@ import type {
 } from "#schema";
 import { SourceIdSchema } from "#schema";
 import * as Effect from "effect/Effect";
-import { join } from "node:path";
 
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 import { eq, and, desc } from "drizzle-orm";
@@ -37,15 +35,17 @@ import {
   sourceAuthFromConfigInput,
   trimOrNull,
 } from "./config";
-import { catalog_tool, catalog_revision, source as sourceTable } from "../../../db/schema";
-import { makeWorkspaceCatalogQueryDbLayer } from "../../../db/setup";
+import { catalog_tool, catalog_revision } from "../../../db/schema";
 import { stableSourceCatalogId } from "../source-definitions";
-import { loadSourceStatusFromDb, type DbSourceStatus } from "../../../db/indexer";
+import { loadSourceStatus, type SourceStatusRecord } from "../../../db/source-state";
+import {
+  makeWorkspaceDatabase,
+} from "../../local/workspace-database";
 
 export const buildLocalSourceRecord = (input: {
   workspaceId: WorkspaceId;
   loadedConfig: LoadedLocalExecutorConfig;
-  sourceStatus: DbSourceStatus | null;
+  sourceStatus: SourceStatusRecord | null;
   sourceId: SourceId;
   actorAccountId?: AccountId | null;
   authArtifacts: ReadonlyArray<AuthArtifact>;
@@ -151,23 +151,18 @@ export const loadSourcesInWorkspaceWithDeps = (
       deps,
       workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const authArtifacts = yield* deps.rows.authArtifacts.listByWorkspaceId(
       workspaceId,
     );
-
-    const dbPath = join(
-      localWorkspace.context.stateDirectory,
-      EXECUTOR_DB_FILENAME,
-    );
-    const dbLayer = makeWorkspaceCatalogQueryDbLayer(dbPath);
 
     const sources = yield* Effect.forEach(
       Object.keys(localWorkspace.loadedConfig.config?.sources ?? {}),
       (sourceId) =>
         Effect.gen(function* () {
           const sid = SourceIdSchema.make(sourceId);
-          const sourceStatus = yield* loadSourceStatusFromDb(sid).pipe(
-            Effect.provide(dbLayer),
+          const sourceStatus = yield* loadSourceStatus(sid).pipe(
+            Effect.provide(workspaceDatabase.queryLayer()),
             Effect.catchAll(() => Effect.succeed(null)),
           );
           const { source } = yield* buildLocalSourceRecord({
@@ -297,6 +292,7 @@ export const syncWorkspaceSourceTypeDeclarationsWithDeps = (
       deps,
       workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const sources = yield* loadSourcesInWorkspaceWithDeps(
       deps,
       workspaceId,
@@ -304,15 +300,9 @@ export const syncWorkspaceSourceTypeDeclarationsWithDeps = (
     );
 
     // Read snapshot data from SQLite instead of file artifacts
-    const dbPath = join(
-      localWorkspace.context.stateDirectory,
-      EXECUTOR_DB_FILENAME,
-    );
-    const dbLayer = makeWorkspaceCatalogQueryDbLayer(dbPath);
-
     const entries = yield* Effect.forEach(sources, (source) =>
       loadSourceSnapshotFromSqlite(source).pipe(
-        Effect.provide(dbLayer),
+        Effect.provide(workspaceDatabase.queryLayer()),
         Effect.map((snapshot) =>
           snapshot === null
             ? null
@@ -423,6 +413,7 @@ export const loadSourceByIdWithDeps = (
       deps,
       input.workspaceId,
     );
+    const workspaceDatabase = makeWorkspaceDatabase(localWorkspace);
     const authArtifacts = yield* deps.rows.authArtifacts.listByWorkspaceId(
       input.workspaceId,
     );
@@ -433,13 +424,8 @@ export const loadSourceByIdWithDeps = (
         });
     }
 
-    const dbPath = join(
-      localWorkspace.context.stateDirectory,
-      EXECUTOR_DB_FILENAME,
-    );
-    const dbLayer = makeWorkspaceCatalogQueryDbLayer(dbPath);
-    const sourceStatus = yield* loadSourceStatusFromDb(input.sourceId).pipe(
-      Effect.provide(dbLayer),
+    const sourceStatus = yield* loadSourceStatus(input.sourceId).pipe(
+      Effect.provide(workspaceDatabase.queryLayer()),
       Effect.catchAll(() => Effect.succeed(null)),
     );
 

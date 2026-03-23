@@ -28,7 +28,7 @@ import { createGraphqlCatalogFragment } from "@executor/source-graphql";
 import {
   type ControlPlaneRuntime,
   createControlPlaneRuntime,
-  LiveExecutionManagerService,
+  ExecutionManager,
   provideControlPlaneRuntime,
 } from "./index";
 import { createSourceFromPayload } from "./sources/source-definitions";
@@ -44,7 +44,7 @@ import { writeLocalControlPlaneState } from "./local/control-plane-store";
 import { deriveLocalInstallation } from "./local/installation";
 import { syncSourceToSqlite, hasSourceCatalogData } from "../db/indexer";
 import { makeWorkspaceCatalogDbLayer } from "../db/setup";
-import { upsertSourceStatusToDb } from "../db/indexer";
+import { upsertSourceStatus } from "../db/source-state";
 
 const makeRuntime = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -594,7 +594,7 @@ describe("control-plane-runtime", () => {
       }).pipe((effect) => provideControlPlaneRuntime(effect, runtime), Effect.orDie);
 
       const interactionFiber = yield* Effect.gen(function* () {
-        const liveExecutionManager = yield* LiveExecutionManagerService;
+        const liveExecutionManager = yield* ExecutionManager;
         const onElicitation = liveExecutionManager.createOnElicitation({
           rows: runtime.persistence.rows,
           executionId,
@@ -930,7 +930,7 @@ describe("control-plane-runtime", () => {
       // Write source status to SQLite so the runtime can find it
       const dbPath = join(context.stateDirectory, EXECUTOR_DB_FILENAME);
       const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
-      yield* upsertSourceStatusToDb({
+      yield* upsertSourceStatus({
         sourceId,
         workspaceId: source.workspaceId,
         name: source.name,
@@ -1130,7 +1130,7 @@ describe("control-plane-runtime", () => {
       }).pipe((effect) => provideControlPlaneRuntime(effect, runtime), Effect.orDie);
 
       const interactionFiber = yield* Effect.gen(function* () {
-        const liveExecutionManager = yield* LiveExecutionManagerService;
+        const liveExecutionManager = yield* ExecutionManager;
         const onElicitation = liveExecutionManager.createOnElicitation({
           rows: runtime.persistence.rows,
           executionId,

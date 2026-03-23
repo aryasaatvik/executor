@@ -20,7 +20,7 @@ import {
   parseSecretStoreProviderId,
   resolveDefaultSecretStoreProviderId,
 } from "../../runtime/local/secret-material-providers";
-import { RuntimeSourceStoreService } from "../../runtime/sources/source-store";
+import { SourceStore } from "../../runtime/sources/source-store";
 import { ControlPlaneStore } from "../../runtime/store";
 import type {
   CreateSecretResult,
@@ -185,7 +185,7 @@ export const ControlPlaneLocalLive = HttpApiBuilder.group(
         .handle("listSecrets", () =>
           Effect.gen(function* () {
             const store = yield* ControlPlaneStore;
-            const sourceStore = yield* RuntimeSourceStoreService;
+            const sourceStore = yield* SourceStore;
             const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace().pipe(
               Effect.mapError(() =>
                 storageError("secrets", "Failed resolving local workspace."),

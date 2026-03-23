@@ -12,7 +12,7 @@ import type { LocalInstallation } from "#schema";
 import { type ResolveExecutionEnvironment } from "./execution/state";
 import {
   createLiveExecutionManager,
-  LiveExecutionManagerService,
+  ExecutionManager,
 } from "./execution/live";
 import {
   createLocalControlPlanePersistence,
@@ -31,6 +31,7 @@ import {
   type RuntimeLocalWorkspaceState,
   RuntimeLocalWorkspaceLive,
 } from "./local/runtime-context";
+import { WorkspaceDatabaseLive } from "./local/workspace-database";
 import { LocalToolRuntimeLoaderLive } from "./local/tools";
 import { synchronizeLocalWorkspaceState } from "./local/workspace-sync";
 import { ControlPlaneStore, type ControlPlaneStoreShape } from "./store";
@@ -43,7 +44,7 @@ import {
   RuntimeSourceAuthServiceLive,
 } from "./sources/source-auth-service";
 import type { ResolveSecretMaterial } from "./local/secret-material-providers";
-import { SecretMaterialLive } from "./local/secret-material-providers";
+import { SecretMaterialStoreLive } from "./local/secret-material-providers";
 import {
   RuntimeExecutionResolverLive,
 } from "./execution/workspace/environment";
@@ -54,6 +55,7 @@ export * from "./execution/live";
 export * from "./local/config";
 export * from "./local/installation";
 export * from "./local/storage";
+export * from "./local/workspace-database";
 
 export * from "./local/tools";
 export * from "./catalog/schema-type-signature";
@@ -108,7 +110,7 @@ export type RuntimeControlPlaneLayer = Layer.Layer<
  *     FileSystem (platform), WorkspaceConfigStore, LocalToolRuntimeLoader
  *
  *   Tier 3 — Storage
- *     SecretMaterial, SourceStore, CatalogStore
+ *     WorkspaceDatabase, SecretMaterial, SourceStore, CatalogStore
  *
  *   Tier 4 — Source
  *     SourceAuthMaterial, CatalogSync, SourceAuth
@@ -128,7 +130,7 @@ export const createRuntimeControlPlaneLayer = (
   const tier1_foundation = Layer.mergeAll(
     Layer.succeed(ControlPlaneStore, input.store),
     RuntimeLocalWorkspaceLive(input.localWorkspaceState),
-    Layer.succeed(LiveExecutionManagerService, input.liveExecutionManager),
+    Layer.succeed(ExecutionManager, input.liveExecutionManager),
   );
 
   // ── Tier 2 — Filesystem (minimal) ───────────────────────────────────
@@ -153,8 +155,13 @@ export const createRuntimeControlPlaneLayer = (
   const tier1_2 = Layer.mergeAll(tier1_foundation, tier2_filesystem);
 
   // ── Tier 3 — Storage ────────────────────────────────────────────────
-  // Secret material, source store, catalog store. Depend on Tier 1+2.
-  const secretMaterialLayer = SecretMaterialLive({
+  // Workspace database, secret material, source store, catalog store.
+  // Depend on Tier 1+2.
+  const workspaceDatabaseLayer = WorkspaceDatabaseLive.pipe(
+    Layer.provide(tier1_foundation),
+  );
+
+  const secretMaterialLayer = SecretMaterialStoreLive({
     resolveSecretMaterial: input.resolveSecretMaterial,
   }).pipe(Layer.provide(tier1_2));
 
@@ -167,6 +174,7 @@ export const createRuntimeControlPlaneLayer = (
   );
 
   const tier3_storage = Layer.mergeAll(
+    workspaceDatabaseLayer,
     secretMaterialLayer,
     sourceStoreLayer,
     sourceCatalogStoreLayer,
