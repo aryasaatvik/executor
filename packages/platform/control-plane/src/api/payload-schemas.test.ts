@@ -29,9 +29,11 @@ describe("control-plane payload schemas", () => {
     expect(
       Schema.decodeUnknownSync(CreateExecutionPayloadSchema)({
         code: "  console.log('ok')  ",
+        executionSessionId: "  mcp-session-1  ",
       }),
     ).toEqual({
       code: "console.log('ok')",
+      executionSessionId: "mcp-session-1",
     });
 
     expect(
@@ -94,6 +96,13 @@ describe("control-plane payload schemas", () => {
     throws(() =>
       Schema.decodeUnknownSync(CreatePolicyPayloadSchema)({
         resourcePattern: "   ",
+      })
+    );
+
+    throws(() =>
+      Schema.decodeUnknownSync(CreateExecutionPayloadSchema)({
+        code: "return 1",
+        executionSessionId: "   ",
       })
     );
   });

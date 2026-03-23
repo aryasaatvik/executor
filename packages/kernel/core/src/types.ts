@@ -33,6 +33,7 @@ export type ElicitationResponse = {
 
 export type ToolInvocationContext = {
   runId?: string;
+  executionSessionId?: string;
   callId?: string;
   scope?: string;
   actor?: string;

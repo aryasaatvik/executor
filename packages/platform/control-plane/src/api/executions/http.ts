@@ -1,6 +1,7 @@
 import { HttpApiBuilder } from "@effect/platform";
 import * as Effect from "effect/Effect";
 import {
+  closeExecutionSession,
   createExecution,
   getExecution,
   listExecutionSteps,
@@ -65,6 +66,17 @@ export const ControlPlaneExecutionsLive = HttpApiBuilder.group(
               workspaceId: path.workspaceId,
               executionId: path.executionId,
             }),
+          ),
+        ),
+      )
+      .handle("closeSession", ({ path }) =>
+        resolveRequestedLocalWorkspace("executions.closeSession", path.workspaceId).pipe(
+          Effect.flatMap((runtimeLocalWorkspace) =>
+            closeExecutionSession({
+              workspaceId: path.workspaceId,
+              executionSessionId: path.executionSessionId,
+              accountId: runtimeLocalWorkspace.installation.accountId,
+            })
           ),
         ),
       ),

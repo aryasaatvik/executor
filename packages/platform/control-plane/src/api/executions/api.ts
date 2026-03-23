@@ -3,6 +3,7 @@ import {
   ExecutionIdSchema,
   ExecutionEnvelopeSchema,
   ExecutionSchema,
+  ExecutionSessionIdSchema,
   ExecutionStepSchema,
   WorkspaceIdSchema,
 } from "#schema";
@@ -19,6 +20,7 @@ import { TrimmedNonEmptyStringSchema } from "../string-schemas";
 
 export const CreateExecutionPayloadSchema = Schema.Struct({
   code: TrimmedNonEmptyStringSchema,
+  executionSessionId: Schema.optional(ExecutionSessionIdSchema),
   interactionMode: Schema.optional(Schema.Literal("live", "live_form", "detach")),
 });
 
@@ -33,6 +35,10 @@ export type ResumeExecutionPayload = typeof ResumeExecutionPayloadSchema.Type;
 
 const workspaceIdParam = HttpApiSchema.param("workspaceId", WorkspaceIdSchema);
 const executionIdParam = HttpApiSchema.param("executionId", ExecutionIdSchema);
+const executionSessionIdParam = HttpApiSchema.param(
+  "executionSessionId",
+  ExecutionSessionIdSchema,
+);
 
 export class ExecutionsApi extends HttpApiGroup.make("executions")
   .add(
@@ -80,6 +86,14 @@ export class ExecutionsApi extends HttpApiGroup.make("executions")
       .addError(ControlPlaneUnauthorizedError)
       .addError(ControlPlaneForbiddenError)
       .addError(ControlPlaneNotFoundError)
+      .addError(ControlPlaneStorageError),
+  )
+  .add(
+    HttpApiEndpoint.del("closeSession")`/workspaces/${workspaceIdParam}/execution-sessions/${executionSessionIdParam}`
+      .addSuccess(Schema.Struct({ closed: Schema.Boolean }))
+      .addError(ControlPlaneBadRequestError)
+      .addError(ControlPlaneUnauthorizedError)
+      .addError(ControlPlaneForbiddenError)
       .addError(ControlPlaneStorageError),
   )
   .prefix("/v1") {}

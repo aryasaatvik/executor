@@ -5,7 +5,9 @@ import type {
 import {
   EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
+  ExecutionSessionIdSchema,
   RuntimeExecutionResolverService,
+  closeExecutionSession,
   createExecution,
   getExecution,
   resumeExecution,
@@ -154,8 +156,6 @@ const buildExecuteWorkflowText = (namespaces: readonly string[] = []): string =>
     "Do not use fetch; use tools.* only.",
   ].join("\n");
 
-const defaultExecuteDescription = buildExecuteWorkflowText();
-
 const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> =>
   runControlPlane(
     runtime,
@@ -169,20 +169,19 @@ const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> =
 
       const catalog = environment.catalog as CatalogLike | undefined;
       if (!catalog) {
-        return defaultExecuteDescription;
+        return yield* Effect.fail(
+          new Error("Workspace tool catalog is unavailable."),
+        );
       }
 
       const namespaces = yield* catalog.listNamespaces({ limit: 200 }).pipe(
         Effect.map((items) =>
-          items.length > 0
-            ? items.map((item) => item.displayName ?? item.namespace)
-            : ["none discovered yet"],
+          items.map((item) => item.displayName ?? item.namespace),
         ),
-        Effect.catchAll(() => Effect.succeed(["none discovered yet"])),
       );
 
       return buildExecuteWorkflowText(namespaces);
-    }).pipe(Effect.catchAll(() => Effect.succeed(defaultExecuteDescription))),
+    }),
   );
 
 const summarizeExecution = (execution: ExecutionEnvelope["execution"]): string => {
@@ -221,6 +220,9 @@ const buildFinalResult = (
   structuredContent: executionStructuredContent(envelope),
   ...(options.isError ? { isError: true } : {}),
 });
+
+const executionSessionIdFromExecutorMcpSession = (sessionId: string): string =>
+  `mcp_${sessionId}`;
 
 const buildPausedResult = (envelope: ExecutionEnvelope): ExecutorMcpToolResult => {
   const interaction = envelope.pendingInteraction;
@@ -413,6 +415,7 @@ const driveExecutionWithoutElicitation = async (input: {
 
 const createExecutorMcpServer = async (config: {
   runtime: ControlPlaneRuntime;
+  getExecutionSessionId?: () => string | undefined;
 }): Promise<McpServer> => {
   const executeDescription = await loadExecuteDescription(config.runtime);
   const server = new McpServer(
@@ -434,12 +437,17 @@ const createExecutorMcpServer = async (config: {
       inputSchema: executeInputSchema,
     },
     async ({ code }: { code: string }) => {
+      const executionSessionId = config.getExecutionSessionId?.();
       let created = await runControlPlane(
         config.runtime,
         createExecution({
           workspaceId,
           payload: {
             code,
+            executionSessionId:
+              executionSessionId !== undefined
+                ? ExecutionSessionIdSchema.make(executionSessionId)
+                : undefined,
             interactionMode: interactionModeForServer(server),
           },
           createdByAccountId: accountId,
@@ -574,15 +582,26 @@ export const createExecutorMcpRequestHandler = (
     const transport = transports.get(sessionId);
     const server = servers.get(sessionId);
 
-    transports.delete(sessionId);
-    servers.delete(sessionId);
+    try {
+      await runControlPlane(
+        runtime,
+        closeExecutionSession({
+          workspaceId: runtime.localInstallation.workspaceId,
+          executionSessionId: executionSessionIdFromExecutorMcpSession(sessionId) as never,
+          accountId: runtime.localInstallation.accountId,
+        }),
+      );
+    } finally {
+      transports.delete(sessionId);
+      servers.delete(sessionId);
 
-    if (options.closeTransport) {
-      await transport?.close().catch(() => undefined);
-    }
+      if (options.closeTransport) {
+        await transport?.close().catch(() => undefined);
+      }
 
-    if (options.closeServer) {
-      await server?.close().catch(() => undefined);
+      if (options.closeServer) {
+        await server?.close().catch(() => undefined);
+      }
     }
   };
 
@@ -609,20 +628,28 @@ export const createExecutorMcpRequestHandler = (
           }
         },
         onsessionclosed: (closedSessionId) => {
-          void disposeSession(closedSessionId, { closeServer: true });
+          void disposeSession(closedSessionId, { closeServer: true }).catch((error) => {
+            console.error("Failed closing MCP session", error);
+          });
         },
       });
 
       transport.onclose = () => {
         const closedSessionId = transport.sessionId;
         if (closedSessionId) {
-          void disposeSession(closedSessionId, { closeServer: true });
+          void disposeSession(closedSessionId, { closeServer: true }).catch((error) => {
+            console.error("Failed closing MCP session", error);
+          });
         }
       };
 
       try {
         createdServer = await createExecutorMcpServer({
           runtime,
+          getExecutionSessionId: () =>
+            transport.sessionId
+              ? executionSessionIdFromExecutorMcpSession(transport.sessionId)
+              : undefined,
         });
         await createdServer.connect(transport);
         const response = await transport.handleRequest(request);
