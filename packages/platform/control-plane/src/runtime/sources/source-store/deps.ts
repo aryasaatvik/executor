@@ -8,7 +8,6 @@ import type {
 import {
   LocalExecutorConfigDecodeError,
   LocalFileSystemError,
-  LocalWorkspaceStateDecodeError,
   RuntimeLocalWorkspaceMismatchError,
   RuntimeLocalWorkspaceUnavailableError,
 } from "../../local/errors";
@@ -17,25 +16,17 @@ import {
   type RuntimeLocalWorkspaceState,
 } from "../../local/runtime-context";
 import type {
-  SourceArtifactStoreShape,
-  WorkspaceStorageServices,
   WorkspaceConfigStoreShape,
-  WorkspaceStateStoreShape,
 } from "../../local/storage";
 import {
-  SourceArtifactStore,
   WorkspaceConfigStore,
-  WorkspaceStateStore,
 } from "../../local/storage";
-import type { LocalWorkspaceState } from "../../local/workspace-state";
 import type { ControlPlaneStoreShape } from "../../store";
 
 export type RuntimeSourceStoreDeps = {
   rows: ControlPlaneStoreShape;
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
 };
 
 export type ResolvedSourceStoreWorkspace = {
@@ -45,10 +36,7 @@ export type ResolvedSourceStoreWorkspace = {
     accountId: AccountId;
   };
   workspaceConfigStore: WorkspaceConfigStoreShape;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   loadedConfig: LoadedLocalExecutorConfig;
-  workspaceState: LocalWorkspaceState;
 };
 
 export const resolveRuntimeLocalWorkspaceFromDeps = (
@@ -60,7 +48,6 @@ export const resolveRuntimeLocalWorkspaceFromDeps = (
   | RuntimeLocalWorkspaceMismatchError
   | LocalFileSystemError
   | LocalExecutorConfigDecodeError
-  | LocalWorkspaceStateDecodeError
   | Error,
   never
 > =>
@@ -76,18 +63,12 @@ export const resolveRuntimeLocalWorkspaceFromDeps = (
     const loadedConfig = yield* deps.workspaceConfigStore.load(
       deps.runtimeLocalWorkspace.context,
     );
-    const workspaceState = yield* deps.workspaceStateStore.load(
-      deps.runtimeLocalWorkspace.context,
-    );
 
     return {
       context: deps.runtimeLocalWorkspace.context,
       installation: deps.runtimeLocalWorkspace.installation,
       workspaceConfigStore: deps.workspaceConfigStore,
-      workspaceStateStore: deps.workspaceStateStore,
-      sourceArtifactStore: deps.sourceArtifactStore,
       loadedConfig,
-      workspaceState,
     };
   });
 
@@ -100,21 +81,16 @@ export const loadRuntimeSourceStoreDeps = (
   | RuntimeLocalWorkspaceMismatchError
   | LocalFileSystemError
   | LocalExecutorConfigDecodeError
-  | LocalWorkspaceStateDecodeError
   | Error,
-  WorkspaceStorageServices
+  WorkspaceConfigStore
 > =>
   Effect.gen(function* () {
     const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace(workspaceId);
     const workspaceConfigStore = yield* WorkspaceConfigStore;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
 
     return {
       rows,
       runtimeLocalWorkspace,
       workspaceConfigStore,
-      workspaceStateStore,
-      sourceArtifactStore,
     };
   });

@@ -48,6 +48,38 @@ describe("migrateJsonToSqlite", () => {
     }).pipe(Effect.provide(NodeFileSystem.layer)),
   );
 
+  it.effect("succeeds when artifacts directory does not exist", () =>
+    Effect.gen(function* () {
+      const workspaceRoot = yield* makeContext();
+
+      yield* migrateJsonToSqlite({
+        controlPlaneStatePath: join(workspaceRoot, "control-plane-state.json"),
+        workspaceStatePath: join(workspaceRoot, "workspace-state.json"),
+        artifactsDirectory: join(workspaceRoot, "nonexistent-artifacts"),
+      }).pipe(
+        Effect.provide(makeSqlTag()),
+      );
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
+  it.effect("succeeds when artifacts directory is empty", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* makeContext();
+      const artifactsDir = join(workspaceRoot, "artifacts");
+      const sourcesDir = join(artifactsDir, "sources");
+      yield* fs.makeDirectory(sourcesDir, { recursive: true });
+
+      yield* migrateJsonToSqlite({
+        controlPlaneStatePath: join(workspaceRoot, "control-plane-state.json"),
+        workspaceStatePath: join(workspaceRoot, "workspace-state.json"),
+        artifactsDirectory: artifactsDir,
+      }).pipe(
+        Effect.provide(makeSqlTag()),
+      );
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
+
   it.effect("fails when workspace-state policies cannot be migrated losslessly", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

@@ -1,12 +1,13 @@
+import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import type { AccountId, Source, WorkspaceId } from "#schema";
 import * as Effect from "effect/Effect";
+import { join } from "node:path";
 
 import { removeAuthLeaseAndSecrets } from "../../auth/auth-leases";
 import {
   clearProviderGrantOrphanedAt,
   markProviderGrantOrphanedIfUnused,
 } from "../../auth/provider-grant-lifecycle";
-import type { LocalWorkspaceState } from "../../local/workspace-state";
 import {
   stableSourceCatalogId,
   stableSourceCatalogRevisionId,
@@ -32,6 +33,9 @@ import {
   shouldRefreshWorkspaceDeclarationsAfterPersist,
   syncWorkspaceSourceTypeDeclarationsWithDeps,
 } from "./records";
+import { upsertSourceStatusToDb, removeSourceFromDb, loadSourceStatusFromDb } from "../../../db/indexer";
+import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+
 
 export const removeSourceByIdWithDeps = (
   deps: RuntimeSourceStoreDeps,
@@ -62,20 +66,17 @@ export const removeSourceByIdWithDeps = (
       },
     });
 
-    const { [input.sourceId]: _removedSource, ...remainingSources } =
-      localWorkspace.workspaceState.sources;
-    const workspaceState: LocalWorkspaceState = {
-      ...localWorkspace.workspaceState,
-      sources: remainingSources,
-    };
-    yield* localWorkspace.workspaceStateStore.write({
-      context: localWorkspace.context,
-      state: workspaceState,
-    });
-    yield* localWorkspace.sourceArtifactStore.remove({
-      context: localWorkspace.context,
-      sourceId: input.sourceId,
-    });
+    // Remove source from SQLite (CASCADE deletes handle catalog_tool, etc.)
+    const dbPath = join(
+      localWorkspace.context.stateDirectory,
+      EXECUTOR_DB_FILENAME,
+    );
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+    yield* removeSourceFromDb(input.sourceId).pipe(
+      Effect.provide(dbLayer),
+      Effect.catchAll(() => Effect.void),
+    );
+
     const existingAuthArtifacts =
       yield* deps.rows.authArtifacts.listByWorkspaceAndSourceId({
         workspaceId: input.workspaceId,
@@ -118,11 +119,23 @@ export const persistSourceWithDeps = (
       deps,
       source.workspaceId,
     );
+
+    // Check if source exists in DB for ID derivation
+    const dbPath = join(
+      localWorkspace.context.stateDirectory,
+      EXECUTOR_DB_FILENAME,
+    );
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+    const existingDbStatus = yield* loadSourceStatusFromDb(source.id).pipe(
+      Effect.provide(dbLayer),
+      Effect.catchAll(() => Effect.succeed(null)),
+    );
+
     const nextSource = {
       ...source,
       id:
         localWorkspace.loadedConfig.config?.sources?.[source.id] ||
-        localWorkspace.workspaceState.sources[source.id]
+        existingDbStatus !== null
           ? source.id
           : deriveLocalSourceId(
               source,
@@ -256,24 +269,24 @@ export const persistSourceWithDeps = (
       { discard: true },
     );
 
-    const existingSourceState = localWorkspace.workspaceState.sources[nextSource.id];
-    const workspaceState: LocalWorkspaceState = {
-      ...localWorkspace.workspaceState,
-      sources: {
-        ...localWorkspace.workspaceState.sources,
-        [nextSource.id]: {
-          status: nextSource.status,
-          lastError: nextSource.lastError,
-          sourceHash: nextSource.sourceHash,
-          createdAt: existingSourceState?.createdAt ?? nextSource.createdAt,
-          updatedAt: nextSource.updatedAt,
-        },
-      },
-    };
-    yield* localWorkspace.workspaceStateStore.write({
-      context: localWorkspace.context,
-      state: workspaceState,
-    });
+    // Write source status to SQLite
+    yield* upsertSourceStatusToDb({
+      sourceId: nextSource.id,
+      workspaceId: nextSource.workspaceId,
+      name: nextSource.name,
+      kind: nextSource.kind,
+      endpoint: nextSource.endpoint,
+      status: nextSource.status,
+      enabled: nextSource.enabled,
+      namespace: nextSource.namespace,
+      lastError: nextSource.lastError,
+      sourceHash: nextSource.sourceHash,
+      createdAt: existingDbStatus?.createdAt ?? nextSource.createdAt,
+      updatedAt: nextSource.updatedAt,
+    }).pipe(
+      Effect.provide(dbLayer),
+      Effect.catchAll(() => Effect.void),
+    );
 
     if (shouldRefreshWorkspaceDeclarationsAfterPersist(nextSource)) {
       yield* syncWorkspaceSourceTypeDeclarationsWithDeps(

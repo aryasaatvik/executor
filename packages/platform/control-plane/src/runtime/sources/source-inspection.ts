@@ -23,6 +23,7 @@ import {
   expandCatalogToolByPath,
   expandCatalogTools,
   loadSourceWithCatalog,
+  loadSourceWithCatalogFromDb,
   type LoadedSourceCatalogTool,
 } from "../catalog/source/runtime";
 import { RuntimeSourceStoreService } from "./source-store";
@@ -68,14 +69,26 @@ const loadSourceCatalogOrEmpty = (input: {
   workspaceId: WorkspaceId;
   sourceId: SourceId;
 }) =>
-  loadSourceWithCatalog({
-    workspaceId: input.workspaceId,
+  // Try DB-backed path first, fall back to file-based path
+  loadSourceWithCatalogFromDb({
     sourceId: input.sourceId,
   }).pipe(
     Effect.map((catalogEntry) => ({
       kind: "catalog" as const,
       catalogEntry,
     })),
+    Effect.catchAll(() =>
+      // Fall back to file-based path
+      loadSourceWithCatalog({
+        workspaceId: input.workspaceId,
+        sourceId: input.sourceId,
+      }).pipe(
+        Effect.map((catalogEntry) => ({
+          kind: "catalog" as const,
+          catalogEntry,
+        })),
+      ),
+    ),
     Effect.catchTag("LocalSourceArtifactMissingError", (cause) =>
       Effect.gen(function* () {
         const source = yield* loadSourceForMissingCatalog({

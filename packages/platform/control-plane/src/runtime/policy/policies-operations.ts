@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../../db/client.js"
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
@@ -22,7 +23,6 @@ import {
   operationErrors,
 } from "./operation-errors";
 
-const WORKSPACE_DB_FILENAME = "catalog.db";
 
 const policyOps = {
   list: operationErrors("policies.list"),
@@ -38,7 +38,7 @@ const defaultPolicyApprovalMode = "auto" as const;
 const defaultPolicyPriority = 0;
 
 const policyDbPath = (stateDirectory: string): string =>
-  join(stateDirectory, WORKSPACE_DB_FILENAME);
+  join(stateDirectory, EXECUTOR_DB_FILENAME);
 
 const basePolicySlug = (input: {
   resourcePattern: string;

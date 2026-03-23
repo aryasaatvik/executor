@@ -23,9 +23,7 @@ import type { RuntimeLocalWorkspaceState } from "../local/runtime-context";
 import {
   type LocalStorageServices,
   LocalInstallationStore,
-  LocalSourceArtifactStore,
   LocalWorkspaceConfigStore,
-  LocalWorkspaceStateStore,
   makeLocalStorageLayer,
 } from "../local/storage";
 import { provideOptionalRuntimeLocalWorkspace } from "../local/runtime-context";
@@ -39,8 +37,6 @@ const runEffect = async <A>(
   const baseLayer = makeLocalStorageLayer({
     installationStore: LocalInstallationStore,
     workspaceConfigStore: LocalWorkspaceConfigStore,
-    workspaceStateStore: LocalWorkspaceStateStore,
-    sourceArtifactStore: LocalSourceArtifactStore,
   });
   const exit = await Effect.runPromiseExit(
     provideOptionalRuntimeLocalWorkspace(

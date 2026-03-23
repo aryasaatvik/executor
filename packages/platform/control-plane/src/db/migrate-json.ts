@@ -3,7 +3,10 @@ import { SqlClient } from "@effect/sql"
 import * as Effect from "effect/Effect"
 import * as FileSystem from "@effect/platform/FileSystem"
 import { NodeFileSystem } from "@effect/platform-node"
+import { join } from "node:path"
 
+import { decodeCatalogSnapshotV1, projectCatalogForAgentSdk } from "@executor/ir/catalog"
+import type { Capability, CatalogSnapshotV1, CatalogV1, Executable } from "@executor/ir/model"
 import { LocalFileSystemError, unknownLocalErrorDetails } from "../runtime/local/errors"
 import type {
   AccountId,
@@ -46,6 +49,11 @@ import {
   execution_interaction,
   execution_step,
   source,
+  catalog,
+  catalog_revision,
+  catalog_document,
+  catalog_tool,
+  workspace_state,
 } from "./schema"
 
 // ---------------------------------------------------------------------------
@@ -216,6 +224,32 @@ interface JsonWorkspaceState {
     createdAt: number
     updatedAt: number
   }>
+  catalog?: {
+    semanticSearchSignature: string | null
+  }
+}
+
+/**
+ * Minimal shape of `LocalSourceArtifact` JSON files found in
+ * `artifacts/sources/<sourceId>.json`.
+ */
+interface JsonSourceArtifact {
+  version: number
+  sourceId: string
+  catalogId: string
+  generatedAt: number
+  revision: {
+    id: string
+    catalogId: string
+    revisionNumber: number
+    sourceConfigJson: string
+    importMetadataJson: string | null
+    importMetadataHash: string | null
+    snapshotHash: string | null
+    createdAt: number
+    updatedAt: number
+  }
+  snapshot: unknown
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +309,120 @@ const readFileIfExists = (
     )
   }).pipe(Effect.provide(NodeFileSystem.layer))
 
+/**
+ * List JSON files in a directory, returning an empty array when the directory
+ * does not exist.
+ */
+const listJsonFilesIfExists = (
+  directory: string,
+): Effect.Effect<string[], LocalFileSystemError, never> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const exists = yield* fs.exists(directory).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to check artifacts directory ${directory}: ${unknownLocalErrorDetails(cause)}`,
+            action: "check artifacts directory",
+            path: directory,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+    if (!exists) {
+      return []
+    }
+
+    const entries = yield* fs.readDirectory(directory).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to list artifacts directory ${directory}: ${unknownLocalErrorDetails(cause)}`,
+            action: "list artifacts directory",
+            path: directory,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+    return entries.filter((entry) => entry.endsWith(".json")).map((entry) => join(directory, entry))
+  }).pipe(Effect.provide(NodeFileSystem.layer))
+
+/**
+ * Try to decode a CatalogSnapshotV1, returning null on failure.
+ */
+const tryDecodeCatalogSnapshot = (snapshot: unknown): CatalogSnapshotV1 | null => {
+  try {
+    return decodeCatalogSnapshotV1(snapshot)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Build the snapshot_json object for catalog_revision from a CatalogV1.
+ * Includes only the collections that aren't stored elsewhere.
+ */
+const buildSnapshotJson = (cat: CatalogV1): string =>
+  JSON.stringify({
+    symbols: cat.symbols,
+    scopes: cat.scopes,
+    responseSets: cat.responseSets,
+    resources: cat.resources,
+    diagnostics: cat.diagnostics,
+  })
+
+/**
+ * Choose the preferred executable for a capability, falling back to the first
+ * one if no preferred is set.
+ */
+const chooseExecutableForCapability = (
+  cat: CatalogV1,
+  capability: Capability,
+): Executable | undefined => {
+  if (capability.preferredExecutableId) {
+    const preferred = cat.executables[capability.preferredExecutableId]
+    if (preferred) return preferred
+  }
+  for (const execId of capability.executableIds) {
+    const exec = cat.executables[execId]
+    if (exec) return exec
+  }
+  return undefined
+}
+
+/**
+ * Remove a file if it exists (best-effort, no error on missing).
+ */
+const removeFileIfExists = (
+  path: string,
+): Effect.Effect<void, LocalFileSystemError, never> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const exists = yield* fs.exists(path).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to check file ${path}: ${unknownLocalErrorDetails(cause)}`,
+            action: "check file for removal",
+            path,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+    if (!exists) return
+    yield* fs.remove(path, { recursive: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LocalFileSystemError({
+            message: `Failed to remove ${path}: ${unknownLocalErrorDetails(cause)}`,
+            action: "remove file",
+            path,
+            details: unknownLocalErrorDetails(cause),
+          }),
+      ),
+    )
+  }).pipe(Effect.provide(NodeFileSystem.layer))
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -296,6 +444,8 @@ const readFileIfExists = (
 export const migrateJsonToSqlite = (input: {
   controlPlaneStatePath: string
   workspaceStatePath: string
+  artifactsDirectory?: string
+  workspaceId?: string
 }) =>
   Effect.gen(function* () {
     const db = yield* SqliteDrizzle
@@ -572,6 +722,157 @@ export const migrateJsonToSqlite = (input: {
               `
             }
           }
+
+          // Persist semantic search signature into workspace_state table.
+          if (wsState.catalog?.semanticSearchSignature != null && input.workspaceId) {
+            yield* db
+              .insert(workspace_state)
+              .values({
+                workspaceId: input.workspaceId as WorkspaceId,
+                key: "semanticSearchSignature",
+                value: wsState.catalog.semanticSearchSignature,
+                updatedAt: Date.now(),
+              })
+              .onConflictDoNothing()
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // Import artifact files → catalog_revision + catalog_document
+        // -----------------------------------------------------------------
+        if (input.artifactsDirectory) {
+          const sourcesDir = join(input.artifactsDirectory, "sources")
+          const artifactFiles = yield* listJsonFilesIfExists(sourcesDir)
+
+          for (const artifactPath of artifactFiles) {
+            yield* Effect.gen(function* () {
+              const raw = yield* readFileIfExists(artifactPath, {
+                check: "check artifact file",
+                read: "read artifact file",
+              })
+              if (raw === null) return
+
+              const artifact: JsonSourceArtifact = JSON.parse(raw)
+              const rev = artifact.revision
+              if (!rev?.id || !rev?.catalogId) return
+
+              // Decode snapshot — best effort
+              const snapshot = tryDecodeCatalogSnapshot(artifact.snapshot)
+
+              const now = Date.now()
+
+              // --- catalog (parent row) ---
+              yield* db
+                .insert(catalog)
+                .values({
+                  id: rev.catalogId as typeof catalog.$inferInsert.id,
+                  kind: "source" as typeof catalog.$inferInsert.kind,
+                  adapterKey: "",
+                  providerKey: "",
+                  name: artifact.sourceId,
+                  visibility: "private" as typeof catalog.$inferInsert.visibility,
+                  latestRevisionId: rev.id as typeof catalog_revision.$inferInsert.id,
+                  createdAt: rev.createdAt ?? now,
+                  updatedAt: rev.updatedAt ?? now,
+                })
+                .onConflictDoNothing()
+
+              // --- catalog_revision (with structured snapshot_json) ---
+              yield* db
+                .insert(catalog_revision)
+                .values({
+                  id: rev.id as typeof catalog_revision.$inferInsert.id,
+                  catalogId: rev.catalogId as typeof catalog_revision.$inferInsert.catalogId,
+                  revisionNumber: rev.revisionNumber,
+                  sourceConfigJson: tryParseJson(rev.sourceConfigJson),
+                  importMetadataJson: tryParseJson(rev.importMetadataJson),
+                  importMetadataHash: rev.importMetadataHash ?? null,
+                  snapshotHash: rev.snapshotHash ?? null,
+                  snapshotJson: snapshot ? buildSnapshotJson(snapshot.catalog) : null,
+                  createdAt: rev.createdAt ?? now,
+                  updatedAt: rev.updatedAt ?? now,
+                })
+                .onConflictDoNothing()
+
+              if (snapshot) {
+                // --- catalog_document (source document native blobs) ---
+                for (const [documentId, document] of Object.entries(snapshot.catalog.documents)) {
+                  const sourceDocBlob = document.native?.find(
+                    (blob) => blob.kind === "source_document" && typeof blob.value === "string",
+                  )
+                  if (!sourceDocBlob || typeof sourceDocBlob.value !== "string") {
+                    // Also check for sidecar document files
+                    const sidecarDir = join(sourcesDir, artifact.sourceId, "documents")
+                    const sidecarPath = join(sidecarDir, `${documentId}.txt`)
+                    const sidecarContent = yield* readFileIfExists(sidecarPath, {
+                      check: "check sidecar document",
+                      read: "read sidecar document",
+                    })
+                    if (sidecarContent !== null) {
+                      yield* db
+                        .insert(catalog_document)
+                        .values({
+                          id: `${rev.id}:${documentId}`,
+                          revisionId: rev.id as typeof catalog_document.$inferInsert.revisionId,
+                          documentId,
+                          content: sidecarContent,
+                          createdAt: now,
+                        })
+                        .onConflictDoNothing()
+                    }
+                    continue
+                  }
+
+                  yield* db
+                    .insert(catalog_document)
+                    .values({
+                      id: `${rev.id}:${documentId}`,
+                      revisionId: rev.id as typeof catalog_document.$inferInsert.revisionId,
+                      documentId,
+                      content: sourceDocBlob.value,
+                      createdAt: now,
+                    })
+                    .onConflictDoNothing()
+                }
+
+                // --- catalog_tool capability_json + executable_json ---
+                // Project catalog to derive tool paths, then update matching rows.
+                try {
+                  const projected = projectCatalogForAgentSdk({ catalog: snapshot.catalog })
+                  for (const capability of Object.values(snapshot.catalog.capabilities)) {
+                    const toolDescriptor = projected.toolDescriptors[capability.id]
+                    if (!toolDescriptor) continue
+                    const toolPath = toolDescriptor.toolPath.join(".")
+                    if (!toolPath) continue
+
+                    const executable = chooseExecutableForCapability(snapshot.catalog, capability)
+                    const capabilityJson = JSON.stringify(capability)
+                    const executableJson = executable ? JSON.stringify(executable) : null
+
+                    yield* sql`
+                      UPDATE ${catalog_tool}
+                      SET capability_json = ${capabilityJson},
+                          executable_json = ${executableJson}
+                      WHERE tool_id = ${toolPath}
+                        AND source_id = ${artifact.sourceId}
+                    `
+                  }
+                } catch {
+                  // Projection failure is non-fatal for migration
+                  yield* Effect.logWarning(
+                    `Could not project catalog for artifact ${artifact.sourceId}, skipping capability_json/executable_json`,
+                  )
+                }
+              }
+            }).pipe(
+              // Best-effort: log warning and continue on failure
+              Effect.catchAll((error) =>
+                Effect.logWarning(
+                  `Skipping artifact file ${artifactPath}: ${error instanceof Error ? error.message : String(error)}`,
+                ),
+              ),
+            )
+          }
         }
 
         // -----------------------------------------------------------------
@@ -579,5 +880,22 @@ export const migrateJsonToSqlite = (input: {
         // -----------------------------------------------------------------
         yield* sql`INSERT INTO _migration_meta (key, value) VALUES ('json_migrated', datetime('now'))`
       }),
+    )
+
+    // -------------------------------------------------------------------
+    // Clean up old files after successful migration
+    // -------------------------------------------------------------------
+    yield* Effect.gen(function* () {
+      yield* removeFileIfExists(input.controlPlaneStatePath)
+      yield* removeFileIfExists(input.workspaceStatePath)
+      if (input.artifactsDirectory) {
+        yield* removeFileIfExists(join(input.artifactsDirectory, "sources"))
+      }
+    }).pipe(
+      Effect.catchAll((error) =>
+        Effect.logWarning(
+          `Could not clean up old files after migration: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      ),
     )
   })

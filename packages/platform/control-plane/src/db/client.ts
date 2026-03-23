@@ -42,6 +42,13 @@ if (process.platform === "darwin" && process.versions.bun && !process.env.VITEST
  * We run additional pragmas (busy_timeout, cache_size, foreign_keys)
  * after the connection is established.
  */
+/**
+ * The canonical database filename for the executor workspace.
+ * All runtime state (catalog, auth, executions, secrets, policies, workspace state)
+ * lives in this single SQLite file.
+ */
+export const EXECUTOR_DB_FILENAME = "executor.db"
+
 export const makeSqliteLive = (filename: string) =>
   SqliteClient.layer({ filename })
 

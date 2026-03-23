@@ -9,7 +9,7 @@ import {
 
 import type { LoadedLocalExecutorConfig } from "../local/config";
 import { buildLocalSourceRecord } from "./source-store";
-import type { LocalWorkspaceState } from "../local/workspace-state";
+import type { DbSourceStatus } from "../../db/indexer";
 
 const workspaceId = WorkspaceIdSchema.make("ws_source_store");
 const sourceId = SourceIdSchema.make("linear");
@@ -36,20 +36,12 @@ const loadedConfig: LoadedLocalExecutorConfig = {
   projectConfigPath: "/tmp/project-config.jsonc",
 };
 
-const workspaceState: LocalWorkspaceState = {
-  version: 1,
-  sources: {
-    [sourceId]: {
-      status: "connected",
-      lastError: null,
-      sourceHash: "hash_linear",
-      createdAt: 1000,
-      updatedAt: 2000,
-    },
-  },
-  catalog: {
-    semanticSearchSignature: null,
-  },
+const sourceStatus: DbSourceStatus = {
+  status: "connected",
+  lastError: null,
+  sourceHash: "hash_linear",
+  createdAt: 1000,
+  updatedAt: 2000,
 };
 
 describe("source-store", () => {
@@ -58,7 +50,7 @@ describe("source-store", () => {
       const result = yield* buildLocalSourceRecord({
         workspaceId,
         loadedConfig,
-        workspaceState,
+        sourceStatus,
         sourceId,
         authArtifacts: [],
       });

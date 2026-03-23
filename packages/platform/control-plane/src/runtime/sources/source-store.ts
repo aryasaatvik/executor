@@ -8,10 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import {
-  SourceArtifactStore,
   type WorkspaceStorageServices,
   WorkspaceConfigStore,
-  WorkspaceStateStore,
 } from "../local/storage";
 import { RuntimeLocalWorkspaceService } from "../local/runtime-context";
 import { ControlPlaneStore, type ControlPlaneStoreShape } from "../store";
@@ -133,15 +131,11 @@ export const RuntimeSourceStoreLive = Layer.effect(
     const rows = yield* ControlPlaneStore;
     const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
     const workspaceConfigStore = yield* WorkspaceConfigStore;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
 
     const deps: RuntimeSourceStoreDeps = {
       rows,
       runtimeLocalWorkspace,
       workspaceConfigStore,
-      workspaceStateStore,
-      sourceArtifactStore,
     };
 
     return RuntimeSourceStoreService.of({
