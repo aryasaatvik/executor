@@ -1508,7 +1508,11 @@ export const createLocalControlPlanePersistence = (
     yield* Effect.tryPromise({
       try: () => runtime.runPromise(SqlClient.SqlClient.pipe(Effect.asVoid)),
       catch: toError,
-    });
+    }).pipe(
+      Effect.tapError(() =>
+        Effect.promise(() => runtime.dispose()).pipe(Effect.ignore),
+      ),
+    );
 
     return {
       rows: createSqliteControlPlaneStore(runtime),
