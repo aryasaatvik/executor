@@ -1,15 +1,19 @@
+import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import type {
   AccountId,
   Source,
   WorkspaceId,
 } from "#schema";
 import * as Effect from "effect/Effect";
+import { join } from "node:path";
 
 import { RuntimeLocalWorkspaceService } from "../../local/runtime-context";
-import { SourceArtifactStore } from "../../local/storage";
 import { getSourceAdapterForSource } from "../../sources/source-adapters";
 import { RuntimeSourceStoreService } from "../../sources/source-store";
 import { RuntimeSourceCatalogSyncService } from "./sync";
+import { makeWorkspaceCatalogDbLayer } from "../../../db/setup";
+import { hasSourceCatalogData } from "../../../db/indexer";
+
 
 const shouldReconcileSource = (source: Source): boolean =>
   source.enabled
@@ -23,29 +27,33 @@ export const reconcileMissingSourceCatalogArtifacts = (input: {
   void,
   Error,
   | RuntimeLocalWorkspaceService
-  | SourceArtifactStore
   | RuntimeSourceStoreService
   | RuntimeSourceCatalogSyncService
 > =>
   Effect.gen(function* () {
     const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
     const sourceStore = yield* RuntimeSourceStoreService;
-    const sourceArtifactStore = yield* SourceArtifactStore;
     const sourceCatalogSync = yield* RuntimeSourceCatalogSyncService;
     const sources = yield* sourceStore.loadSourcesInWorkspace(input.workspaceId, {
       actorAccountId: input.actorAccountId,
     });
+
+    const dbPath = join(
+      runtimeLocalWorkspace.context.stateDirectory,
+      EXECUTOR_DB_FILENAME,
+    );
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
 
     for (const source of sources) {
       if (!shouldReconcileSource(source)) {
         continue;
       }
 
-      const artifact = yield* sourceArtifactStore.read({
-        context: runtimeLocalWorkspace.context,
-        sourceId: source.id,
-      });
-      if (artifact !== null) {
+      const hasCatalog = yield* hasSourceCatalogData(source.id).pipe(
+        Effect.provide(dbLayer),
+        Effect.catchAll(() => Effect.succeed(false)),
+      );
+      if (hasCatalog) {
         continue;
       }
 

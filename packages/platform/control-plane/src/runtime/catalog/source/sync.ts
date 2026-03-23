@@ -1,3 +1,4 @@
+import { EXECUTOR_DB_FILENAME } from "../../../db/client.js"
 import type {
   AccountId,
   Source,
@@ -7,20 +8,12 @@ import type { McpToolManifest } from "@executor/source-mcp";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { join } from "node:path";
 
 import {
   RuntimeLocalWorkspaceService,
   type RuntimeLocalWorkspaceState,
 } from "../../local/runtime-context";
-import {
-  SourceArtifactStore,
-  type SourceArtifactStoreShape,
-  WorkspaceStateStore,
-  type WorkspaceStateStoreShape,
-} from "../../local/storage";
-import {
-  type LocalWorkspaceState,
-} from "../../local/workspace-state";
 import {
   RuntimeSourceAuthMaterialService,
 } from "../../auth/source-auth-material";
@@ -31,11 +24,15 @@ import {
   catalogSyncResultFromMcpManifest,
 } from "@executor/source-mcp";
 import { SecretMaterialResolverService } from "../../local/secret-material-providers";
-import { snapshotFromSourceCatalogSyncResult } from "@executor/source-core";
 import {
   refreshSourceTypeDeclarationInBackground,
 } from "./type-declarations";
 import { runtimeEffectError } from "../../effect-errors";
+import { syncSourceToSqlite, upsertSourceStatusToDb } from "../../../db/indexer";
+import {
+  makeWorkspaceCatalogDbLayer,
+} from "../../../db/setup";
+
 
 const shouldIndexSource = (source: Source): boolean =>
   source.enabled
@@ -44,16 +41,12 @@ const shouldIndexSource = (source: Source): boolean =>
 
 type RuntimeSourceCatalogSyncDeps = {
   runtimeLocalWorkspace: RuntimeLocalWorkspaceState;
-  workspaceStateStore: WorkspaceStateStoreShape;
-  sourceArtifactStore: SourceArtifactStoreShape;
   resolveSecretMaterial: Effect.Effect.Success<typeof SecretMaterialResolverService>;
   sourceAuthMaterialService: Effect.Effect.Success<typeof RuntimeSourceAuthMaterialService>;
 };
 
 type SourceCatalogSyncServices =
   | RuntimeLocalWorkspaceService
-  | WorkspaceStateStore
-  | SourceArtifactStore
   | RuntimeSourceAuthMaterialService
   | SecretMaterialResolverService;
 
@@ -78,7 +71,7 @@ const ensureRuntimeCatalogSyncWorkspace = (
 ) => {
   if (deps.runtimeLocalWorkspace.installation.workspaceId !== workspaceId) {
     return Effect.fail(
-      runtimeEffectError("catalog/source/sync", 
+      runtimeEffectError("catalog/source/sync",
         `Runtime local workspace mismatch: expected ${workspaceId}, got ${deps.runtimeLocalWorkspace.installation.workspaceId}`,
       ),
     );
@@ -86,6 +79,9 @@ const ensureRuntimeCatalogSyncWorkspace = (
 
   return Effect.succeed(deps.runtimeLocalWorkspace.context);
 };
+
+const resolveDbPath = (deps: RuntimeSourceCatalogSyncDeps): string =>
+  join(deps.runtimeLocalWorkspace.context.stateDirectory, EXECUTOR_DB_FILENAME);
 
 const syncSourceCatalogWithDeps = (
   deps: RuntimeSourceCatalogSyncDeps,
@@ -100,26 +96,29 @@ const syncSourceCatalogWithDeps = (
       input.source.workspaceId,
     );
 
+    const dbPath = resolveDbPath(deps);
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+
     if (!shouldIndexSource(input.source)) {
-      const state = yield* deps.workspaceStateStore.load(workspaceContext);
-      const existingSourceState = state.sources[input.source.id];
-      const nextState: LocalWorkspaceState = {
-        ...state,
-        sources: {
-          ...state.sources,
-          [input.source.id]: {
-            status: (input.source.enabled ? input.source.status : "draft") as SourceStatus,
-            lastError: null,
-            sourceHash: input.source.sourceHash,
-            createdAt: existingSourceState?.createdAt ?? input.source.createdAt,
-            updatedAt: Date.now(),
-          },
-        },
-      };
-      yield* deps.workspaceStateStore.write({
-        context: workspaceContext,
-        state: nextState,
-      });
+      // Write source status to SQLite for non-indexable sources
+      yield* upsertSourceStatusToDb({
+        sourceId: input.source.id,
+        workspaceId: input.source.workspaceId,
+        name: input.source.name,
+        kind: input.source.kind,
+        endpoint: input.source.endpoint,
+        status: (input.source.enabled ? input.source.status : "draft") as SourceStatus,
+        enabled: input.source.enabled,
+        namespace: input.source.namespace,
+        lastError: null,
+        sourceHash: input.source.sourceHash,
+        createdAt: input.source.createdAt,
+        updatedAt: Date.now(),
+      }).pipe(
+        Effect.provide(dbLayer),
+        Effect.catchAll(() => Effect.void),
+      );
+
       yield* Effect.sync(() => {
         refreshSourceTypeDeclarationInBackground({
           context: workspaceContext,
@@ -141,35 +140,15 @@ const syncSourceCatalogWithDeps = (
           actorAccountId: input.actorAccountId,
         }),
     });
-    const snapshot = snapshotFromSourceCatalogSyncResult(syncResult);
-    yield* deps.sourceArtifactStore.write({
-      context: workspaceContext,
-      sourceId: input.source.id,
-      artifact: deps.sourceArtifactStore.build({
-        source: input.source,
-        syncResult,
-      }),
-    });
 
-    const state = yield* deps.workspaceStateStore.load(workspaceContext);
-    const existingSourceState = state.sources[input.source.id];
-    const nextState: LocalWorkspaceState = {
-      ...state,
-      sources: {
-        ...state.sources,
-        [input.source.id]: {
-          status: "connected",
-          lastError: null,
-          sourceHash: syncResult.sourceHash,
-          createdAt: existingSourceState?.createdAt ?? input.source.createdAt,
-          updatedAt: Date.now(),
-        },
-      },
-    };
-    yield* deps.workspaceStateStore.write({
-      context: workspaceContext,
-      state: nextState,
-    });
+    // Write catalog data + source status directly to SQLite
+    const { snapshot } = yield* syncSourceToSqlite({
+      source: input.source,
+      syncResult,
+    }).pipe(
+      Effect.provide(dbLayer),
+      Effect.mapError((e) => e instanceof Error ? e : new Error(String(e))),
+    );
 
     yield* Effect.sync(() => {
       refreshSourceTypeDeclarationInBackground({
@@ -206,16 +185,17 @@ const persistMcpCatalogSnapshotFromManifestWithDeps = (
       endpoint: input.source.endpoint,
       manifest: input.manifest,
     });
-    const snapshot = snapshotFromSourceCatalogSyncResult(syncResult);
 
-    yield* deps.sourceArtifactStore.write({
-      context: workspaceContext,
-      sourceId: input.source.id,
-      artifact: deps.sourceArtifactStore.build({
-        source: input.source,
-        syncResult,
-      }),
-    });
+    // Write catalog data directly to SQLite
+    const dbPath = resolveDbPath(deps);
+    const dbLayer = makeWorkspaceCatalogDbLayer(dbPath);
+    const { snapshot } = yield* syncSourceToSqlite({
+      source: input.source,
+      syncResult,
+    }).pipe(
+      Effect.provide(dbLayer),
+      Effect.mapError((e) => e instanceof Error ? e : new Error(String(e))),
+    );
 
     yield* Effect.sync(() => {
       refreshSourceTypeDeclarationInBackground({
@@ -232,16 +212,12 @@ export const syncSourceCatalog = (input: {
 }): Effect.Effect<void, Error, SourceCatalogSyncServices> =>
   Effect.gen(function* () {
     const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
     const resolveSecretMaterial = yield* SecretMaterialResolverService;
     const sourceAuthMaterialService = yield* RuntimeSourceAuthMaterialService;
 
     return yield* syncSourceCatalogWithDeps(
       {
         runtimeLocalWorkspace,
-        workspaceStateStore,
-        sourceArtifactStore,
         resolveSecretMaterial,
         sourceAuthMaterialService,
       },
@@ -258,16 +234,12 @@ export const persistMcpCatalogSnapshotFromManifest = (input: {
 }): Effect.Effect<void, Error, SourceCatalogSyncServices> =>
   Effect.gen(function* () {
     const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
     const resolveSecretMaterial = yield* SecretMaterialResolverService;
     const sourceAuthMaterialService = yield* RuntimeSourceAuthMaterialService;
 
     return yield* persistMcpCatalogSnapshotFromManifestWithDeps(
       {
         runtimeLocalWorkspace,
-        workspaceStateStore,
-        sourceArtifactStore,
         resolveSecretMaterial,
         sourceAuthMaterialService,
       },
@@ -279,15 +251,11 @@ export const RuntimeSourceCatalogSyncLive = Layer.effect(
   RuntimeSourceCatalogSyncService,
   Effect.gen(function* () {
     const runtimeLocalWorkspace = yield* RuntimeLocalWorkspaceService;
-    const workspaceStateStore = yield* WorkspaceStateStore;
-    const sourceArtifactStore = yield* SourceArtifactStore;
     const resolveSecretMaterial = yield* SecretMaterialResolverService;
     const sourceAuthMaterialService = yield* RuntimeSourceAuthMaterialService;
 
     const deps: RuntimeSourceCatalogSyncDeps = {
       runtimeLocalWorkspace,
-      workspaceStateStore,
-      sourceArtifactStore,
       resolveSecretMaterial,
       sourceAuthMaterialService,
     };
