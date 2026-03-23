@@ -6,7 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { vi } from "vitest";
 
-import { SourceIdSchema, WorkspaceIdSchema } from "#schema";
+import {
+  SourceCatalogIdSchema,
+  SourceCatalogRevisionIdSchema,
+  SourceIdSchema,
+  WorkspaceIdSchema,
+} from "#schema";
 import {
   buildSearchText,
   indexSource,
@@ -68,12 +73,12 @@ const baseTool: ToolToIndex = {
 const baseSource: SourceToIndex = {
   sourceId: SourceIdSchema.make("source-github"),
   workspaceId: WorkspaceIdSchema.make("workspace-1"),
-  name: "GitHub",
-  kind: "openapi",
-  endpoint: "https://api.github.com",
+  catalogId: SourceCatalogIdSchema.make("catalog-github"),
+  catalogRevisionId: SourceCatalogRevisionIdSchema.make("catalog-revision-github"),
   status: "connected",
   enabled: true,
-  namespace: "github",
+  sourceHash: "hash-github",
+  lastError: null,
   createdAt: 1,
   updatedAt: 2,
 };
@@ -259,23 +264,23 @@ describe("indexSource", () => {
           values: {
             id: baseSource.sourceId,
             workspaceId: baseSource.workspaceId,
-            name: baseSource.name,
-            kind: baseSource.kind,
-            endpoint: baseSource.endpoint,
+            catalogId: baseSource.catalogId,
+            catalogRevisionId: baseSource.catalogRevisionId,
             status: baseSource.status,
             enabled: baseSource.enabled,
-            namespace: baseSource.namespace,
+            sourceHash: baseSource.sourceHash,
+            lastError: baseSource.lastError,
             createdAt: baseSource.createdAt,
             updatedAt: baseSource.updatedAt,
           },
           set: {
             workspaceId: baseSource.workspaceId,
-            name: baseSource.name,
-            kind: baseSource.kind,
-            endpoint: baseSource.endpoint,
+            catalogId: baseSource.catalogId,
+            catalogRevisionId: baseSource.catalogRevisionId,
             status: baseSource.status,
             enabled: baseSource.enabled,
-            namespace: baseSource.namespace,
+            sourceHash: baseSource.sourceHash,
+            lastError: baseSource.lastError,
             updatedAt: baseSource.updatedAt,
           },
         },

@@ -7,7 +7,6 @@ import type {
   SourceCatalogId,
   SourceCatalogRevisionId,
   SourceId,
-  SourceKind,
   SourceStatus,
   WorkspaceId,
 } from "#schema"
@@ -58,12 +57,12 @@ export interface ToolToIndex {
 export interface SourceToIndex {
   sourceId: SourceId
   workspaceId: WorkspaceId
-  name: string
-  kind: SourceKind
-  endpoint: string
+  catalogId: SourceCatalogId
+  catalogRevisionId: SourceCatalogRevisionId
   status: SourceStatus
   enabled: boolean
-  namespace: string | null
+  sourceHash: string | null
+  lastError: string | null
   createdAt: number
   updatedAt: number
 }
@@ -202,12 +201,12 @@ export const indexSource = (input: {
         const sourceRow = {
           id: input.source.sourceId,
           workspaceId: input.source.workspaceId,
-          name: input.source.name,
-          kind: input.source.kind,
-          endpoint: input.source.endpoint,
+          catalogId: input.source.catalogId,
+          catalogRevisionId: input.source.catalogRevisionId,
           status: input.source.status,
           enabled: input.source.enabled,
-          namespace: input.source.namespace,
+          sourceHash: input.source.sourceHash,
+          lastError: input.source.lastError,
           createdAt: input.source.createdAt,
           updatedAt: input.source.updatedAt,
         } satisfies typeof source.$inferInsert
@@ -216,12 +215,12 @@ export const indexSource = (input: {
           target: source.id,
           set: {
             workspaceId: input.source.workspaceId,
-            name: input.source.name,
-            kind: input.source.kind,
-            endpoint: input.source.endpoint,
+            catalogId: input.source.catalogId,
+            catalogRevisionId: input.source.catalogRevisionId,
             status: input.source.status,
             enabled: input.source.enabled,
-            namespace: input.source.namespace,
+            sourceHash: input.source.sourceHash,
+            lastError: input.source.lastError,
             updatedAt: input.source.updatedAt,
           },
         })
@@ -605,12 +604,10 @@ export const syncSourceToSqlite = (input: {
           workspaceId: input.source.workspaceId,
           catalogId: catalogRecord.id,
           catalogRevisionId: revisionRecord.id,
-          name: input.source.name,
-          kind: input.source.kind,
-          endpoint: input.source.endpoint,
           status: input.source.status,
           enabled: input.source.enabled,
-          namespace: input.source.namespace,
+          sourceHash: input.source.sourceHash,
+          lastError: input.source.lastError,
           createdAt: input.source.createdAt,
           updatedAt: now,
         }).onConflictDoUpdate({
@@ -618,12 +615,10 @@ export const syncSourceToSqlite = (input: {
           set: {
             catalogId: catalogRecord.id,
             catalogRevisionId: revisionRecord.id,
-            name: input.source.name,
-            kind: input.source.kind,
-            endpoint: input.source.endpoint,
             status: input.source.status,
             enabled: input.source.enabled,
-            namespace: input.source.namespace,
+            sourceHash: input.source.sourceHash,
+            lastError: input.source.lastError,
             updatedAt: now,
           },
         })
