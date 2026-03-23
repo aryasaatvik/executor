@@ -15,6 +15,7 @@ import {
   createStaticDiscoveryFromTools,
   createSystemToolMap,
   makeToolInvokerFromTools,
+  mergeToolCatalogs,
   mergeToolMaps,
   standardSchemaFromJsonSchema,
   ToolInteractionDeniedError,
@@ -533,6 +534,79 @@ describe("codemode-core", () => {
           },
         ],
       });
+    }),
+  );
+
+  it.effect("fuses merged catalog rankings instead of comparing raw scores across catalogs", () =>
+    Effect.gen(function* () {
+      const sourceCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "posthog.create_feature_flag"
+              ? {
+                  path: asToolPath("posthog.create_feature_flag"),
+                  sourceKey: "posthog",
+                  description: "Create a PostHog feature flag",
+                  interaction: "auto",
+                }
+              : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("posthog.create_feature_flag"), score: 0.9 },
+          ]),
+      };
+
+      const helperCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "catalog.namespaces"
+              ? {
+                  path: asToolPath("catalog.namespaces"),
+                  sourceKey: "system",
+                  description: "List namespaces",
+                  interaction: "auto",
+                }
+              : path === "catalog.tools"
+                ? {
+                    path: asToolPath("catalog.tools"),
+                    sourceKey: "system",
+                    description: "List tools",
+                    interaction: "auto",
+                  }
+                : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("catalog.namespaces"), score: 4 },
+            { path: asToolPath("catalog.tools"), score: 3 },
+          ]),
+      };
+
+      const catalog = mergeToolCatalogs({
+        catalogs: [sourceCatalog, helperCatalog],
+      });
+
+      const results = yield* (
+        catalog.searchTools({
+          query: "create a posthog feature flag",
+          limit: 5,
+        }) as Effect.Effect<
+          readonly { path: ToolPath; score: number }[],
+          unknown,
+          never
+        >
+      );
+
+      expect(results.map((result: { path: ToolPath }) => result.path)).toEqual([
+        "posthog.create_feature_flag",
+        "catalog.namespaces",
+        "catalog.tools",
+      ]);
     }),
   );
 

@@ -155,22 +155,38 @@ const dedupeToolDescriptors = (
   );
 };
 
-const dedupeSearchHits = (
+const fuseSearchHits = (
   groups: ReadonlyArray<readonly SearchHit[]>,
+  limit: number,
 ): SearchHit[] => {
-  const merged = new Map<string, SearchHit>();
+  const k = 60;
+  const scores = new Map<string, number>();
+  const firstSeen = new Map<string, number>();
+  let nextOrder = 0;
 
   for (const group of groups) {
-    for (const hit of group) {
-      if (!merged.has(hit.path)) {
-        merged.set(hit.path, hit);
+    for (let rank = 0; rank < group.length; rank += 1) {
+      const hit = group[rank]!;
+      scores.set(hit.path, (scores.get(hit.path) ?? 0) + (1 / (k + rank + 1)));
+      if (!firstSeen.has(hit.path)) {
+        firstSeen.set(hit.path, nextOrder);
       }
+      nextOrder += 1;
     }
   }
 
-  return [...merged.values()].sort(
-    (left, right) => right.score - left.score || left.path.localeCompare(right.path),
-  );
+  return [...scores.entries()]
+    .sort((left, right) =>
+      right[1] - left[1]
+      || (firstSeen.get(left[0]) ?? Number.MAX_SAFE_INTEGER)
+        - (firstSeen.get(right[0]) ?? Number.MAX_SAFE_INTEGER)
+      || left[0].localeCompare(right[0]),
+    )
+    .slice(0, limit)
+    .map(([path, score]) => ({
+      path: path as ToolPath,
+      score,
+    }));
 };
 
 export function createToolCatalogFromTools(input: {
@@ -322,7 +338,7 @@ export function mergeToolCatalogs(input: {
           { concurrency: "unbounded" },
         );
 
-        return dedupeSearchHits(groups).slice(0, limit);
+        return fuseSearchHits(groups, limit);
       }),
   } satisfies ToolCatalog;
 }
