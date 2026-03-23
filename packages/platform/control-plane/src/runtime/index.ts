@@ -170,7 +170,7 @@ export const createRuntimeControlPlaneLayer = (
   );
 
   const sourceCatalogStoreLayer = RuntimeSourceCatalogStoreLive.pipe(
-    Layer.provide(Layer.mergeAll(tier1_2, sourceStoreLayer)),
+    Layer.provide(Layer.mergeAll(tier1_2, sourceStoreLayer, workspaceDatabaseLayer)),
   );
 
   const tier3_storage = Layer.mergeAll(
