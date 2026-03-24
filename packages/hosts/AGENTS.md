@@ -10,9 +10,9 @@ Exposes executor as a [Model Context Protocol](https://modelcontextprotocol.io/)
 
 ```ts
 import { createExecutorMcpRequestHandler } from "@executor/hosts/mcp";
-import type { ControlPlaneRuntime } from "@executor/control-plane";
+import type { EngineRuntime } from "@executor/engine";
 
-const handler = createExecutorMcpRequestHandler(runtime: ControlPlaneRuntime);
+const handler = createExecutorMcpRequestHandler(runtime: EngineRuntime);
 // handler.handleRequest(req: Request) => Promise<Response>
 // handler.close() => Promise<void>
 ```

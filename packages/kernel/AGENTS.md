@@ -5,9 +5,9 @@
 Kernel provides the **runtime substrate** for executing agent code and the **IR (Intermediate Representation)** for describing tool APIs.
 
 Kernel does NOT own:
-- Tool registration or provisioning (control-plane)
-- LLM prompting or response handling (control-plane)
-- Session or execution state management (control-plane)
+- Tool registration or provisioning (engine)
+- LLM prompting or response handling (engine)
+- Session or execution state management (engine)
 - Source document ingestion (importers)
 
 ## IR Layer (`ir/`)

@@ -40,8 +40,8 @@ It means the browser UI, CLI, and local MCP entrypoint all talk to the same prod
 At a high level, the CLI:
 
 1. ensures the local daemon is available
-2. calls the local HTTP API exposed by `packages/platform/server`
-3. hands off real work to `packages/platform/control-plane`
+2. calls the local HTTP API exposed by `apps/server`
+3. hands off real work to `packages/engine`
 
 That makes the CLI a stable shell over a shared local runtime rather than a second product core.
 

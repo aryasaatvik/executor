@@ -3,7 +3,7 @@
   "tag": "beta",
   "initialVersions": {
     "@executor/docs": "0.0.0",
-    "executor": "1.2.3",
+    "@executor/cli": "1.2.3",
     "@executor/mcp-elicitation-demo": "0.0.0",
     "@executor/web": "0.0.0",
     "@executor/serve-skills-via-mcp-demo": "0.0.0",
@@ -18,7 +18,7 @@
     "@executor/runtime-deno-subprocess": "0.0.0",
     "@executor/runtime-quickjs": "0.0.0",
     "@executor/runtime-ses": "0.0.0",
-    "@executor/control-plane": "0.0.0",
+    "@executor/engine": "0.0.0",
     "@executor/server": "0.0.0",
     "@executor/source-builtins": "0.0.0",
     "@executor/source-core": "0.0.0",

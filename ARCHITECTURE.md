@@ -13,23 +13,23 @@ If `README.md` answers "what is this product and how do I use it?", this file an
 ```text
                 +-----------------------+
                 |   CLI / executor      |
-                |  apps/executor        |
+                |  apps/cli        |
                 +-----------+-----------+
                             |
                             | HTTP
                             v
 +-------------+   +---------+---------+   +----------------+
 | Browser UI  |-->| local server      |<--| MCP clients    |
-| apps/web    |   | packages/platform |   | via /mcp       |
-|             |   | /server           |   |                |
+| apps/web    |   | apps/server       |   | via /mcp       |
+|             |   |                   |   |                |
 +-------------+   +---------+---------+   +----------------+
                             |
                             | provides runtime layer
                             v
                   +---------+---------+
-                  | control plane      |
-                  | packages/platform/ |
-                  | control-plane      |
+                  | engine            |
+                  | packages/engine   |
+                  |                   |
                   +----+-----+----+----+
                        |     |    |
          persistence --+     |    +-- source auth / discovery / inspection
@@ -60,7 +60,7 @@ The current architecture optimizes for a few specific ideas:
 
 ## Major components
 
-### `apps/executor`: installed CLI and daemon manager
+### `apps/cli`: installed CLI and daemon manager
 
 This is the main user entrypoint.
 
@@ -74,21 +74,21 @@ Responsibilities:
 
 Conceptually, the CLI is not the business logic. It is a thin user-facing shell over the local runtime.
 
-### `packages/platform/server`: one local process for API, MCP, and UI
+### `apps/server`: one local process for API, MCP, and UI
 
 This package hosts the actual local server.
 
 Responsibilities:
 
-- creates the control-plane runtime
-- mounts the control-plane HTTP API at `/v1`
+- creates the engine runtime
+- mounts the engine HTTP API at `/v1`
 - mounts the `executor` MCP endpoint at `/mcp`
 - serves the web UI assets for normal browser routes
 - writes PID metadata for daemon lifecycle management
 
 This is an important architectural choice: the API and UI are served by the same local process, so the product behaves like one install rather than a pile of separate services.
 
-### `packages/platform/control-plane`: product core
+### `packages/engine`: product core
 
 This is the center of the system.
 
@@ -342,7 +342,7 @@ This same idea is used both for direct CLI execution and for the MCP-facing `exe
 
 ### HTTP API
 
-The control-plane HTTP API is mounted under `/v1`.
+The engine HTTP API is mounted under `/v1`.
 
 Major groups include:
 
@@ -379,7 +379,7 @@ At a high level:
 - production assets are served by the local server
 - development runs Vite separately while still embedding the same backend behavior
 
-The frontend is intentionally thin. It is mostly a presentation layer over the control-plane API.
+The frontend is intentionally thin. It is mostly a presentation layer over the engine API.
 
 ## Why the architecture is shaped this way
 
@@ -406,6 +406,6 @@ A few practical boundaries are worth calling out:
 ## Read next
 
 - `README.md` for the product view and usage guidance
-- `apps/executor/src/cli/main.ts` for the CLI surface
-- `packages/platform/server/src/index.ts` for how the local server is assembled
-- `packages/platform/control-plane/src/runtime/` for the core runtime flows
+- `apps/cli/src/cli/main.ts` for the CLI surface
+- `apps/server/src/index.ts` for how the local server is assembled
+- `packages/engine/src/runtime/` for the core runtime flows

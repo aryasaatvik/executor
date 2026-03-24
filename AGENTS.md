@@ -12,12 +12,11 @@ Local-first AI agent execution environment. Agent runs TypeScript against a type
 ```
 executor/
 ├── apps/
-│   ├── executor/     # CLI entrypoint, daemon lifecycle commands
+│   ├── cli/          # CLI entrypoint, daemon lifecycle commands
+│   ├── server/       # HTTP server: /v1 API + /mcp + static UI
 │   └── web/          # React 19 + Vite + TanStack Router UI
 ├── packages/
-│   ├── platform/
-│   │   ├── server/         # HTTP server: /v1 API + /mcp + static UI
-│   │   └── control-plane/   # Core logic: sources, secrets, execution, persistence
+│   ├── engine/              # Core logic: sources, secrets, execution, persistence
 │   ├── kernel/
 │   │   ├── core/            # Tool abstractions, discovery, schemas
 │   │   ├── ir/              # Intermediate representation (catalog, ids)
@@ -32,11 +31,11 @@ executor/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Source management logic | `packages/platform/control-plane/src/runtime/sources/` | SourceStore, catalog sync, auth |
-| Execution creation/resume | `packages/platform/control-plane/src/runtime/execution/` | ExecutionManager, pause/resume |
-| DB schema + migrations | `packages/platform/control-plane/src/db/schema/` | Drizzle ORM, sqlite-vec |
-| HTTP API layer | `packages/platform/control-plane/src/api/` | REST endpoints |
-| Effect Layer composition | `packages/platform/control-plane/src/runtime/index.ts` | 5-tier runtime DAG |
+| Source management logic | `packages/engine/src/runtime/sources/` | SourceStore, catalog sync, auth |
+| Execution creation/resume | `packages/engine/src/runtime/execution/` | ExecutionManager, pause/resume |
+| DB schema + migrations | `packages/engine/src/db/schema/` | Drizzle ORM, sqlite-vec |
+| HTTP API layer | `packages/engine/src/api/` | REST endpoints |
+| Effect Layer composition | `packages/engine/src/runtime/index.ts` | 5-tier runtime DAG |
 | Web UI components | `apps/web/src/components/` | React, Tailwind v4 |
 | Source adapters | `packages/sources/*/src/` | MCP, OpenAPI, GraphQL, Google Discovery |
 | Sandbox runtimes | `packages/kernel/runtime-*/src/` | QuickJS (default), SES, Deno |
@@ -48,7 +47,7 @@ executor/
 - **No Effect.run in tests**: Use `@effect/vitest` test harness — lint: `no-effect-run-in-effect-vitest-tests`
 - **No node:fs with Effect**: Keep Node.js `node:fs` separate from Effect imports — lint: `no-node-fs-with-effect-imports`
 - **No raw Effect.fail**: Use `fail` utility from `@/errors`
-- **Migration generation**: `bun run --filter=@executor/control-plane db:generate` after schema changes
+- **Migration generation**: `bun run --filter=@executor/engine db:generate` after schema changes
 - **Changesets**: Every PR needing release must add `bun run changeset` — PR without changeset = no release
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -56,7 +55,7 @@ executor/
 - Do NOT call `Effect.run*` inside vitest tests — use `Effect.annotationSchema` or `@effect/vitest`
 - Do NOT use `node:fs` imports alongside Effect imports in the same file
 - Do NOT read Effect tags directly — use `Layer.get()` or `Effect.serviceFunction()`
-- Do NOT edit `apps/executor/package.json` by hand (Changesets owns versioning)
+- Do NOT edit `apps/cli/package.json` by hand (Changesets owns versioning)
 
 ## COMMANDS
 
@@ -73,11 +72,11 @@ bun run trace:up    # Start Jaeger (docker)
 
 ## AGENTS.md LOCATIONS
 
-- `packages/platform/control-plane/AGENTS.md` — Core business logic (Effect-TS, DB, runtime)
-- `packages/platform/server/AGENTS.md` — HTTP server and routing
+- `packages/engine/AGENTS.md` — Core business logic (Effect-TS, DB, runtime)
+- `apps/server/AGENTS.md` — HTTP server and routing
 - `packages/sources/AGENTS.md` — Source adapters domain
 - `packages/kernel/AGENTS.md` — Kernel abstractions and runtimes
 - `packages/hosts/AGENTS.md` — MCP bridge and AI SDK integration
 - `packages/clients/react/AGENTS.md` — React hooks
-- `apps/executor/AGENTS.md` — CLI entrypoint
+- `apps/cli/AGENTS.md` — CLI entrypoint
 - `apps/web/AGENTS.md` — React web UI

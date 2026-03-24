@@ -1,5 +1,5 @@
 ---
-"executor": patch
+"@executor/cli": patch
 ---
 
 Fix build
