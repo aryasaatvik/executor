@@ -6,7 +6,7 @@ Thin CLI shell over the executor runtime. Exposes a local HTTP daemon (control p
 
 ## Entry point
 
-`apps/executor/bin/executor` -> `src/cli/main.ts` using `@effect/cli`.
+`apps/cli/bin/executor` -> `src/cli/main.ts` using `@effect/cli`.
 
 ## Daemon (`executor server start` / `executor up`)
 
@@ -50,6 +50,6 @@ Thin CLI shell over the executor runtime. Exposes a local HTTP daemon (control p
 ## Key dependencies
 
 - `@executor/server` — `runLocalExecutorServer`, server config constants
-- `@executor/control-plane` — `createControlPlaneClient`, `createControlPlaneRuntime`, execution types
+- `@executor/engine` — `createEngineClient`, `createEngineRuntime`, execution types
 - `@executor/executor-mcp` — MCP request handler
 - `@effect/cli`, `@effect/platform`, `@effect/platform-node` — CLI framework and Node runtime

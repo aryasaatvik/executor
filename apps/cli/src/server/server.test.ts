@@ -19,16 +19,16 @@ import * as Schema from "effect/Schema";
 import { startMcpElicitationDemoServer } from "@executor/mcp-elicitation-demo";
 import { makeToolInvokerFromTools, toTool } from "@executor/codemode-core";
 import {
-  createControlPlaneClient,
-  controlPlaneOpenApiSpec,
+  createEngineClient,
+  executorOpenApiSpec,
   catalogSyncResultFromMcpManifest,
   deriveLocalInstallation,
   type ResolveExecutionEnvironment,
   resolveLocalWorkspaceContext,
   SourceIdSchema,
   writeProjectLocalExecutorConfig,
-} from "@executor/control-plane";
-import { syncSourceToSqlite, makeWorkspaceCatalogDbLayer } from "@executor/control-plane/db";
+} from "@executor/engine";
+import { syncSourceToSqlite, makeWorkspaceCatalogDbLayer } from "@executor/engine/db";
 import { makeSesExecutor } from "@executor/runtime-ses";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -37,11 +37,32 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
+import type { ExecutorEffectApi } from "@executor/client";
 import {
   seedDemoMcpSourceInWorkspace,
   seedGithubOpenApiSourceInWorkspace,
 } from "../cli/dev";
 import { createLocalExecutorServer } from "@executor/server";
+
+/** Adapt a REST EngineClient's sources API to the new ExecutorEffectApi["sources"] shape. */
+const adaptRestSourcesToEffectApi = (
+  client: Effect.Effect.Success<ReturnType<typeof createEngineClient>>,
+  workspaceId: string,
+): ExecutorEffectApi["sources"] => ({
+  list: () => client.sources.list({ path: { workspaceId } } as any),
+  get: (sourceId: any) => client.sources.get({ path: { workspaceId, sourceId } } as any),
+  create: (payload: any) => client.sources.create({ path: { workspaceId }, payload } as any),
+  update: (sourceId: any, payload: any) => client.sources.update({ path: { workspaceId, sourceId }, payload } as any),
+  remove: (sourceId: any) => (client.sources as any).remove({ path: { workspaceId, sourceId } }).pipe(Effect.map(() => ({ removed: true }))),
+  discover: (payload: any) => client.sources.discover({ payload }),
+  connect: (payload: any) => client.sources.connect({ path: { workspaceId }, payload } as any),
+  connectBatch: (payload: any) => client.sources.connectBatch({ path: { workspaceId }, payload } as any),
+  inspection: {
+    get: (sourceId: any) => client.sources.inspection({ path: { workspaceId, sourceId } } as any),
+    tool: (sourceId: any, toolPath: string) => (client.sources as any).inspectionTool({ path: { workspaceId, sourceId }, urlParams: { toolPath } }),
+    discover: (sourceId: any, payload: any) => (client.sources as any).inspectionDiscover({ path: { workspaceId, sourceId }, payload }),
+  },
+} as any);
 
 const executionResolver: ResolveExecutionEnvironment = () =>
   Effect.succeed({
@@ -185,11 +206,11 @@ const createApiClientHarness = () =>
       port: 0,
       localDataDir: ":memory:",
     });
-    const bootstrapClient = yield* createControlPlaneClient({
+    const bootstrapClient = yield* createEngineClient({
       baseUrl: server.baseUrl,
     });
     const installation = yield* bootstrapClient.local.installation({});
-    const client = yield* createControlPlaneClient({
+    const client = yield* createEngineClient({
       baseUrl: server.baseUrl,
       accountId: installation.accountId,
     });
@@ -732,18 +753,18 @@ describe("local-executor-server", () => {
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("application/json");
-      expect(spec).toEqual(controlPlaneOpenApiSpec);
+      expect(spec).toEqual(executorOpenApiSpec);
     }),
   );
 
   it.scoped("serves the control-plane API and executes code", () =>
     Effect.gen(function* () {
       const server = yield* makeServer;
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -940,11 +961,11 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1046,11 +1067,11 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1149,11 +1170,11 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1181,8 +1202,7 @@ describe("local-executor-server", () => {
       });
 
       const seeded = yield* seedDemoMcpSourceInWorkspace({
-        client,
-        workspaceId: installation.workspaceId,
+        api: adaptRestSourcesToEffectApi(client, installation.workspaceId),
         endpoint: demoServer.endpoint,
         name: "Demo",
         namespace: "demo",
@@ -1238,18 +1258,17 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
 
       yield* seedGithubOpenApiSourceInWorkspace({
-        client,
-        workspaceId: installation.workspaceId,
+        api: adaptRestSourcesToEffectApi(client, installation.workspaceId),
         endpoint: openApiServer.baseUrl,
         specUrl: openApiServer.specUrl,
         name: "GitHub",
@@ -1601,11 +1620,11 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1705,11 +1724,11 @@ describe("local-executor-server", () => {
         port: 0,
         localDataDir: ":memory:",
       });
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1807,7 +1826,7 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
@@ -1850,7 +1869,7 @@ describe("local-executor-server", () => {
       expect(callbackHtml).toContain("OAuth connected");
       expect(callbackHtml).toContain("executor:oauth-result");
 
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });
@@ -1876,11 +1895,11 @@ describe("local-executor-server", () => {
         localDataDir: ":memory:",
       });
 
-      const bootstrapClient = yield* createControlPlaneClient({
+      const bootstrapClient = yield* createEngineClient({
         baseUrl: server.baseUrl,
       });
       const installation = yield* bootstrapClient.local.installation({});
-      const client = yield* createControlPlaneClient({
+      const client = yield* createEngineClient({
         baseUrl: server.baseUrl,
         accountId: installation.accountId,
       });

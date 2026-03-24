@@ -1,5 +1,5 @@
 {
-  "name": "executor",
+  "name": "@executor/cli",
   "version": "1.2.4-beta.4",
   "description": "Local AI executor with a CLI, local API server, and web UI.",
   "keywords": [
@@ -36,8 +36,9 @@
     "@effect/cli": "catalog:",
     "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
+    "@executor/client": "workspace:*",
     "@executor/codemode-core": "workspace:*",
-    "@executor/control-plane": "workspace:*",
+    "@executor/engine": "workspace:*",
     "@executor/executor-mcp": "workspace:*",
     "@executor/server": "workspace:*",
     "effect": "catalog:"

@@ -1,4 +1,4 @@
-import type { ExecutionInteraction } from "@executor/control-plane";
+import type { ExecutionInteraction } from "@executor/engine";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

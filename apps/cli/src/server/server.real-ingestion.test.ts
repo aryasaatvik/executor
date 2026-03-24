@@ -4,9 +4,9 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
-  createControlPlaneClient,
+  createEngineClient,
   type SourceDiscoveryKind,
-} from "@executor/control-plane";
+} from "@executor/engine";
 import { createLocalExecutorServer } from "@executor/server";
 
 const REAL_VERCEL_SPEC_URL = "https://openapi.vercel.sh";
@@ -33,11 +33,11 @@ const createIsolatedLocalExecutorServer = () =>
 const createApiClientHarness = () =>
   Effect.gen(function* () {
     const server = yield* createIsolatedLocalExecutorServer();
-    const bootstrapClient = yield* createControlPlaneClient({
+    const bootstrapClient = yield* createEngineClient({
       baseUrl: server.baseUrl,
     });
     const installation = yield* bootstrapClient.local.installation({});
-    const client = yield* createControlPlaneClient({
+    const client = yield* createEngineClient({
       baseUrl: server.baseUrl,
       accountId: installation.accountId,
     });

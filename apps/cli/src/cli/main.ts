@@ -10,16 +10,19 @@ import {
   NodeRuntime,
 } from "@effect/platform-node";
 import {
+  createExecutor,
+  type Executor,
+  type ExecutorEffectApi,
+} from "@executor/client";
+import {
   EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
   ExecutionEnvironmentResolver,
-  createControlPlaneClient,
-  createControlPlaneRuntime,
-  type ControlPlaneClient,
+  createEngineRuntime,
   type ExecutionEnvelope,
   type ExecutionInteraction,
-  type ControlPlaneRuntime,
-} from "@executor/control-plane";
+  type EngineRuntime,
+} from "@executor/engine";
 import type { ToolCatalog } from "@executor/codemode-core";
 
 import * as Effect from "effect/Effect";
@@ -59,7 +62,7 @@ import {
 import {
   deriveLocalInstallation,
   resolveLocalWorkspaceContext,
-} from "@executor/control-plane";
+} from "@executor/engine";
 
 const toError = (cause: unknown): Error =>
   cause instanceof Error ? cause : new Error(String(cause));
@@ -149,8 +152,11 @@ const readCode = (input: {
     return yield* executorAppEffectError("cli/main", "Provide code as a positional argument, use --file, or pipe code over stdin.");
   });
 
-const getBootstrapClient = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
-  createControlPlaneClient({ baseUrl });
+const connectExecutor = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
+  Effect.tryPromise({
+    try: () => createExecutor({ baseUrl }),
+    catch: toError,
+  });
 
 const decodeExecutionId = Schema.decodeUnknown(ExecutionIdSchema);
 const require = createRequire(import.meta.url);
@@ -247,7 +253,7 @@ const formatCatalogUnavailableMessage = (cause: Cause.Cause<unknown>): string =>
     : `Current workspace catalog unavailable: ${message}`;
 };
 
-const closeRuntime = (runtime: ControlPlaneRuntime) =>
+const closeRuntime = (runtime: EngineRuntime) =>
   Effect.tryPromise({
     try: () => runtime.close(),
     catch: toError,
@@ -274,7 +280,7 @@ const buildRunWorkflowText = (
 
 const loadRunWorkflowText = (): Effect.Effect<string, Error, never> =>
   Effect.acquireUseRelease(
-    createControlPlaneRuntime({
+    createEngineRuntime({
       localDataDir: DEFAULT_LOCAL_DATA_DIR,
     }).pipe(Effect.mapError(toError)),
     (runtime) =>
@@ -392,25 +398,15 @@ const helpOverride = (): Effect.Effect<void, Error, never> | null => {
 
 const getLocalAuthedClient = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
   Effect.gen(function* () {
-    const bootstrapClient = yield* getBootstrapClient(baseUrl);
-    const installation = yield* bootstrapClient.local.installation({});
-    const client = yield* createControlPlaneClient({
-      baseUrl,
-      accountId: installation.accountId,
-    });
-
-    return {
-      installation,
-      client,
-    } as const;
+    const executor = yield* connectExecutor(baseUrl);
+    return executor;
   });
 
 const isServerReachable = (baseUrl: string) =>
-  getBootstrapClient(baseUrl).pipe(
-    Effect.flatMap((client) => client.local.installation({})),
-    Effect.as(true),
-    Effect.catchAll(() => Effect.succeed(false)),
-  );
+  Effect.tryPromise({
+    try: () => fetch(`${baseUrl}/rpc`, { method: "HEAD" }).then(() => true),
+    catch: () => false as const,
+  }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
 const getCurrentWorkspaceInstallation = () =>
   resolveLocalWorkspaceContext().pipe(
@@ -419,8 +415,11 @@ const getCurrentWorkspaceInstallation = () =>
   );
 
 const getReachableServerInstallation = (baseUrl: string) =>
-  getBootstrapClient(baseUrl).pipe(
-    Effect.flatMap((client) => client.local.installation({})),
+  connectExecutor(baseUrl).pipe(
+    Effect.map((executor) => ({
+      accountId: executor.actorId as string,
+      workspaceId: executor.workspaceId as string,
+    })),
     Effect.catchAll(() => Effect.succeed(null)),
   );
 
@@ -577,10 +576,7 @@ const getServerStatus = (
     const pidRecord = yield* readPidRecord();
     const reachable = yield* isServerReachable(baseUrl);
     const installation = reachable
-      ? yield* getBootstrapClient(baseUrl).pipe(
-          Effect.flatMap((client) => client.local.installation({})),
-          Effect.catchAll(() => Effect.succeed(null)),
-        )
+      ? yield* getReachableServerInstallation(baseUrl)
       : null;
 
     const pid = typeof pidRecord?.pid === "number" ? pidRecord.pid : null;
@@ -944,8 +940,7 @@ const promptInteraction = (input: {
   });
 
 const waitForExecutionProgress = (input: {
-  client: ControlPlaneClient;
-  workspaceId: ExecutionEnvelope["execution"]["workspaceId"];
+  api: ExecutorEffectApi;
   executionId: ExecutionEnvelope["execution"]["id"];
   pendingInteractionId: ExecutionInteraction["id"];
 }) =>
@@ -953,12 +948,7 @@ const waitForExecutionProgress = (input: {
     while (true) {
       yield* sleep(SERVER_POLL_INTERVAL_MS);
 
-      const next = yield* input.client.executions.get({
-        path: {
-          workspaceId: input.workspaceId,
-          executionId: input.executionId,
-        },
-      });
+      const next = yield* input.api.executions.get(input.executionId);
 
       if (
         next.execution.status !== "waiting_for_interaction"
@@ -1006,10 +996,9 @@ const seedDemoMcpSource = (input: {
 }) =>
   Effect.gen(function* () {
     yield* ensureServer(input.baseUrl);
-    const { installation, client } = yield* getLocalAuthedClient(input.baseUrl);
+    const executor = yield* getLocalAuthedClient(input.baseUrl);
     const result = yield* seedDemoMcpSourceInWorkspace({
-      client,
-      workspaceId: installation.workspaceId,
+      api: executor.effect.sources,
       endpoint: input.endpoint,
       name: input.name,
       namespace: input.namespace,
@@ -1030,10 +1019,9 @@ const seedGithubOpenApiSource = (input: {
 }) =>
   Effect.gen(function* () {
     yield* ensureServer(input.baseUrl);
-    const { installation, client } = yield* getLocalAuthedClient(input.baseUrl);
+    const executor = yield* getLocalAuthedClient(input.baseUrl);
     const result = yield* seedGithubOpenApiSourceInWorkspace({
-      client,
-      workspaceId: installation.workspaceId,
+      api: executor.effect.sources,
       endpoint: input.endpoint,
       specUrl: input.specUrl,
       name: input.name,
@@ -1047,8 +1035,7 @@ const seedGithubOpenApiSource = (input: {
   });
 
 const driveExecution = (input: {
-  client: ControlPlaneClient;
-  workspaceId: ExecutionEnvelope["execution"]["workspaceId"];
+  api: ExecutorEffectApi;
   envelope: ExecutionEnvelope;
   baseUrl: string;
   shouldOpenUrls: boolean;
@@ -1077,8 +1064,7 @@ const driveExecution = (input: {
         });
 
         current = yield* waitForExecutionProgress({
-          client: input.client,
-          workspaceId: input.workspaceId,
+          api: input.api,
           executionId: current.execution.id,
           pendingInteractionId: pending.id,
         });
@@ -1138,15 +1124,9 @@ const driveExecution = (input: {
         return current;
       }
 
-      current = yield* input.client.executions.resume({
-        path: {
-          workspaceId: input.workspaceId,
-          executionId: current.execution.id,
-        },
-        payload: {
-          responseJson,
-          interactionMode: executionInteractionMode(),
-        },
+      current = yield* input.api.executions.resume(current.execution.id, {
+        responseJson,
+        interactionMode: executionInteractionMode(),
       });
     }
 
@@ -1316,20 +1296,14 @@ const callCommand = Command.make(
       });
 
       yield* ensureServer(baseUrl);
-      const { installation, client } = yield* getLocalAuthedClient(baseUrl);
-      const created = yield* client.executions.create({
-        path: {
-          workspaceId: installation.workspaceId,
-        },
-        payload: {
-          code: resolvedCode,
-          interactionMode: executionInteractionMode(),
-        },
+      const executor = yield* getLocalAuthedClient(baseUrl);
+      const created = yield* executor.effect.executions.create({
+        code: resolvedCode,
+        interactionMode: executionInteractionMode(),
       });
 
       const settled = yield* driveExecution({
-        client,
-        workspaceId: installation.workspaceId,
+        api: executor.effect,
         envelope: created,
         baseUrl,
         shouldOpenUrls: !noOpen,
@@ -1349,20 +1323,14 @@ const resumeCommand = Command.make(
   ({ executionId, baseUrl, noOpen }) =>
     Effect.gen(function* () {
       yield* ensureServer(baseUrl);
-      const { installation, client } = yield* getLocalAuthedClient(baseUrl);
+      const executor = yield* getLocalAuthedClient(baseUrl);
       const decodedExecutionId = yield* decodeExecutionId(executionId).pipe(
         Effect.mapError((cause) => toError(cause)),
       );
-      const execution = yield* client.executions.get({
-        path: {
-          workspaceId: installation.workspaceId,
-          executionId: decodedExecutionId,
-        },
-      });
+      const execution = yield* executor.effect.executions.get(decodedExecutionId);
 
       const settled = yield* driveExecution({
-        client,
-        workspaceId: installation.workspaceId,
+        api: executor.effect,
         envelope: execution,
         baseUrl,
         shouldOpenUrls: !noOpen,
