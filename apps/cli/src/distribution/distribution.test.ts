@@ -39,9 +39,10 @@ describe("distribution flow", () => {
       expect(initialDoctorJson.checks.webAssets?.ok).toBe(true);
       expect(initialDoctorJson.checks.database?.ok).toBe(true);
 
-      yield* runCommand(["up", "--base-url", harness.baseUrl]);
+      yield* runCommand(["daemon", "start", "--base-url", harness.baseUrl]);
 
       const statusResult = yield* runCommand([
+        "daemon",
         "status",
         "--json",
         "--base-url",
@@ -56,6 +57,19 @@ describe("distribution flow", () => {
       expect(status.reachable).toBe(true);
       expect(status.pidRunning).toBe(true);
       expect(status.installation).not.toBeNull();
+
+      const postStartDoctor = yield* runCommand([
+        "doctor",
+        "--json",
+        "--base-url",
+        harness.baseUrl,
+      ]);
+      const postStartDoctorJson = JSON.parse(postStartDoctor.stdout) as {
+        ok: boolean;
+        checks: Record<string, { ok: boolean }>;
+      };
+      expect(postStartDoctorJson.ok).toBe(true);
+      expect(postStartDoctorJson.checks.serverReachable?.ok).toBe(true);
 
       const html = yield* harness.fetchText("/");
       expect(html.status).toBe(200);
@@ -80,8 +94,8 @@ describe("distribution flow", () => {
       );
       expect(sesCall.stderr).toContain("fetch is disabled in SES executor");
 
-      yield* runCommand(["down", "--base-url", harness.baseUrl]);
-      yield* runCommand(["up", "--base-url", harness.baseUrl]);
+      yield* runCommand(["daemon", "stop", "--base-url", harness.baseUrl]);
+      yield* runCommand(["daemon", "start", "--base-url", harness.baseUrl]);
 
       const installationAfterRestartResponse = yield* harness.fetchText("/v1/local/installation");
       expect(installationAfterRestartResponse.status).toBe(200);
@@ -95,7 +109,7 @@ describe("distribution flow", () => {
       expect(installationAfterRestart.workspaceId).toBe(installation.workspaceId);
       expect(installationAfterRestart.accountId).toBe(installation.accountId);
 
-      yield* runCommand(["down", "--base-url", harness.baseUrl]);
+      yield* runCommand(["daemon", "stop", "--base-url", harness.baseUrl]);
     });
 
   it.live("boots a staged package artifact in a fresh home", () =>
