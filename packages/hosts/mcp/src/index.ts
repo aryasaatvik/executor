@@ -1,7 +1,7 @@
 import type {
   ExecutionEnvelope,
-  ControlPlaneRuntime,
-} from "@executor/control-plane";
+  EngineRuntime,
+} from "@executor/engine";
 import {
   EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
@@ -10,9 +10,9 @@ import {
   closeExecutionSession,
   createExecution,
   getExecution,
-  provideControlPlaneRuntime,
+  provideEngineRuntime,
   resumeExecution,
-} from "@executor/control-plane";
+} from "@executor/engine";
 import * as Effect from "effect/Effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
@@ -97,12 +97,12 @@ const formatResultPreview = (resultJson: string): string => {
     return truncateText(resultJson, maxResultPreviewChars);
   }
 };
-const runControlPlane = async <A, E, R>(
-  runtime: ControlPlaneRuntime,
+const runEngine = async <A, E, R>(
+  runtime: EngineRuntime,
   effect: Effect.Effect<A, E, R>,
 ): Promise<A> => {
   const exit = await Effect.runPromiseExit(
-    provideControlPlaneRuntime(effect, runtime) as Effect.Effect<A, E, never>,
+    provideEngineRuntime(effect, runtime) as Effect.Effect<A, E, never>,
   );
 
   if (Exit.isSuccess(exit)) {
@@ -157,10 +157,10 @@ const buildExecuteWorkflowText = (namespaces: readonly string[] = []): string =>
     "Do not use fetch; use tools.* only.",
   ].join("\n");
 
-const loadExecuteDescription = (runtime: ControlPlaneRuntime): Promise<string> => {
+const loadExecuteDescription = (runtime: EngineRuntime): Promise<string> => {
   const defaultDescription = buildExecuteWorkflowText();
 
-  return runControlPlane(
+  return runEngine(
     runtime,
     Effect.gen(function* () {
       const resolveExecutionEnvironment = yield* ExecutionEnvironmentResolver;
@@ -274,13 +274,13 @@ const buildToolResult = (envelope: ExecutionEnvelope): ExecutorMcpToolResult => 
 };
 
 const waitForInteractionProgress = async (input: {
-  runtime: ControlPlaneRuntime;
+  runtime: EngineRuntime;
   workspaceId: string;
   executionId: string;
   pendingInteractionId: string;
 }): Promise<ExecutionEnvelope> => {
   while (true) {
-    const next = await runControlPlane(
+    const next = await runEngine(
       input.runtime,
       getExecution({
         workspaceId: input.workspaceId as never,
@@ -300,7 +300,7 @@ const waitForInteractionProgress = async (input: {
 };
 
 const driveExecutionWithElicitation = async (input: {
-  runtime: ControlPlaneRuntime;
+  runtime: EngineRuntime;
   workspaceId: string;
   accountId: string;
   server: McpServer;
@@ -329,7 +329,7 @@ const driveExecutionWithElicitation = async (input: {
         }) as never,
       });
 
-      current = await runControlPlane(
+      current = await runEngine(
         input.runtime,
         resumeExecution({
           workspaceId: input.workspaceId as never,
@@ -352,7 +352,7 @@ const driveExecutionWithElicitation = async (input: {
     });
 
     if (response.action !== "accept") {
-      current = await runControlPlane(
+      current = await runEngine(
         input.runtime,
         resumeExecution({
           workspaceId: input.workspaceId as never,
@@ -379,13 +379,13 @@ const driveExecutionWithElicitation = async (input: {
 };
 
 const driveExecutionWithoutElicitation = async (input: {
-  runtime: ControlPlaneRuntime;
+  runtime: EngineRuntime;
   workspaceId: string;
   accountId: string;
   executionId: string;
   initialResponse?: ResumeResponseInput;
 }): Promise<ExecutionEnvelope> => {
-  let current = await runControlPlane(
+  let current = await runEngine(
     input.runtime,
     getExecution({
       workspaceId: input.workspaceId as never,
@@ -400,7 +400,7 @@ const driveExecutionWithoutElicitation = async (input: {
       return current;
     }
 
-    current = await runControlPlane(
+    current = await runEngine(
       input.runtime,
         resumeExecution({
           workspaceId: input.workspaceId as never,
@@ -419,7 +419,7 @@ const driveExecutionWithoutElicitation = async (input: {
 };
 
 const createExecutorMcpServer = async (config: {
-  runtime: ControlPlaneRuntime;
+  runtime: EngineRuntime;
   getExecutionSessionId?: () => string | undefined;
 }): Promise<McpServer> => {
   const executeDescription = await loadExecuteDescription(config.runtime);
@@ -443,7 +443,7 @@ const createExecutorMcpServer = async (config: {
     },
     async ({ code }: { code: string }) => {
       const executionSessionId = config.getExecutionSessionId?.();
-      let created = await runControlPlane(
+      let created = await runEngine(
         config.runtime,
         createExecution({
           workspaceId,
@@ -512,7 +512,7 @@ const createExecutorMcpServer = async (config: {
       inputSchema: toolSearchInputSchema,
     },
     async (input: ToolSearchInput) => {
-      const result = await runControlPlane(
+      const result = await runEngine(
         config.runtime,
         Effect.gen(function* () {
           const resolveExecutionEnvironment = yield* ExecutionEnvironmentResolver;
@@ -575,7 +575,7 @@ const jsonErrorResponse = (status: number, code: number, message: string) =>
   });
 
 export const createExecutorMcpRequestHandler = (
-  runtime: ControlPlaneRuntime,
+  runtime: EngineRuntime,
 ): ExecutorMcpRequestHandler => {
   const transports = new Map<string, WebStandardStreamableHTTPServerTransport>();
   const servers = new Map<string, McpServer>();
@@ -588,7 +588,7 @@ export const createExecutorMcpRequestHandler = (
     const server = servers.get(sessionId);
 
     try {
-      await runControlPlane(
+      await runEngine(
         runtime,
         closeExecutionSession({
           workspaceId: runtime.localInstallation.workspaceId,
