@@ -13,14 +13,15 @@
   "dependencies": {
     "@effect-atom/atom": "0.5.3",
     "@effect-atom/atom-react": "0.5.0",
-    "@executor/control-plane": "workspace:*",
+    "@effect/platform": "catalog:",
+    "@effect/rpc": "^0.73.2",
+    "@executor/engine": "workspace:*",
     "effect": "catalog:"
   },
   "peerDependencies": {
     "react": ">=18 <20"
   },
   "devDependencies": {
-    "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/jsdom": "^21.1.7",

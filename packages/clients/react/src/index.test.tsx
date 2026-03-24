@@ -4,12 +4,12 @@ import { FileSystem, HttpApiBuilder, HttpServer } from "@effect/platform";
 import { NodeFileSystem, NodeHttpServer } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import {
-  createControlPlaneApiLayer,
-  createControlPlaneRuntime,
+  createEngineApiLayer,
+  createEngineRuntime,
   type LocalInstallation,
   type Source,
-  type ControlPlaneRuntime,
-} from "@executor/control-plane";
+  type EngineRuntime,
+} from "@executor/engine";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -66,7 +66,7 @@ type RunningServer = {
 };
 
 type ApiServer = RunningServer & {
-  runtime: ControlPlaneRuntime;
+  runtime: EngineRuntime;
 };
 
 type HookHarness<T> = {
@@ -90,7 +90,7 @@ type SourceHarnessState = {
 const closeScope = (scope: Scope.CloseableScope) =>
   Scope.close(scope, Exit.void).pipe(Effect.orDie);
 
-const startControlPlaneServer = async (): Promise<ApiServer> => {
+const startEngineServer = async (): Promise<ApiServer> => {
   const workspaceRoot = await Effect.runPromise(
     FileSystem.FileSystem.pipe(
       Effect.flatMap((fs) => fs.makeTempDirectory({ prefix: "executor-react-test-" })),
@@ -98,7 +98,7 @@ const startControlPlaneServer = async (): Promise<ApiServer> => {
     ),
   );
   const runtime = await Effect.runPromise(
-    createControlPlaneRuntime({
+    createEngineRuntime({
       workspaceRoot,
     }),
   );
@@ -106,7 +106,7 @@ const startControlPlaneServer = async (): Promise<ApiServer> => {
 
   try {
     const serverLayer = HttpApiBuilder.serve().pipe(
-      Layer.provide(createControlPlaneApiLayer(runtime.runtimeLayer)),
+      Layer.provide(createEngineApiLayer(runtime.runtimeLayer)),
       Layer.provideMerge(NodeHttpServer.layerTest),
     );
     const context = await Effect.runPromise(Layer.buildWithScope(serverLayer, scope));
@@ -485,7 +485,7 @@ function getReadyData<T>(loadable: Loadable<T>): T {
 describe("executor-react source hooks", () => {
   it.effect("rejects invalid source creation before applying optimistic state", () =>
     Effect.promise(async () => {
-    const apiServer = await startControlPlaneServer();
+    const apiServer = await startEngineServer();
     const proxyServer = await startProxyServer({
       targetBaseUrl: apiServer.baseUrl,
       delays: [
@@ -548,7 +548,7 @@ describe("executor-react source hooks", () => {
 
   it.effect("applies optimistic source updates and refreshes live inspection data after success", () =>
     Effect.promise(async () => {
-    const apiServer = await startControlPlaneServer();
+    const apiServer = await startEngineServer();
     const proxyServer = await startProxyServer({
       targetBaseUrl: apiServer.baseUrl,
       delays: [
@@ -640,7 +640,7 @@ describe("executor-react source hooks", () => {
 
   it.effect("optimistically removes deleted sources and invalidates mounted source queries", () =>
     Effect.promise(async () => {
-    const apiServer = await startControlPlaneServer();
+    const apiServer = await startEngineServer();
     const proxyServer = await startProxyServer({
       targetBaseUrl: apiServer.baseUrl,
       delays: [
@@ -721,7 +721,7 @@ describe("executor-react source hooks", () => {
 
   it.effect("surfaces missing sources as errors instead of staying loading", () =>
     Effect.promise(async () => {
-      const apiServer = await startControlPlaneServer();
+      const apiServer = await startEngineServer();
       try {
         const harness = await renderSourceHarness("src_missing", apiServer.baseUrl);
 
