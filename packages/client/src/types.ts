@@ -23,6 +23,8 @@ export type Executor = {
   readonly baseUrl: string;
   /** Namespaced Effect-based API — each method returns an Effect. */
   readonly effect: ExecutorEffectApi;
+  /** Promise-based catalog namespace. */
+  readonly catalog: Promiseify<ExecutorEffectApi["catalog"]>;
   /** Promise-based sources namespace. */
   readonly sources: Promiseify<ExecutorEffectApi["sources"]>;
   /** Promise-based executions namespace. */

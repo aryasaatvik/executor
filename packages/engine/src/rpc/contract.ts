@@ -18,6 +18,8 @@ import {
   SourceInspectionDiscoverPayloadSchema,
   SourceInspectionDiscoverResultSchema,
   SourceSchema,
+  ToolSearchPayloadSchema,
+  ToolSearchResultSetSchema,
 } from "#schema";
 
 import {
@@ -244,6 +246,13 @@ export const ExecutorRpcs = RpcGroup.make(
   Rpc.make("StartSourceOAuth", {
     payload: StartSourceOAuthPayloadSchema,
     success: StartSourceOAuthResultSchema,
+    error: ExecutorRpcError,
+  }),
+
+  // Catalog search
+  Rpc.make("SearchTools", {
+    payload: ToolSearchPayloadSchema,
+    success: ToolSearchResultSetSchema,
     error: ExecutorRpcError,
   }),
 );

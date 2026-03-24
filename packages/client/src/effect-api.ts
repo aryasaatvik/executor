@@ -22,6 +22,9 @@ type RpcSuccess<Tag extends ExecutorRpc["_tag"]> =
 // ---------------------------------------------------------------------------
 
 export type ExecutorEffectApi = {
+  readonly catalog: {
+    readonly search: (payload: RpcPayload<"SearchTools">) => Effect.Effect<RpcSuccess<"SearchTools">, Err>;
+  };
   readonly sources: {
     readonly list: () => Effect.Effect<RpcSuccess<"ListSources">, Err>;
     readonly get: (sourceId: RpcPayload<"GetSource">["sourceId"]) => Effect.Effect<RpcSuccess<"GetSource">, Err>;
@@ -67,6 +70,9 @@ export type ExecutorEffectApi = {
 export const createEffectApi = (
   client: ExecutorRpcClient,
 ): ExecutorEffectApi => ({
+  catalog: {
+    search: (payload) => client.SearchTools(payload),
+  },
   sources: {
     list: () => client.ListSources(void 0 as void),
     get: (sourceId) => client.GetSource({ sourceId }),

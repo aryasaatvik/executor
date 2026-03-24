@@ -55,6 +55,7 @@ export const createExecutor = async (
     actorId: installation.accountId as AccountId,
     baseUrl: options.baseUrl,
     effect: effectApi,
+    catalog: wrapEffectApi(effectApi.catalog, run),
     sources: wrapEffectApi(effectApi.sources, run),
     executions: wrapEffectApi(effectApi.executions, run),
     policies: wrapEffectApi(effectApi.policies, run),

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 
 import * as Option from "effect/Option";
+import type { SearchHit } from "@executor/codemode-core";
 
 import { SecretMaterialIdSchema } from "#schema";
 import {
@@ -44,6 +45,8 @@ import { requireRuntimeLocalWorkspace } from "../runtime/local/runtime-context";
 import { WorkspaceConfigStore } from "../runtime/local/storage";
 import { SourceStore } from "../runtime/sources/source-store";
 import { EngineStore } from "../runtime/store";
+import { SourceCatalogStore } from "../runtime/catalog/source/runtime";
+import { createWorkspaceSourceCatalog } from "../runtime/execution/workspace/source-catalog";
 import {
   createDefaultSecretMaterialDeleter,
   createDefaultSecretMaterialStorer,
@@ -56,6 +59,11 @@ import {
 } from "../runtime/local/secret-material-providers";
 import { validateSemanticSearchConfigForWrite } from "../api/local/semantic-search-config";
 import type { InstanceConfig, SecretProvider } from "../api/local/api";
+import type {
+  ToolSearchBackendMode,
+  ToolSearchMode,
+  ToolSearchResultSet,
+} from "#schema";
 
 import { ExecutorRpcs, ExecutorRpcError } from "./contract";
 
@@ -98,6 +106,74 @@ const mapError = (operation: string) => <A, E, R>(
       return Effect.fail(rpcError(operation, message, "storage"));
     }),
   );
+
+const normalizeSearchLimit = (limit: number | undefined): number => {
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return 10;
+  }
+
+  return Math.min(100, Math.max(1, Math.trunc(limit)));
+};
+
+const parseSearchQuery = (query: string): { mode: ToolSearchMode; cleanQuery: string } => {
+  if (query.startsWith("+")) {
+    return { mode: "exact", cleanQuery: query.slice(1).trim() };
+  }
+
+  return { mode: "search", cleanQuery: query.trim() };
+};
+
+const toolResultFromIndexEntry = (
+  tool: {
+    path: string;
+    searchNamespace: string;
+    descriptor: {
+      sourceKey: string;
+      description?: string;
+      contract?: {
+        inputTypePreview?: string;
+        outputTypePreview?: string;
+      };
+    };
+  },
+  score: number,
+) => ({
+  path: tool.path,
+  score,
+  sourceKey: tool.descriptor.sourceKey,
+  namespace: tool.searchNamespace,
+  ...(tool.descriptor.description !== undefined
+    ? { description: tool.descriptor.description }
+    : {}),
+  ...(tool.descriptor.contract?.inputTypePreview !== undefined
+    ? { inputTypePreview: tool.descriptor.contract.inputTypePreview }
+    : {}),
+  ...(tool.descriptor.contract?.outputTypePreview !== undefined
+    ? { outputTypePreview: tool.descriptor.contract.outputTypePreview }
+    : {}),
+});
+
+const buildToolSearchResultSet = (input: {
+  query: string;
+  source?: string | null | undefined;
+  namespace?: string | null | undefined;
+  limit?: number | undefined;
+}, output: {
+  mode: ToolSearchMode;
+  searchMode: ToolSearchBackendMode;
+  results: ToolSearchResultSet["results"];
+}): ToolSearchResultSet => ({
+  meta: {
+    query: input.query,
+    mode: output.mode,
+    searchMode: output.searchMode,
+    total: output.results.length,
+    source: input.source ?? null,
+    namespace: input.namespace ?? null,
+    limit: normalizeSearchLimit(input.limit),
+  },
+  results: output.results,
+});
 
 // ---------------------------------------------------------------------------
 // Handler layer
@@ -591,6 +667,110 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
           }),
         ),
         mapError("StartSourceOAuth"),
+      ),
+
+    SearchTools: (payload) =>
+      resolveWorkspace("SearchTools").pipe(
+        Effect.flatMap((ws) =>
+          Effect.gen(function* () {
+            const sourceCatalogStore = yield* SourceCatalogStore;
+            const workspaceConfigStore = yield* WorkspaceConfigStore;
+            const catalog = createWorkspaceSourceCatalog({
+              workspaceId: ws.installation.workspaceId,
+              accountId: ws.installation.accountId,
+              sourceCatalogStore,
+              workspaceConfigStore,
+              runtimeLocalWorkspace: ws,
+            });
+
+            const limit = normalizeSearchLimit(payload.limit);
+            const source = payload.source ?? undefined;
+            const namespace = payload.namespace ?? undefined;
+            const { mode, cleanQuery } = parseSearchQuery(payload.query);
+
+            if (cleanQuery.length === 0) {
+              return buildToolSearchResultSet(
+                payload,
+                {
+                  mode: mode === "exact" ? "exact" : "search",
+                  searchMode: "fts",
+                  results: [],
+                },
+              );
+            }
+
+            if (mode === "exact") {
+              const tool = yield* sourceCatalogStore.loadWorkspaceSourceCatalogToolByPath({
+                workspaceId: ws.installation.workspaceId,
+                path: cleanQuery,
+                actorAccountId: ws.installation.accountId,
+                includeSchemas: false,
+              });
+
+              if (
+                tool === null
+                || (source !== undefined && tool.descriptor.sourceKey !== source)
+                || (namespace !== undefined && tool.searchNamespace !== namespace)
+              ) {
+                return buildToolSearchResultSet(
+                  payload,
+                  {
+                    mode: "exact",
+                    searchMode: "fts",
+                    results: [],
+                  },
+                );
+              }
+
+              return buildToolSearchResultSet(
+                payload,
+                {
+                  mode: "exact",
+                  searchMode: "fts",
+                  results: [toolResultFromIndexEntry(tool, 1)],
+                },
+              );
+            }
+
+            const hits = yield* catalog.searchTools({
+              query: cleanQuery,
+              ...(namespace !== undefined ? { namespace } : {}),
+              ...(source !== undefined ? { sourceKey: source } : {}),
+              limit,
+            });
+            const searchMode = (
+              hits as readonly SearchHit[] & { searchMode?: ToolSearchBackendMode }
+            ).searchMode ?? "fts";
+
+            const results: Array<ToolSearchResultSet["results"][number]> = [];
+            for (const hit of hits) {
+              const tool = yield* sourceCatalogStore.loadWorkspaceSourceCatalogToolByPath({
+                workspaceId: ws.installation.workspaceId,
+                path: hit.path,
+                actorAccountId: ws.installation.accountId,
+                includeSchemas: false,
+              });
+              if (tool === null) {
+                continue;
+              }
+
+              results.push(toolResultFromIndexEntry(tool, hit.score));
+              if (results.length >= limit) {
+                break;
+              }
+            }
+
+            return buildToolSearchResultSet(
+              payload,
+              {
+                mode: "search",
+                searchMode,
+                results,
+              },
+            );
+          }),
+        ),
+        mapError("SearchTools"),
       ),
   }),
 );
