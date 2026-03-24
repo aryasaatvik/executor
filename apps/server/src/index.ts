@@ -8,13 +8,19 @@ import { dirname, extname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { FileSystem, HttpApiBuilder, HttpServer } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
+import * as RpcSerialization from "@effect/rpc/RpcSerialization";
+import * as RpcServer from "@effect/rpc/RpcServer";
 import {
-  createControlPlaneApiLayer,
-  createControlPlaneRuntime,
+  createEngineApiLayer,
+  createEngineRuntime,
   type ResolveExecutionEnvironment,
   type ResolveSecretMaterial,
-  type ControlPlaneRuntime,
-} from "@executor/control-plane";
+  type EngineRuntime,
+} from "@executor/engine";
+import {
+  ExecutorRpcs,
+  ExecutorRpcHandlerLive,
+} from "@executor/engine/rpc";
 import { createExecutorMcpRequestHandler } from "@executor/executor-mcp";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -68,7 +74,7 @@ type StaticUiOptions = {
 };
 
 export type LocalExecutorServer = {
-  readonly runtime: ControlPlaneRuntime;
+  readonly runtime: EngineRuntime;
   readonly port: number;
   readonly host: string;
   readonly baseUrl: string;
@@ -86,16 +92,20 @@ export type StartLocalExecutorServerOptions = {
 };
 
 export type LocalExecutorRequestHandler = {
-  readonly runtime: ControlPlaneRuntime;
+  readonly runtime: EngineRuntime;
   readonly handleApiRequest: (request: Request) => Promise<Response>;
   readonly getBaseUrl: () => string | undefined;
   readonly setBaseUrl: (baseUrl: string) => void;
 };
 
-type ControlPlaneWebHandler = ReturnType<typeof HttpApiBuilder.toWebHandler>;
+type EngineWebHandler = ReturnType<typeof HttpApiBuilder.toWebHandler>;
 type ExecutorMcpHandler = ReturnType<typeof createExecutorMcpRequestHandler>;
+type RpcWebHandler = {
+  readonly handler: (request: Request) => Promise<Response>;
+  readonly dispose: () => Promise<void>;
+};
 
-const disposeRuntime = (runtime: ControlPlaneRuntime) =>
+const disposeRuntime = (runtime: EngineRuntime) =>
   Effect.tryPromise({
     try: () => runtime.close(),
     catch: (cause) =>
@@ -107,7 +117,7 @@ const createRuntime = (
   getLocalServerBaseUrl: () => string | undefined,
   options: StartLocalExecutorServerOptions,
 ) =>
-  createControlPlaneRuntime({
+  createEngineRuntime({
     workspaceRoot: options.workspaceRoot,
     executionResolver: options.executionResolver,
     resolveSecretMaterial: options.resolveSecretMaterial,
@@ -119,8 +129,8 @@ const createRuntime = (
     ),
   );
 
-const createControlPlaneWebHandler = (
-  runtime: ControlPlaneRuntime,
+const createEngineWebHandler = (
+  runtime: EngineRuntime,
   tracingRuntime: ReturnType<typeof createLocalTracingRuntimeFromEnv>,
 ) =>
   Effect.acquireRelease(
@@ -129,7 +139,7 @@ const createControlPlaneWebHandler = (
         Layer.merge(
           HttpApiBuilder.middlewareOpenApi({ path: "/v1/openapi.json" }).pipe(
             Layer.provideMerge(
-              createControlPlaneApiLayer(runtime.runtimeLayer).pipe(
+              createEngineApiLayer(runtime.runtimeLayer).pipe(
                 Layer.provideMerge(tracingRuntime?.layer ?? Layer.empty),
               ),
             )
@@ -138,7 +148,30 @@ const createControlPlaneWebHandler = (
         ),
       ),
     ),
-    (handler: ControlPlaneWebHandler) => Effect.tryPromise({ try: () => handler.dispose(), catch: (cause) => cause instanceof Error ? cause : new Error(String(cause ?? "web handler dispose failed")) }).pipe(Effect.orDie),
+    (handler: EngineWebHandler) => Effect.tryPromise({ try: () => handler.dispose(), catch: (cause) => cause instanceof Error ? cause : new Error(String(cause ?? "web handler dispose failed")) }).pipe(Effect.orDie),
+  );
+
+const createRpcWebHandler = (
+  runtime: EngineRuntime,
+): Effect.Effect<RpcWebHandler, never, Scope.Scope> =>
+  Effect.acquireRelease(
+    Effect.sync(() =>
+      RpcServer.toWebHandler(ExecutorRpcs, {
+        layer: Layer.mergeAll(
+          ExecutorRpcHandlerLive,
+          RpcSerialization.layerNdjson,
+          HttpServer.layerContext,
+        ).pipe(Layer.provide(Layer.merge(runtime.runtimeLayer, NodeFileSystem.layer))),
+      }),
+    ),
+    (handler: RpcWebHandler) =>
+      Effect.tryPromise({
+        try: () => handler.dispose(),
+        catch: (cause) =>
+          cause instanceof Error
+            ? cause
+            : new Error(String(cause ?? "rpc handler dispose failed")),
+      }).pipe(Effect.orDie),
   );
 
 const safeFilePath = (assetsDir: string, pathname: string): string | null => {
@@ -299,7 +332,7 @@ const serveUiAsset = async (
 
 const isApiRequest = (request: Request): boolean => {
   const pathname = new URL(request.url).pathname;
-  return pathname === "/mcp" || pathname === "/v1" || pathname.startsWith("/v1/");
+  return pathname === "/mcp" || pathname === "/rpc" || pathname === "/v1" || pathname.startsWith("/v1/");
 };
 
 export const createLocalExecutorRequestHandler = (
@@ -338,7 +371,8 @@ export const createLocalExecutorRequestHandler = (
       disposeRuntime,
     );
 
-    const apiHandler = yield* createControlPlaneWebHandler(runtime, tracingRuntime);
+    const apiHandler = yield* createEngineWebHandler(runtime, tracingRuntime);
+    const rpcHandler = yield* createRpcWebHandler(runtime);
     const mcpHandler = yield* Effect.acquireRelease(
       Effect.sync(() => createExecutorMcpRequestHandler(runtime)),
       (handler: ExecutorMcpHandler) =>
@@ -357,7 +391,9 @@ export const createLocalExecutorRequestHandler = (
         const pathname = new URL(request.url).pathname;
         return pathname === "/mcp"
           ? mcpHandler.handleRequest(request)
-          : apiHandler.handler(request);
+          : pathname === "/rpc"
+            ? rpcHandler.handler(request)
+            : apiHandler.handler(request);
       },
       getBaseUrl: () => baseUrlRef,
       setBaseUrl: (baseUrl) => {

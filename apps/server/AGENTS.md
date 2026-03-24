@@ -1,6 +1,6 @@
 # @executor/server
 
-Thin HTTP server wrapper. Owns server lifecycle and request routing. All business logic lives in control-plane.
+Thin HTTP server wrapper. Owns server lifecycle and request routing. All business logic lives in engine.
 
 ## What this package owns
 
@@ -13,11 +13,11 @@ Thin HTTP server wrapper. Owns server lifecycle and request routing. All busines
 - **OpenTelemetry setup** — reads env vars, builds tracing layer, prints search URL on startup.
 - **Request/response bridging** — converts Node `IncomingMessage`/`ServerResponse` to/from Web `Request`/`Response`.
 
-## What control-plane owns
+## What engine owns
 
 Everything else:
-- Runtime creation (`createControlPlaneRuntime`)
-- API layer and all route handlers (`createControlPlaneApiLayer` + `HttpApiBuilder`)
+- Runtime creation (`createEngineRuntime`)
+- API layer and all route handlers (`createEngineApiLayer` + `HttpApiBuilder`)
 - MCP handler factory (`createExecutorMcpRequestHandler`)
 - Execution environment resolution
 - Secret material resolution
