@@ -33,7 +33,8 @@
     "release:publish": "bun src/distribution/publish.ts"
   },
   "dependencies": {
-    "@effect/cli": "catalog:",
+    "@bunli/core": "catalog:",
+    "@bunli/plugin-completions": "catalog:",
     "@effect/platform": "catalog:",
     "@effect/platform-node": "catalog:",
     "@executor/client": "workspace:*",

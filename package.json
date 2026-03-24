@@ -12,6 +12,9 @@
     "apps/docs"
   ],
   "catalog": {
+    "@bunli/core": "^0.8.2",
+    "@bunli/plugin-completions": "^0.3.4",
+    "@bunli/plugin-config": "^0.4.3",
     "@effect/cli": "^0.73.2",
     "@effect/platform": "^0.94.5",
     "@effect/platform-node": "^0.104.1",
