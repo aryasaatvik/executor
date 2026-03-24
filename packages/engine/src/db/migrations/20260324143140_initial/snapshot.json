@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "ae45d21d-eee7-43bc-9a39-95049c86da8e",
+  "id": "276dfd23-eafd-449d-be43-7893ceef7fbc",
   "prevIds": [
-    "b072fe80-7e60-421d-ad78-d2207008b54e"
+    "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
     {
@@ -20,6 +20,10 @@
     },
     {
       "name": "auth_lease",
+      "entityType": "tables"
+    },
+    {
+      "name": "catalog_document",
       "entityType": "tables"
     },
     {
@@ -59,15 +63,19 @@
       "entityType": "tables"
     },
     {
-      "name": "source_catalog",
+      "name": "catalog",
       "entityType": "tables"
     },
     {
-      "name": "source_catalog_revision",
+      "name": "catalog_revision",
       "entityType": "tables"
     },
     {
       "name": "source",
+      "entityType": "tables"
+    },
+    {
+      "name": "workspace_state",
       "entityType": "tables"
     },
     {
@@ -126,7 +134,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "account"
     },
@@ -136,7 +144,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "account"
     },
@@ -276,7 +284,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "source_auth_session"
     },
@@ -286,7 +294,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "source_auth_session"
     },
@@ -376,7 +384,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "auth_artifact"
     },
@@ -386,7 +394,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "auth_artifact"
     },
@@ -486,7 +494,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "auth_lease"
     },
@@ -496,9 +504,59 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "auth_lease"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "catalog_document"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revision_id",
+      "entityType": "columns",
+      "table": "catalog_document"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "document_id",
+      "entityType": "columns",
+      "table": "catalog_document"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "catalog_document"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "catalog_document"
     },
     {
       "type": "text",
@@ -671,12 +729,22 @@
       "table": "catalog_tool"
     },
     {
-      "type": "integer",
-      "notNull": true,
+      "type": "text",
+      "notNull": false,
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "capability_json",
+      "entityType": "columns",
+      "table": "catalog_tool"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "executable_json",
       "entityType": "columns",
       "table": "catalog_tool"
     },
@@ -686,7 +754,17 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "catalog_tool"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
       "entityType": "columns",
       "table": "catalog_tool"
     },
@@ -717,6 +795,16 @@
       "default": null,
       "generated": null,
       "name": "created_by_account_id",
+      "entityType": "columns",
+      "table": "execution"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "execution_session_id",
       "entityType": "columns",
       "table": "execution"
     },
@@ -796,7 +884,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "execution"
     },
@@ -806,7 +894,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "execution"
     },
@@ -896,7 +984,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "execution_interaction"
     },
@@ -906,7 +994,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "execution_interaction"
     },
@@ -1016,7 +1104,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "execution_step"
     },
@@ -1026,7 +1114,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "execution_step"
     },
@@ -1166,7 +1254,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "provider_auth_grant"
     },
@@ -1176,7 +1264,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "provider_auth_grant"
     },
@@ -1266,7 +1354,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "source_oauth_client"
     },
@@ -1276,7 +1364,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "source_oauth_client"
     },
@@ -1366,7 +1454,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "workspace_oauth_client"
     },
@@ -1376,7 +1464,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "workspace_oauth_client"
     },
@@ -1466,7 +1554,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "policy"
     },
@@ -1476,7 +1564,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "policy"
     },
@@ -1546,7 +1634,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "secret_material"
     },
@@ -1556,7 +1644,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "secret_material"
     },
@@ -1568,7 +1656,7 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1578,7 +1666,7 @@
       "generated": null,
       "name": "kind",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1588,7 +1676,7 @@
       "generated": null,
       "name": "adapter_key",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1598,7 +1686,7 @@
       "generated": null,
       "name": "provider_key",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1608,7 +1696,7 @@
       "generated": null,
       "name": "name",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1618,7 +1706,7 @@
       "generated": null,
       "name": "summary",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1628,7 +1716,7 @@
       "generated": null,
       "name": "visibility",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1638,7 +1726,7 @@
       "generated": null,
       "name": "latest_revision_id",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "integer",
@@ -1646,9 +1734,9 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "integer",
@@ -1656,9 +1744,9 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
-      "table": "source_catalog"
+      "table": "catalog"
     },
     {
       "type": "text",
@@ -1668,7 +1756,7 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1678,7 +1766,7 @@
       "generated": null,
       "name": "catalog_id",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "integer",
@@ -1688,7 +1776,7 @@
       "generated": null,
       "name": "revision_number",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1698,7 +1786,7 @@
       "generated": null,
       "name": "source_config_json",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1708,7 +1796,7 @@
       "generated": null,
       "name": "import_metadata_json",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1718,7 +1806,7 @@
       "generated": null,
       "name": "import_metadata_hash",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1728,7 +1816,17 @@
       "generated": null,
       "name": "snapshot_hash",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "snapshot_json",
+      "entityType": "columns",
+      "table": "catalog_revision"
     },
     {
       "type": "integer",
@@ -1736,9 +1834,9 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "integer",
@@ -1746,9 +1844,9 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "type": "text",
@@ -1794,36 +1892,6 @@
       "type": "text",
       "notNull": true,
       "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "name",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "kind",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "endpoint",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
       "default": "'draft'",
       "generated": null,
       "name": "status",
@@ -1837,56 +1905,6 @@
       "default": "true",
       "generated": null,
       "name": "enabled",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "namespace",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "icon_url",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "import_auth_policy",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "binding_config_json",
-      "entityType": "columns",
-      "table": "source"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "binding_version",
       "entityType": "columns",
       "table": "source"
     },
@@ -1916,7 +1934,7 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_created",
+      "name": "created_at",
       "entityType": "columns",
       "table": "source"
     },
@@ -1926,9 +1944,49 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "time_updated",
+      "name": "updated_at",
       "entityType": "columns",
       "table": "source"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_id",
+      "entityType": "columns",
+      "table": "workspace_state"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key",
+      "entityType": "columns",
+      "table": "workspace_state"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "workspace_state"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "workspace_state"
     },
     {
       "columns": [
@@ -1944,6 +2002,21 @@
       "name": "fk_auth_lease_auth_artifact_id_auth_artifact_id_fk",
       "entityType": "fks",
       "table": "auth_lease"
+    },
+    {
+      "columns": [
+        "revision_id"
+      ],
+      "tableTo": "catalog_revision",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_catalog_document_revision_id_catalog_revision_id_fk",
+      "entityType": "fks",
+      "table": "catalog_document"
     },
     {
       "columns": [
@@ -2009,16 +2082,26 @@
       "columns": [
         "catalog_id"
       ],
-      "tableTo": "source_catalog",
+      "tableTo": "catalog",
       "columnsTo": [
         "id"
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "CASCADE",
       "nameExplicit": false,
-      "name": "fk_source_catalog_revision_catalog_id_source_catalog_id_fk",
+      "name": "fk_catalog_revision_catalog_id_catalog_id_fk",
       "entityType": "fks",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
+    },
+    {
+      "columns": [
+        "workspace_id",
+        "key"
+      ],
+      "nameExplicit": false,
+      "name": "workspace_state_pk",
+      "entityType": "pks",
+      "table": "workspace_state"
     },
     {
       "columns": [
@@ -2054,6 +2137,15 @@
       "nameExplicit": false,
       "name": "auth_lease_pk",
       "table": "auth_lease",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "catalog_document_pk",
+      "table": "catalog_document",
       "entityType": "pks"
     },
     {
@@ -2142,8 +2234,8 @@
         "id"
       ],
       "nameExplicit": false,
-      "name": "source_catalog_pk",
-      "table": "source_catalog",
+      "name": "catalog_pk",
+      "table": "catalog",
       "entityType": "pks"
     },
     {
@@ -2151,8 +2243,8 @@
         "id"
       ],
       "nameExplicit": false,
-      "name": "source_catalog_revision_pk",
-      "table": "source_catalog_revision",
+      "name": "catalog_revision_pk",
+      "table": "catalog_revision",
       "entityType": "pks"
     },
     {
@@ -2267,6 +2359,24 @@
       "name": "auth_lease_source_idx",
       "entityType": "indexes",
       "table": "auth_lease"
+    },
+    {
+      "columns": [
+        {
+          "value": "revision_id",
+          "isExpression": false
+        },
+        {
+          "value": "document_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "catalog_document_revision_document_idx",
+      "entityType": "indexes",
+      "table": "catalog_document"
     },
     {
       "columns": [
@@ -2482,7 +2592,7 @@
       "origin": "manual",
       "name": "catalog_revision_catalog_idx",
       "entityType": "indexes",
-      "table": "source_catalog_revision"
+      "table": "catalog_revision"
     },
     {
       "columns": [
