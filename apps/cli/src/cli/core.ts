@@ -2,7 +2,8 @@ import { spawn } from "node:child_process";
 import { dirname } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { FileSystem } from "@effect/platform";
-import { NodeFileSystem, NodePath } from "@effect/platform-node";
+import { NodeFileSystem } from "@effect/platform-node";
+import * as Scope from "effect/Scope";
 import {
   createExecutor,
   type Executor,
@@ -11,13 +12,14 @@ import {
 import {
   ExecutionIdSchema,
   deriveLocalInstallation,
+  loadLocalExecutorConfig,
   resolveLocalWorkspaceContext,
+  type LocalExecutorConfig,
   type ExecutionEnvelope,
   type ExecutionInteraction,
 } from "@executor/engine";
 
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import {
@@ -58,18 +60,31 @@ const toError = (cause: unknown): Error =>
 const sleep = (ms: number) =>
   Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-export const runCliEffect = <A>(
-  effect: Effect.Effect<A, unknown, FileSystem.FileSystem>,
+export const runCliEffect = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
 ): Promise<A> =>
   Effect.runPromise(
     effect.pipe(
+      Effect.scoped,
       Effect.provide(NodeFileSystem.layer),
-      Effect.provide(NodePath.layer),
-    ),
+    ) as Effect.Effect<A, E, never>,
   );
 
 export const formatCliError = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
+
+export const loadResolvedLocalConfig = (): Effect.Effect<
+  LocalExecutorConfig,
+  Error,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const context = yield* resolveLocalWorkspaceContext();
+    const loaded = yield* loadLocalExecutorConfig(context).pipe(
+      Effect.mapError(toError),
+    );
+    return loaded.config ?? {};
+  });
 
 const openUrlInBrowser = (url: string): Effect.Effect<void, never, never> =>
   Effect.sync(() => {
@@ -164,6 +179,12 @@ const connectExecutor = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
     catch: toError,
   });
 
+const closeExecutor = (executor: Executor) =>
+  Effect.tryPromise({
+    try: () => executor.close(),
+    catch: toError,
+  }).pipe(Effect.catchAll(() => Effect.void));
+
 const decodeExecutionId = Schema.decodeUnknown(ExecutionIdSchema);
 
 export const printJson = (value: unknown) =>
@@ -177,9 +198,10 @@ export const printText = (value: string) =>
   });
 
 const getLocalAuthedClient = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
-  Effect.gen(function* () {
-    return yield* connectExecutor(baseUrl);
-  });
+  Effect.acquireRelease(
+    connectExecutor(baseUrl),
+    (executor) => closeExecutor(executor),
+  );
 
 const isServerReachable = (baseUrl: string) =>
   Effect.tryPromise({
@@ -193,8 +215,90 @@ const getCurrentWorkspaceInstallation = () =>
     Effect.mapError(toError),
   );
 
+export const resolveDaemonBaseUrl = (
+  override?: string,
+): Effect.Effect<string, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (override && override.trim().length > 0) {
+      return override;
+    }
+
+    const config = yield* loadResolvedLocalConfig();
+    return config.daemon?.baseUrl ?? DEFAULT_SERVER_BASE_URL;
+  });
+
+export const resolveDaemonPort = (
+  override?: number,
+): Effect.Effect<number, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    if (typeof override === "number" && Number.isFinite(override) && override > 0) {
+      return Math.trunc(override);
+    }
+
+    const config = yield* loadResolvedLocalConfig();
+    const configuredPort = config.daemon?.port;
+    if (
+      typeof configuredPort === "number"
+      && Number.isFinite(configuredPort)
+      && configuredPort > 0
+    ) {
+      return Math.trunc(configuredPort);
+    }
+
+    return DEFAULT_SERVER_PORT;
+  });
+
+export const resolveCallCommandDefaults = (input: {
+  baseUrl?: string;
+  noOpen?: boolean;
+}): Effect.Effect<{ baseUrl: string; noOpen: boolean }, Error, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const config = yield* loadResolvedLocalConfig();
+    return {
+      baseUrl:
+        (input.baseUrl && input.baseUrl.trim().length > 0 ? input.baseUrl : undefined)
+        ?? config.call?.baseUrl
+        ?? config.daemon?.baseUrl
+        ?? DEFAULT_SERVER_BASE_URL,
+      noOpen: input.noOpen ?? config.call?.noOpen ?? false,
+    };
+  });
+
+export const resolveSearchCommandDefaults = (input: {
+  baseUrl?: string;
+  source?: string;
+  namespace?: string;
+  limit?: number;
+}): Effect.Effect<
+  {
+    baseUrl: string;
+    source?: string;
+    namespace?: string;
+    limit: number;
+  },
+  Error,
+  FileSystem.FileSystem
+> =>
+  Effect.gen(function* () {
+    const config = yield* loadResolvedLocalConfig();
+    const configuredLimit = input.limit ?? config.search?.limit;
+
+    return {
+      baseUrl:
+        (input.baseUrl && input.baseUrl.trim().length > 0 ? input.baseUrl : undefined)
+        ?? config.daemon?.baseUrl
+        ?? DEFAULT_SERVER_BASE_URL,
+      source: input.source ?? config.search?.source ?? undefined,
+      namespace: input.namespace ?? config.search?.namespace ?? undefined,
+      limit:
+        typeof configuredLimit === "number" && Number.isFinite(configuredLimit) && configuredLimit > 0
+          ? Math.min(100, Math.trunc(configuredLimit))
+          : 10,
+    };
+  });
+
 const getReachableServerInstallation = (baseUrl: string) =>
-  connectExecutor(baseUrl).pipe(
+  getLocalAuthedClient(baseUrl).pipe(
     Effect.map((executor) => ({
       accountId: executor.actorId as string,
       workspaceId: executor.workspaceId as string,
@@ -240,7 +344,7 @@ const startServerInBackground = (port: number) =>
     }),
   );
 
-type LocalServerPidRecord = {
+export type LocalServerPidRecord = {
   pid?: number;
   port?: number;
   host?: string;
@@ -249,7 +353,7 @@ type LocalServerPidRecord = {
   logFile?: string;
 };
 
-const readPidRecord = (): Effect.Effect<
+export const readDaemonPidRecord = (): Effect.Effect<
   LocalServerPidRecord | null,
   never,
   FileSystem.FileSystem
@@ -275,24 +379,39 @@ const isPidRunning = (pid: number): boolean => {
   }
 };
 
+export const readServerLogText = (
+  logFile: string = DEFAULT_SERVER_LOG_FILE,
+): Effect.Effect<string | null, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs.readFileString(logFile, "utf8").pipe(
+      Effect.catchAll(() => Effect.succeed<string | null>(null)),
+    );
+  });
+
+const formatLogTail = (
+  contents: string,
+  maxLines: number,
+  maxChars: number,
+): string => {
+  const lines = contents.split(/\r?\n/u).filter((line) => line.length > 0);
+  const tail = lines.slice(-maxLines).join("\n");
+  return tail.length > maxChars ? tail.slice(-maxChars) : tail;
+};
+
 export const readServerLogTail = (
   logFile: string = DEFAULT_SERVER_LOG_FILE,
   maxLines: number = 40,
   maxChars: number = 6_000,
 ): Effect.Effect<string | null, never, FileSystem.FileSystem> =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const contents = yield* fs.readFileString(logFile, "utf8").pipe(
-      Effect.catchAll(() => Effect.succeed<string | null>(null)),
-    );
+    const contents = yield* readServerLogText(logFile);
 
     if (contents === null) {
       return null;
     }
 
-    const lines = contents.split(/\r?\n/u).filter((line) => line.length > 0);
-    const tail = lines.slice(-maxLines).join("\n");
-    return tail.length > maxChars ? tail.slice(-maxChars) : tail;
+    return formatLogTail(contents, maxLines, maxChars);
   });
 
 const failReachabilityTimeout = (input: {
@@ -400,9 +519,9 @@ export const getDenoVersion = (): Effect.Effect<
 
 export const getServerStatus = (
   baseUrl: string,
-): Effect.Effect<LocalServerStatus, Error, FileSystem.FileSystem> =>
+): Effect.Effect<LocalServerStatus, Error, FileSystem.FileSystem | Scope.Scope> =>
   Effect.gen(function* () {
-    const pidRecord = yield* readPidRecord();
+    const pidRecord = yield* readDaemonPidRecord();
     const reachable = yield* isServerReachable(baseUrl);
     const installation = reachable
       ? yield* getReachableServerInstallation(baseUrl)
@@ -429,8 +548,12 @@ export const getServerStatus = (
 
 export const renderStatus = (status: LocalServerStatus): string =>
   [
-    `baseUrl: ${status.baseUrl}`,
-    `reachable: ${status.reachable ? "yes" : "no"}`,
+    `daemon: ${status.reachable ? "reachable" : "unreachable"} at ${status.baseUrl}`,
+    `installation: ${
+      status.installation !== null
+        ? `${status.installation.workspaceId} (${status.installation.accountId})`
+        : "unavailable"
+    }`,
     `pid: ${status.pid ?? "none"}`,
     `pidRunning: ${status.pidRunning ? "yes" : "no"}`,
     `pidFile: ${status.pidFile}`,
@@ -508,7 +631,7 @@ export const stopServer = (baseUrl: string) =>
     const removePidFile = fs.remove(DEFAULT_SERVER_PID_FILE, {
       force: true,
     }).pipe(Effect.ignore);
-    const pidRecord = yield* readPidRecord();
+    const pidRecord = yield* readDaemonPidRecord();
     const pid = typeof pidRecord?.pid === "number" ? pidRecord.pid : null;
 
     if (pid === null) {

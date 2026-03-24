@@ -1,7 +1,8 @@
+import * as Effect from "effect/Effect";
 import { defineCommand, option } from "@bunli/core";
 import { z } from "zod";
 
-import { runCall, runCliEffect } from "../core";
+import { resolveCallCommandDefaults, runCall, runCliEffect } from "../core";
 
 const callCommand = defineCommand({
   name: "call",
@@ -13,22 +14,29 @@ const callCommand = defineCommand({
     stdin: option(z.coerce.boolean().default(false), {
       description: "Read code from stdin",
     }),
-    "base-url": option(z.string().default("http://127.0.0.1:8788"), {
+    "base-url": option(z.string().optional(), {
       description: "Override the executor daemon base URL",
     }),
-    "no-open": option(z.coerce.boolean().default(false), {
+    "no-open": option(z.coerce.boolean().optional(), {
       description: "Print interaction URLs without opening a browser",
     }),
   },
   handler: async ({ flags, positional }) => {
     await runCliEffect(
-      runCall({
-        code: positional[0],
-        file: flags.file,
-        stdin: flags.stdin,
+      resolveCallCommandDefaults({
         baseUrl: flags["base-url"],
         noOpen: flags["no-open"],
-      }),
+      }).pipe(
+        Effect.flatMap((resolved) =>
+          runCall({
+            code: positional[0],
+            file: flags.file,
+            stdin: flags.stdin,
+            baseUrl: resolved.baseUrl,
+            noOpen: resolved.noOpen,
+          }),
+        ),
+      ),
     );
   },
 });

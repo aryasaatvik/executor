@@ -2,13 +2,13 @@
 
 ## What it is
 
-Thin CLI shell over the executor runtime. Exposes a local HTTP daemon (control plane + MCP handler + optional web UI) and commands to drive it.
+Thin Bunli-based CLI shell over the executor runtime. The CLI drives the local HTTP daemon (control plane + MCP handler + optional web UI) and keeps the Effect-heavy engine/runtime code behind that boundary.
 
 ## Entry point
 
-`apps/cli/bin/executor` -> `src/cli/main.ts` using `@effect/cli`.
+`apps/cli/bin/executor` -> `src/cli/main.ts` using Bunli.
 
-## Daemon (`executor server start` / `executor up`)
+## Daemon (`executor daemon ...`)
 
 - `runLocalExecutorServer()` from `@executor/server`
 - HTTP server on `localhost:idor` (default port 46789)
@@ -17,25 +17,26 @@ Thin CLI shell over the executor runtime. Exposes a local HTTP daemon (control p
   - `/v1/*` — control plane REST API
   - `/` — optional bundled web UI assets
 - Writes PID to `~/.executor/server.pid` and logs to `~/.executor/server.log`
-- Auto-starts on `up` or `call` if not already running (spawns `__local-server` internally)
+- The internal `__local-server` path still exists for daemon bootstrap
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `executor up` | Ensure daemon is running; auto-starts if absent |
-| `executor down` | Stop the daemon |
-| `executor status` | Show daemon status (PID, reachability, workspace) |
+| `executor daemon start` | Ensure the daemon is running |
+| `executor daemon stop` | Stop the daemon |
+| `executor daemon restart` | Restart the daemon |
+| `executor daemon status` | Show daemon status (PID, reachability, workspace) |
+| `executor daemon debug bootstrap` | Run the daemon in the foreground |
+| `executor daemon debug paths` | Print daemon path defaults |
+| `executor daemon debug info` | Print low-level daemon debug information |
 | `executor doctor` | Health check: server, process, database, web assets, Deno |
-| `executor sandbox` | Check Deno sandbox availability |
 | `executor call [code]` | Execute code against the daemon; reads from `--file`, `--stdin`, or positional arg |
 | `executor resume --execution-id` | Resume a paused execution |
-| `executor server start` | Explicitly start the daemon (foreground) |
-| `executor dev seed-*` | Seed demo/GitHub sources into the workspace (dev helpers) |
 
 ## Daemon lifecycle
 
-- `ensureServer()` checks reachability; spawns background child process if not running
+- `ensureServer()` checks reachability; spawns a background child process if not running
 - `startServerInBackground()` forks `bun src/cli/main.ts __local-server --port N` detached
 - PID file records `pid`, `port`, `host`, `baseUrl`, `startedAt`, `logFile`
 
@@ -52,4 +53,4 @@ Thin CLI shell over the executor runtime. Exposes a local HTTP daemon (control p
 - `@executor/server` — `runLocalExecutorServer`, server config constants
 - `@executor/engine` — `createEngineClient`, `createEngineRuntime`, execution types
 - `@executor/executor-mcp` — MCP request handler
-- `@effect/cli`, `@effect/platform`, `@effect/platform-node` — CLI framework and Node runtime
+- Bunli core + platform packages for command parsing, prompts, and terminal behavior

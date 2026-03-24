@@ -8,9 +8,11 @@ import * as Effect from "effect/Effect";
 import {
   loadLocalExecutorConfig,
   mergeLocalExecutorConfigs,
+  readOptionalLocalExecutorConfig,
   resolveDefaultHomeConfigCandidates,
   resolveDefaultHomeStateDirectory,
   resolveLocalWorkspaceContext,
+  writeHomeLocalExecutorConfig,
 } from "./config";
 
 const makeWorkspaceRoot = () =>
@@ -174,4 +176,76 @@ describe("local-config", () => {
 
     expect(merged?.semanticSearch).toBeNull();
   });
+
+  it.effect("merges top-level daemon, call, and search config domains", () =>
+    Effect.gen(function* () {
+      const merged = mergeLocalExecutorConfigs(
+        {
+          daemon: {
+            baseUrl: "http://127.0.0.1:8788",
+            port: 8788,
+          },
+          call: {
+            baseUrl: "http://127.0.0.1:8788",
+            noOpen: false,
+          },
+          search: {
+            limit: 10,
+            source: "mcp",
+          },
+        },
+        {
+          daemon: {
+            port: 9999,
+          },
+          call: {
+            noOpen: true,
+          },
+          search: {
+            namespace: "github",
+          },
+        },
+      );
+
+      expect(merged?.daemon?.baseUrl).toBe("http://127.0.0.1:8788");
+      expect(merged?.daemon?.port).toBe(9999);
+      expect(merged?.call?.baseUrl).toBe("http://127.0.0.1:8788");
+      expect(merged?.call?.noOpen).toBe(true);
+      expect(merged?.search?.limit).toBe(10);
+      expect(merged?.search?.source).toBe("mcp");
+      expect(merged?.search?.namespace).toBe("github");
+    }),
+  );
+
+  it.effect("writes home config files with the new top-level domains", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const homeConfigPath = join(
+        yield* makeWorkspaceRoot(),
+        ".config",
+        "executor",
+        "executor.jsonc",
+      );
+
+      yield* writeHomeLocalExecutorConfig({
+        homeConfigPath,
+        config: {
+          daemon: {
+            baseUrl: "http://127.0.0.1:8788",
+          },
+          call: {
+            noOpen: true,
+          },
+          search: {
+            limit: 25,
+          },
+        },
+      });
+
+      const loaded = yield* readOptionalLocalExecutorConfig(homeConfigPath);
+      expect(loaded?.daemon?.baseUrl).toBe("http://127.0.0.1:8788");
+      expect(loaded?.call?.noOpen).toBe(true);
+      expect(loaded?.search?.limit).toBe(25);
+    }).pipe(Effect.provide(NodeFileSystem.layer)),
+  );
 });

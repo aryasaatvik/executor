@@ -1,8 +1,15 @@
+import * as Effect from "effect/Effect";
 import { defineCommand, option } from "@bunli/core";
 import { z } from "zod";
 import { createExecutor } from "@executor/client";
 
-import { ensureServer, printJson, printText, runCliEffect } from "../core";
+import {
+  ensureServer,
+  printJson,
+  printText,
+  resolveSearchCommandDefaults,
+  runCliEffect,
+} from "../core";
 
 const searchCommand = defineCommand({
   name: "search",
@@ -14,13 +21,13 @@ const searchCommand = defineCommand({
     namespace: option(z.string().optional(), {
       description: "Filter by namespace",
     }),
-    limit: option(z.coerce.number().int().positive().max(100).default(10), {
+    limit: option(z.coerce.number().int().positive().max(100).optional(), {
       description: "Maximum results to return",
     }),
     json: option(z.coerce.boolean().default(false), {
       description: "Print the full result as JSON",
     }),
-    "base-url": option(z.string().default("http://127.0.0.1:8788"), {
+    "base-url": option(z.string().optional(), {
       description: "Override the executor daemon base URL",
     }),
   },
@@ -32,43 +39,52 @@ const searchCommand = defineCommand({
       return;
     }
 
-    await runCliEffect(ensureServer(flags["base-url"]));
+    const resolved = await runCliEffect(
+      resolveSearchCommandDefaults({
+        baseUrl: flags["base-url"],
+        source: flags.source,
+        namespace: flags.namespace,
+        limit: flags.limit,
+      }),
+    );
 
-    const executor = await createExecutor({ baseUrl: flags["base-url"] });
+    await runCliEffect(ensureServer(resolved.baseUrl));
+
+    const executor = await createExecutor({ baseUrl: resolved.baseUrl });
     try {
-      const result = await runCliEffect(
-        executor.effect.catalog.search({
+      const result = await executor.catalog.search({
           query,
-          source: flags.source ?? null,
-          namespace: flags.namespace ?? null,
-          limit: flags.limit,
-        }),
-      );
+          source: resolved.source ?? null,
+          namespace: resolved.namespace ?? null,
+          limit: resolved.limit,
+        });
 
       if (flags.json) {
-        await printJson(result);
+        await runCliEffect(printJson(result));
         return;
       }
 
       const { meta, results } = result;
-      await printText(
-        results.length === 0
-          ? `No tools matched "${meta.query}".`
-          : [
-              `Found ${results.length} tool${results.length === 1 ? "" : "s"} for "${meta.query}" (${meta.mode}, ${meta.searchMode})`,
-              ...results.map((entry, index) => {
-                const label = `${index + 1}. ${entry.path}`;
-                const context = [
-                  `score=${entry.score.toFixed(3)}`,
-                  `source=${entry.sourceKey}`,
-                  `namespace=${entry.namespace}`,
-                ].join(" ");
+      await runCliEffect(
+        printText(
+          results.length === 0
+            ? `No tools matched "${meta.query}".`
+            : [
+                `Found ${results.length} tool${results.length === 1 ? "" : "s"} for "${meta.query}" (${meta.mode}, ${meta.searchMode})`,
+                ...results.map((entry, index) => {
+                  const label = `${index + 1}. ${entry.path}`;
+                  const context = [
+                    `score=${entry.score.toFixed(3)}`,
+                    `source=${entry.sourceKey}`,
+                    `namespace=${entry.namespace}`,
+                  ].join(" ");
 
-                return entry.description
-                  ? `${label} ${context}\n   ${entry.description}`
-                  : `${label} ${context}`;
-              }),
-            ].join("\n"),
+                  return entry.description
+                    ? `${label} ${context}\n   ${entry.description}`
+                    : `${label} ${context}`;
+                }),
+              ].join("\n"),
+        ),
       );
     } finally {
       await executor.close();

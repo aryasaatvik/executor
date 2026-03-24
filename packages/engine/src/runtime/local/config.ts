@@ -10,8 +10,11 @@ import {
 import {
   LocalExecutorConfigSchema,
   type LocalExecutorConfig,
+  type LocalConfigCall,
+  type LocalConfigDaemon,
   type LocalConfigSecretProvider,
   type LocalConfigSource,
+  type LocalConfigSearch,
 } from "#schema";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -220,6 +223,20 @@ const mergeSecretProviderMaps = (
   };
 };
 
+const mergeOptionalObject = <T extends object>(
+  base: T | undefined,
+  extra: T | undefined,
+): T | undefined => {
+  if (!base && !extra) {
+    return undefined;
+  }
+
+  return {
+    ...base,
+    ...extra,
+  } as T;
+};
+
 const hasOwn = <T extends object, TKey extends PropertyKey>(
   value: T | null | undefined,
   key: TKey,
@@ -242,6 +259,9 @@ export const mergeLocalExecutorConfigs = (
       ...base?.workspace,
       ...extra?.workspace,
     },
+    daemon: mergeOptionalObject<LocalConfigDaemon>(base?.daemon, extra?.daemon),
+    call: mergeOptionalObject<LocalConfigCall>(base?.call, extra?.call),
+    search: mergeOptionalObject<LocalConfigSearch>(base?.search, extra?.search),
     ...(hasOwn(extra, "semanticSearch")
       ? { semanticSearch: extra.semanticSearch }
       : hasOwn(base, "semanticSearch")
@@ -443,6 +463,23 @@ export const writeProjectLocalExecutorConfig = (input: {
       encodeLocalExecutorConfig(input.config),
     ).pipe(
       Effect.mapError(mapFileSystemError(input.context.projectConfigPath, "write config")),
+    );
+  });
+
+export const writeHomeLocalExecutorConfig = (input: {
+  homeConfigPath: string;
+  config: LocalExecutorConfig;
+}): Effect.Effect<void, LocalFileSystemError, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.makeDirectory(dirname(input.homeConfigPath), { recursive: true }).pipe(
+      Effect.mapError(mapFileSystemError(input.homeConfigPath, "create config directory")),
+    );
+    yield* fs.writeFileString(
+      input.homeConfigPath,
+      encodeLocalExecutorConfig(input.config),
+    ).pipe(
+      Effect.mapError(mapFileSystemError(input.homeConfigPath, "write config")),
     );
   });
 

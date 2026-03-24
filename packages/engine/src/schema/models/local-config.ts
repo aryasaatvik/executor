@@ -129,6 +129,22 @@ export const LocalConfigWorkspaceSchema = Schema.Struct({
   name: Schema.optional(Schema.String),
 });
 
+export const LocalConfigDaemonSchema = Schema.Struct({
+  baseUrl: Schema.optional(Schema.String),
+  port: Schema.optional(Schema.Number),
+});
+
+export const LocalConfigCallSchema = Schema.Struct({
+  baseUrl: Schema.optional(Schema.String),
+  noOpen: Schema.optional(Schema.Boolean),
+});
+
+export const LocalConfigSearchSchema = Schema.Struct({
+  limit: Schema.optional(Schema.Number),
+  source: Schema.optional(Schema.String),
+  namespace: Schema.optional(Schema.String),
+});
+
 export const LocalConfigSemanticSearchSchema = Schema.Struct({
   provider: Schema.String,
   model: Schema.optional(Schema.String),
@@ -139,6 +155,9 @@ export const LocalConfigSemanticSearchSchema = Schema.Struct({
 export const LocalExecutorConfigSchema = Schema.Struct({
   runtime: Schema.optional(LocalExecutorRuntimeSchema),
   workspace: Schema.optional(LocalConfigWorkspaceSchema),
+  daemon: Schema.optional(LocalConfigDaemonSchema),
+  call: Schema.optional(LocalConfigCallSchema),
+  search: Schema.optional(LocalConfigSearchSchema),
   semanticSearch: Schema.optional(Schema.NullOr(LocalConfigSemanticSearchSchema)),
   sources: Schema.optional(
     Schema.Record({
@@ -157,6 +176,9 @@ export type LocalConfigExplicitSecretRef =
   typeof LocalConfigExplicitSecretRefSchema.Type;
 export type LocalConfigSecretInput = typeof LocalConfigSecretInputSchema.Type;
 export type LocalConfigSecrets = typeof LocalConfigSecretsSchema.Type;
+export type LocalConfigDaemon = typeof LocalConfigDaemonSchema.Type;
+export type LocalConfigCall = typeof LocalConfigCallSchema.Type;
+export type LocalConfigSearch = typeof LocalConfigSearchSchema.Type;
 export type LocalConfigSemanticSearch = typeof LocalConfigSemanticSearchSchema.Type;
 export type LocalExecutorRuntime = typeof LocalExecutorRuntimeSchema.Type;
 export type LocalExecutorConfig = typeof LocalExecutorConfigSchema.Type;

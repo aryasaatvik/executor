@@ -161,7 +161,14 @@ const createRpcWebHandler = (
           ExecutorRpcHandlerLive,
           RpcSerialization.layerNdjson,
           HttpServer.layerContext,
-        ).pipe(Layer.provide(Layer.merge(runtime.runtimeLayer, NodeFileSystem.layer))),
+        ).pipe(
+          Layer.provide(
+            Layer.merge(
+              runtime.runtimeLayer as unknown as Layer.Layer<any, never, never>,
+              NodeFileSystem.layer,
+            ),
+          ),
+        ),
       }),
     ),
     (handler: RpcWebHandler) =>
