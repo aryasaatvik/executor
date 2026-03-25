@@ -47,23 +47,6 @@ const DEFAULT_EXECUTOR_API_BASE_URL = "http://127.0.0.1:8788";
 const RPC_PATH = "/rpc";
 
 // ---------------------------------------------------------------------------
-// RPC Client
-// ---------------------------------------------------------------------------
-
-export class ExecutorRpcClient extends AtomRpc.Tag<ExecutorRpcClient>()(
-  "ExecutorRpcClient",
-  {
-    group: ExecutorRpcs,
-    protocol: Layer.mergeAll(
-      RpcClient.layerProtocolHttp({ url: RPC_PATH }).pipe(
-        Layer.provide(FetchHttpClient.layer),
-        Layer.provide(RpcSerialization.layerNdjson),
-      ),
-    ),
-  },
-) {}
-
-// ---------------------------------------------------------------------------
 // Loadable type (backward compat)
 // ---------------------------------------------------------------------------
 
@@ -140,6 +123,41 @@ const defaultExecutorApiBaseUrl =
   typeof window !== "undefined" && typeof window.location?.origin === "string"
     ? window.location.origin
     : DEFAULT_EXECUTOR_API_BASE_URL;
+
+const toRpcUrl = (baseUrl: string): string =>
+  new URL(RPC_PATH, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+
+const makeExecutorRpcClient = (baseUrl: string) => {
+  class ExecutorRpcClient extends AtomRpc.Tag<ExecutorRpcClient>()(
+    `@executor/react/ExecutorRpcClient/${baseUrl}`,
+    {
+      group: ExecutorRpcs,
+      protocol: Layer.mergeAll(
+        RpcClient.layerProtocolHttp({ url: toRpcUrl(baseUrl) }).pipe(
+          Layer.provide(FetchHttpClient.layer),
+          Layer.provide(RpcSerialization.layerNdjson),
+        ),
+      ),
+    },
+  ) {}
+
+  return ExecutorRpcClient;
+};
+
+type ExecutorRpcClientType = ReturnType<typeof makeExecutorRpcClient>;
+
+const executorRpcClientCache = new Map<string, ExecutorRpcClientType>();
+
+const getExecutorRpcClient = (baseUrl: string): ExecutorRpcClientType => {
+  const cached = executorRpcClientCache.get(baseUrl);
+  if (cached) {
+    return cached;
+  }
+
+  const created = makeExecutorRpcClient(baseUrl);
+  executorRpcClientCache.set(baseUrl, created);
+  return created;
+};
 
 const runEngine = async <A>(input: {
   baseUrl?: string;
@@ -277,7 +295,7 @@ const useRestSourceMutation = <TInput, TOutput>(
 ) => {
   const workspace = useWorkspaceContext();
   const registry = React.useContext(RegistryContext);
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
+  const invalidateExecutorQueries = useInvalidateExecutorQueries();
   const [state, setState] = React.useState<SourceMutationState<TOutput>>({
     status: "idle",
     data: null,
@@ -301,7 +319,7 @@ const useRestSourceMutation = <TInput, TOutput>(
       workspaceId: workspace.data.workspaceId,
       accountId: workspace.data.accountId,
       registry,
-      invalidateQueries: refreshSources,
+      invalidateQueries: invalidateExecutorQueries,
     };
 
     try {
@@ -325,7 +343,7 @@ const useRestSourceMutation = <TInput, TOutput>(
       setState({ status: "error", data: null, error });
       throw error;
     }
-  }, [execute, options, registry, refreshSources, workspace]);
+  }, [execute, invalidateExecutorQueries, options, registry, workspace]);
 
   const reset = React.useCallback(() => {
     setState({ status: "idle", data: null, error: null });
@@ -343,6 +361,9 @@ const useRestSourceMutation = <TInput, TOutput>(
 
 type ExecutorApiContextValue = {
   baseUrl: string;
+  invalidateQueries: () => void;
+  invalidationVersion: number;
+  rpcClient: ExecutorRpcClientType;
 };
 
 const ExecutorApiContext = React.createContext<ExecutorApiContextValue | null>(null);
@@ -356,13 +377,26 @@ const useExecutorApiContext = (): ExecutorApiContextValue => {
 };
 
 const useExecutorApiBaseUrl = (): string => useExecutorApiContext().baseUrl;
+const useExecutorRpcClient = (): ExecutorRpcClientType => useExecutorApiContext().rpcClient;
+const useExecutorInvalidationVersion = (): number =>
+  useExecutorApiContext().invalidationVersion;
 
 const ExecutorReactProviderInner = (
   props: React.PropsWithChildren<{ baseUrl: string }>,
 ) => {
+  const [invalidationVersion, bumpInvalidationVersion] = React.useReducer(
+    (current: number) => current + 1,
+    0,
+  );
+  const invalidateQueries = React.useCallback(() => {
+    bumpInvalidationVersion();
+  }, []);
   const apiValue = React.useMemo<ExecutorApiContextValue>(() => ({
     baseUrl: props.baseUrl,
-  }), [props.baseUrl]);
+    invalidateQueries,
+    invalidationVersion,
+    rpcClient: getExecutorRpcClient(props.baseUrl),
+  }), [props.baseUrl, invalidateQueries, invalidationVersion]);
 
   return React.createElement(
     ExecutorApiContext.Provider,
@@ -412,46 +446,51 @@ const useWorkspaceContext = (): Loadable<WorkspaceContext> => {
 };
 
 export const useLocalInstallation = (): Loadable<LocalInstallation> =>
-  useRpcQuery(ExecutorRpcClient.query("GetInstallation", void 0 as void));
+  useRpcQuery(useExecutorRpcClient().query("GetInstallation", void 0 as void));
 
 export const useInstanceConfig = (): Loadable<InstanceConfig> =>
-  useRpcQuery(ExecutorRpcClient.query("GetConfig", void 0 as void));
+  useRpcQuery(useExecutorRpcClient().query("GetConfig", void 0 as void));
 
 export const useRefreshInstanceConfig = (): (() => void) =>
-  useAtomRefresh(ExecutorRpcClient.query("GetConfig", void 0 as void));
+  useAtomRefresh(useExecutorRpcClient().query("GetConfig", void 0 as void));
 
 export const useSecrets = (): Loadable<ReadonlyArray<SecretListItem>> =>
-  useRpcQuery(ExecutorRpcClient.query("ListSecrets", void 0 as void));
+  useRpcQuery(useExecutorRpcClient().query("ListSecrets", void 0 as void));
 
 export const useRefreshSecrets = (): (() => void) =>
-  useAtomRefresh(ExecutorRpcClient.query("ListSecrets", void 0 as void));
+  useAtomRefresh(useExecutorRpcClient().query("ListSecrets", void 0 as void));
 
 export const useSources = (): Loadable<ReadonlyArray<Source>> =>
-  useRpcQuery(ExecutorRpcClient.query("ListSources", void 0 as void));
+  useRpcQuery(useExecutorRpcClient().query("ListSources", void 0 as void));
 
-export const useSource = (sourceId: string): Loadable<Source> =>
-  useRpcQuery(
-    ExecutorRpcClient.query("GetSource", { sourceId: sourceId as Source["id"] }),
+export const useSource = (sourceId: string): Loadable<Source> => {
+  const rpcClient = useExecutorRpcClient();
+  return useRpcQuery(
+    rpcClient.query("GetSource", { sourceId: sourceId as Source["id"] }),
   );
+};
 
-export const useSourceInspection = (sourceId: string): Loadable<SourceInspection> =>
-  useRpcQuery(
-    ExecutorRpcClient.query("GetSourceInspection", { sourceId: sourceId as Source["id"] }),
+export const useSourceInspection = (sourceId: string): Loadable<SourceInspection> => {
+  const rpcClient = useExecutorRpcClient();
+  return useRpcQuery(
+    rpcClient.query("GetSourceInspection", { sourceId: sourceId as Source["id"] }),
   );
+};
 
 export const useSourceToolDetail = (
   sourceId: string,
   toolPath: string | null,
 ): Loadable<SourceInspectionToolDetail | null> => {
+  const rpcClient = useExecutorRpcClient();
   const queryAtom = React.useMemo(
     () =>
       toolPath !== null
-        ? ExecutorRpcClient.query("GetSourceInspectionToolDetail", {
+        ? rpcClient.query("GetSourceInspectionToolDetail", {
             sourceId: sourceId as Source["id"],
             toolPath,
           })
         : Atom.make(Result.success<SourceInspectionToolDetail | null, never>(null)),
-    [sourceId, toolPath],
+    [rpcClient, sourceId, toolPath],
   );
 
   return useRpcQuery(queryAtom);
@@ -462,6 +501,7 @@ export const useSourceDiscovery = (input: {
   query: string;
   limit?: number;
 }): Loadable<SourceInspectionDiscoverResult> => {
+  const rpcClient = useExecutorRpcClient();
   const emptyResult: SourceInspectionDiscoverResult = React.useMemo(
     () => ({
       query: "",
@@ -477,31 +517,32 @@ export const useSourceDiscovery = (input: {
     () =>
       input.query.trim().length === 0
         ? Atom.make(Result.success<SourceInspectionDiscoverResult, never>(emptyResult))
-        : ExecutorRpcClient.query("DiscoverSourceInspectionTools", {
+        : rpcClient.query("DiscoverSourceInspectionTools", {
             sourceId: input.sourceId as Source["id"],
             discover: {
               query: input.query,
               ...(input.limit !== undefined ? { limit: input.limit } : {}),
             },
           }),
-    [input.sourceId, input.query, input.limit, emptyResult],
+    [emptyResult, input.limit, input.query, input.sourceId, rpcClient],
   );
 
   return useRpcQuery(queryAtom);
 };
 
 export const useExecutions = (): Loadable<ReadonlyArray<Execution>> =>
-  useRpcQuery(ExecutorRpcClient.query("ListExecutions", void 0 as void));
+  useRpcQuery(useExecutorRpcClient().query("ListExecutions", void 0 as void));
 
 export const useExecutionSteps = (executionId: string): Loadable<ReadonlyArray<ExecutionStep>> => {
+  const rpcClient = useExecutorRpcClient();
   const queryAtom = React.useMemo(
     () =>
       executionId.length > 0
-        ? ExecutorRpcClient.query("ListExecutionSteps", {
+        ? rpcClient.query("ListExecutionSteps", {
             executionId: executionId as any,
           })
         : Atom.make(Result.success<ReadonlyArray<ExecutionStep>, never>([])),
-    [executionId],
+    [executionId, rpcClient],
   );
 
   return useRpcQuery(queryAtom);
@@ -511,6 +552,7 @@ export const useWorkspaceOauthClients = (
   providerKey: string | null,
 ): Loadable<ReadonlyArray<WorkspaceOauthClient>> => {
   const baseUrl = useExecutorApiBaseUrl();
+  const invalidationVersion = useExecutorInvalidationVersion();
   const workspace = useWorkspaceContext();
 
   const [state, setState] = React.useState<Loadable<ReadonlyArray<WorkspaceOauthClient>>>({
@@ -546,40 +588,35 @@ export const useWorkspaceOauthClients = (
     );
 
     return () => { cancelled = true; };
-  }, [baseUrl, workspace, providerKey]);
+  }, [baseUrl, invalidationVersion, providerKey, workspace]);
 
   return state;
 };
 
 export const usePrefetchToolDetail = () => {
   const registry = React.useContext(RegistryContext);
+  const rpcClient = useExecutorRpcClient();
 
   return React.useCallback(
     (sourceId: string, toolPath: string): (() => void) => {
-      const atom = ExecutorRpcClient.query("GetSourceInspectionToolDetail", {
+      const atom = rpcClient.query("GetSourceInspectionToolDetail", {
         sourceId: sourceId as Source["id"],
         toolPath,
       });
       return registry.mount(atom);
     },
-    [registry],
+    [registry, rpcClient],
   );
 };
 
 export const useInvalidateExecutorQueries = (): (() => void) => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const refreshExecutions = useAtomRefresh(ExecutorRpcClient.query("ListExecutions", void 0 as void));
-  const refreshSecrets = useAtomRefresh(ExecutorRpcClient.query("ListSecrets", void 0 as void));
-  const refreshConfig = useAtomRefresh(ExecutorRpcClient.query("GetConfig", void 0 as void));
-  const refreshInstallation = useAtomRefresh(ExecutorRpcClient.query("GetInstallation", void 0 as void));
+  const registry = React.useContext(RegistryContext);
+  const { invalidateQueries } = useExecutorApiContext();
 
   return React.useCallback(() => {
-    refreshSources();
-    refreshExecutions();
-    refreshSecrets();
-    refreshConfig();
-    refreshInstallation();
-  }, [refreshSources, refreshExecutions, refreshSecrets, refreshConfig, refreshInstallation]);
+    registry.reset();
+    invalidateQueries();
+  }, [invalidateQueries, registry]);
 };
 
 // ---------------------------------------------------------------------------
@@ -587,8 +624,9 @@ export const useInvalidateExecutorQueries = (): (() => void) => {
 // ---------------------------------------------------------------------------
 
 export const useCreateSource = () => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("CreateSource"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSources = useAtomRefresh(rpcClient.query("ListSources", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("CreateSource"), { mode: "promiseExit" });
 
   return useRpcMutation<CreateSourcePayload, Source>(
     React.useCallback(
@@ -604,8 +642,9 @@ export const useCreateSource = () => {
 };
 
 export const useUpdateSource = () => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("UpdateSource"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSources = useAtomRefresh(rpcClient.query("ListSources", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("UpdateSource"), { mode: "promiseExit" });
 
   return useRpcMutation<{ sourceId: Source["id"]; payload: UpdateSourcePayload }, Source>(
     React.useCallback(
@@ -623,8 +662,9 @@ export const useUpdateSource = () => {
 };
 
 export const useRemoveSource = () => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("RemoveSource"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSources = useAtomRefresh(rpcClient.query("ListSources", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("RemoveSource"), { mode: "promiseExit" });
 
   return useRpcMutation<Source["id"], SourceRemoveResult>(
     React.useCallback(
@@ -640,7 +680,8 @@ export const useRemoveSource = () => {
 };
 
 export const useDiscoverSource = () => {
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("DiscoverSource"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const mutate = useAtomSet(rpcClient.mutation("DiscoverSource"), { mode: "promiseExit" });
 
   return useRpcMutation<DiscoverSourcePayload, SourceDiscoveryResult>(
     React.useCallback(
@@ -655,8 +696,9 @@ export const useDiscoverSource = () => {
 };
 
 export const useConnectSource = () => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("ConnectSource"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSources = useAtomRefresh(rpcClient.query("ListSources", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("ConnectSource"), { mode: "promiseExit" });
 
   return useRpcMutation<ConnectSourcePayload, ConnectSourceResult>(
     React.useCallback(
@@ -672,8 +714,9 @@ export const useConnectSource = () => {
 };
 
 export const useConnectSourceBatch = () => {
-  const refreshSources = useAtomRefresh(ExecutorRpcClient.query("ListSources", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("ConnectSourceBatch"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSources = useAtomRefresh(rpcClient.query("ListSources", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("ConnectSourceBatch"), { mode: "promiseExit" });
 
   return useRpcMutation<ConnectSourceBatchPayload, ConnectSourceBatchResult>(
     React.useCallback(
@@ -689,7 +732,8 @@ export const useConnectSourceBatch = () => {
 };
 
 export const useStartSourceOAuth = () => {
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("StartSourceOAuth"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const mutate = useAtomSet(rpcClient.mutation("StartSourceOAuth"), { mode: "promiseExit" });
 
   return useRpcMutation<StartSourceOAuthPayload, StartSourceOAuthResult>(
     React.useCallback(
@@ -708,8 +752,9 @@ export const useStartSourceOAuth = () => {
 // ---------------------------------------------------------------------------
 
 export const useCreateSecret = () => {
-  const refreshSecrets = useAtomRefresh(ExecutorRpcClient.query("ListSecrets", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("CreateSecret"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSecrets = useAtomRefresh(rpcClient.query("ListSecrets", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("CreateSecret"), { mode: "promiseExit" });
 
   return useRpcMutation<CreateSecretPayload, CreateSecretResult>(
     React.useCallback(
@@ -725,8 +770,9 @@ export const useCreateSecret = () => {
 };
 
 export const useUpdateSecret = () => {
-  const refreshSecrets = useAtomRefresh(ExecutorRpcClient.query("ListSecrets", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("UpdateSecret"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSecrets = useAtomRefresh(rpcClient.query("ListSecrets", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("UpdateSecret"), { mode: "promiseExit" });
 
   return useRpcMutation<{ secretId: string; payload: UpdateSecretPayload }, UpdateSecretResult>(
     React.useCallback(
@@ -744,8 +790,9 @@ export const useUpdateSecret = () => {
 };
 
 export const useDeleteSecret = () => {
-  const refreshSecrets = useAtomRefresh(ExecutorRpcClient.query("ListSecrets", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("DeleteSecret"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshSecrets = useAtomRefresh(rpcClient.query("ListSecrets", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("DeleteSecret"), { mode: "promiseExit" });
 
   return useRpcMutation<string, DeleteSecretResult>(
     React.useCallback(
@@ -761,8 +808,9 @@ export const useDeleteSecret = () => {
 };
 
 export const useUpdateInstanceConfig = () => {
-  const refreshConfig = useAtomRefresh(ExecutorRpcClient.query("GetConfig", void 0 as void));
-  const mutate = useAtomSet(ExecutorRpcClient.mutation("UpdateConfig"), { mode: "promiseExit" });
+  const rpcClient = useExecutorRpcClient();
+  const refreshConfig = useAtomRefresh(rpcClient.query("GetConfig", void 0 as void));
+  const mutate = useAtomSet(rpcClient.mutation("UpdateConfig"), { mode: "promiseExit" });
 
   type UpdateInstanceConfigPayload = {
     semanticSearch: InstanceConfig["semanticSearch"];
@@ -805,7 +853,17 @@ export const useCreateWorkspaceOauthClient = () => {
     [baseUrl],
   );
 
-  return useRestSourceMutation<CreateWorkspaceOauthClientPayload, WorkspaceOauthClient>(execute);
+  return useRestSourceMutation<CreateWorkspaceOauthClientPayload, WorkspaceOauthClient>(
+    execute,
+    React.useMemo(
+      () => ({
+        onSuccess: (context) => {
+          context.invalidateQueries();
+        },
+      }),
+      [],
+    ),
+  );
 };
 
 export const useRemoveWorkspaceOauthClient = () => {
@@ -827,7 +885,17 @@ export const useRemoveWorkspaceOauthClient = () => {
     [baseUrl],
   );
 
-  return useRestSourceMutation<WorkspaceOauthClient["id"], { removed: boolean }>(execute);
+  return useRestSourceMutation<WorkspaceOauthClient["id"], { removed: boolean }>(
+    execute,
+    React.useMemo(
+      () => ({
+        onSuccess: (context) => {
+          context.invalidateQueries();
+        },
+      }),
+      [],
+    ),
+  );
 };
 
 export const useRemoveProviderAuthGrant = () => {
@@ -852,7 +920,17 @@ export const useRemoveProviderAuthGrant = () => {
   return useRestSourceMutation<
     Extract<Source["auth"], { kind: "provider_grant_ref" }>["grantId"],
     { removed: boolean }
-  >(execute);
+  >(
+    execute,
+    React.useMemo(
+      () => ({
+        onSuccess: (context) => {
+          context.invalidateQueries();
+        },
+      }),
+      [],
+    ),
+  );
 };
 
 // ---------------------------------------------------------------------------
