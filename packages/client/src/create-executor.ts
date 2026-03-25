@@ -15,6 +15,9 @@ import type { Executor, CreateExecutorOptions } from "./types";
 const run = <A>(effect: Effect.Effect<A, any, never>): Promise<A> =>
   Effect.runPromise(effect);
 
+const toRpcUrl = (baseUrl: string): string =>
+  new URL("/rpc", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+
 /**
  * Create an Executor client connected to an executor server via RPC.
  *
@@ -27,7 +30,7 @@ const run = <A>(effect: Effect.Effect<A, any, never>): Promise<A> =>
 export const createExecutor = async (
   options: CreateExecutorOptions,
 ): Promise<Executor> => {
-  const rpcUrl = `${options.baseUrl}/rpc`;
+  const rpcUrl = toRpcUrl(options.baseUrl);
 
   const protocolLayer = RpcClient.layerProtocolHttp({ url: rpcUrl }).pipe(
     Layer.provide(FetchHttpClient.layer),
