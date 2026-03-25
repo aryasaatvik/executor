@@ -36,32 +36,40 @@ export const createExecutor = async (
 
   // Create a long-lived scope to keep the RPC client alive.
   const scope = Effect.runSync(Scope.make());
+  try {
+    const client = await Effect.runPromise(
+      RpcClient.make(ExecutorRpcs).pipe(
+        Effect.provide(protocolLayer),
+        Effect.provideService(Scope.Scope, scope),
+      ),
+    );
 
-  const client = await Effect.runPromise(
-    RpcClient.make(ExecutorRpcs).pipe(
-      Effect.provide(protocolLayer),
-      Effect.provideService(Scope.Scope, scope),
-    ),
-  );
+    const installation = await Effect.runPromise(
+      client.GetInstallation(void 0 as void),
+    );
 
-  const installation = await Effect.runPromise(
-    client.GetInstallation(void 0 as void),
-  );
+    const effectApi = createEffectApi(client);
 
-  const effectApi = createEffectApi(client);
-
-  return {
-    workspaceId: installation.workspaceId as WorkspaceId,
-    actorId: installation.accountId as AccountId,
-    baseUrl: options.baseUrl,
-    effect: effectApi,
-    catalog: wrapEffectApi(effectApi.catalog, run),
-    sources: wrapEffectApi(effectApi.sources, run),
-    executions: wrapEffectApi(effectApi.executions, run),
-    policies: wrapEffectApi(effectApi.policies, run),
-    local: wrapEffectApi(effectApi.local, run),
-    oauth: wrapEffectApi(effectApi.oauth, run),
-    rpc: client,
-    close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
-  };
+    return {
+      workspaceId: installation.workspaceId as WorkspaceId,
+      actorId: installation.accountId as AccountId,
+      baseUrl: options.baseUrl,
+      effect: effectApi,
+      catalog: wrapEffectApi(effectApi.catalog, run),
+      sources: wrapEffectApi(effectApi.sources, run),
+      executions: wrapEffectApi(effectApi.executions, run),
+      policies: wrapEffectApi(effectApi.policies, run),
+      local: wrapEffectApi(effectApi.local, run),
+      oauth: wrapEffectApi(effectApi.oauth, run),
+      rpc: client,
+      close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
+    };
+  } catch (cause) {
+    try {
+      await Effect.runPromise(Scope.close(scope, Exit.void));
+    } catch {
+      // Preserve the original initialization failure.
+    }
+    throw cause;
+  }
 };
