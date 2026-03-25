@@ -205,7 +205,8 @@ const getLocalAuthedClient = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
 
 const isServerReachable = (baseUrl: string) =>
   Effect.tryPromise({
-    try: () => fetch(`${baseUrl}/rpc`, { method: "HEAD" }).then(() => true),
+    try: () =>
+      fetch(`${baseUrl}/rpc`, { method: "HEAD" }).then((response) => response.ok),
     catch: () => false as const,
   }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
