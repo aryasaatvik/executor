@@ -1,0 +1,22 @@
+{
+  "name": "@executor/world-cloudflare",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@executor/control-plane": "workspace:*",
+    "@executor/execution-contract": "workspace:*",
+    "@executor/execution-runtime-cloudflare-dynamic-worker": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "bun-types": "catalog:"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "@executor/control-plane",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model/index.ts",
+    "./ports": "./src/ports/index.ts",
+    "./world": "./src/world.ts",
+    "./services/*": "./src/services/*"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@effect/platform": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql": "^0.49.0",
+    "@effect/sql-drizzle": "^0.48.1",
+    "@executor/auth-mcp-oauth": "workspace:*",
+    "@executor/auth-oauth2": "workspace:*",
+    "@executor/codemode-core": "workspace:*",
+    "@executor/engine": "workspace:*",
+    "@executor/execution-contract": "workspace:*",
+    "@executor/execution-ir": "workspace:*",
+    "@executor/execution-runtime-deno-subprocess": "workspace:*",
+    "@executor/execution-runtime-quickjs": "workspace:*",
+    "@executor/execution-runtime-ses": "workspace:*",
+    "@executor/source-builtins": "workspace:*",
+    "@executor/source-core": "workspace:*",
+    "@executor/source-mcp": "workspace:*",
+    "drizzle-orm": "1.0.0-beta.16-2ffd1a5",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:"
+  }
+}
