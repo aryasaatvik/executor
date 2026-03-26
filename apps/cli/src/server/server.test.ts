@@ -29,7 +29,7 @@ import {
   writeProjectLocalExecutorConfig,
 } from "@executor/engine";
 import { syncSourceToSqlite, makeWorkspaceCatalogDbLayer } from "@executor/engine/db";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
@@ -42,7 +42,7 @@ import {
   seedDemoMcpSourceInWorkspace,
   seedGithubOpenApiSourceInWorkspace,
 } from "../cli/dev";
-import { createLocalExecutorServer } from "@executor/server";
+import { createLocalExecutorServer } from ".";
 
 /** Adapt a REST EngineClient's sources API to the new ExecutorEffectApi["sources"] shape. */
 const adaptRestSourcesToEffectApi = (

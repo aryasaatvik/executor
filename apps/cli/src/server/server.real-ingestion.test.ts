@@ -7,7 +7,7 @@ import {
   createEngineClient,
   type SourceDiscoveryKind,
 } from "@executor/engine";
-import { createLocalExecutorServer } from "@executor/server";
+import { createLocalExecutorServer } from ".";
 
 const REAL_VERCEL_SPEC_URL = "https://openapi.vercel.sh";
 const REAL_VERCEL_API_ENDPOINT = "https://api.vercel.com";
