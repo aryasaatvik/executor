@@ -1,11 +1,13 @@
 import type {
   ExecutionEnvelope,
-  EngineRuntime,
-} from "@executor/engine";
+} from "@executor/control-plane/model";
 import {
-  EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionIdSchema,
   ExecutionSessionIdSchema,
+} from "@executor/control-plane/model";
+import {
+  type EngineRuntime,
+  EXECUTOR_SOURCES_ADD_HELP_LINES,
   ExecutionEnvironmentResolver,
   closeExecutionSession,
   createExecution,

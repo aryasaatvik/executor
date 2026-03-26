@@ -1,5 +1,5 @@
 {
-  "name": "@executor/runtime-ses",
+  "name": "@executor/execution-contract",
   "private": true,
   "type": "module",
   "exports": {
@@ -9,9 +9,7 @@
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@executor/codemode-core": "workspace:*",
-    "effect": "catalog:",
-    "ses": "^1.15.0"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

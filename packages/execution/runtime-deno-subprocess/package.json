@@ -1,5 +1,5 @@
 {
-  "name": "@executor/executor-mcp",
+  "name": "@executor/execution-runtime-deno-subprocess",
   "private": true,
   "type": "module",
   "exports": {
@@ -7,15 +7,12 @@
   },
   "scripts": {
     "typecheck": "bunx tsc --noEmit -p tsconfig.json",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
     "@executor/codemode-core": "workspace:*",
-    "@executor/engine": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "effect": "catalog:",
-    "zod": "catalog:"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

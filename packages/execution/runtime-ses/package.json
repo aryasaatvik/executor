@@ -1,25 +1,21 @@
 {
-  "name": "@executor/runtime-quickjs",
+  "name": "@executor/execution-runtime-ses",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "@executor/codemode-core": "workspace:*",
     "effect": "catalog:",
-    "quickjs-emscripten": "^0.31.0"
+    "ses": "^1.15.0"
   },
   "devDependencies": {
-    "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "bun-types": "catalog:",
-    "vitest": "catalog:"
+    "bun-types": "catalog:"
   },
   "version": "0.0.0"
 }
