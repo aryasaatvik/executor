@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 
-import type { ProjectedCatalog } from "@executor/ir/catalog";
-import type { ShapeSymbolId } from "@executor/ir/ids";
+import type { ProjectedCatalog } from "@executor/execution-ir/catalog";
+import type { ShapeSymbolId } from "@executor/execution-ir/ids";
 import type {
   CatalogV1,
   DocumentationBlock,
   ShapeNode,
   ShapeSymbol,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 
 export type CatalogTypeRoot = {
   readonly shapeId: ShapeSymbolId;

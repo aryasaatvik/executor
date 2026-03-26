@@ -18,8 +18,8 @@ import type {
 import * as Effect from "effect/Effect";
 import { z } from "zod/v4";
 
-import { projectCatalogForAgentSdk } from "@executor/ir/catalog";
-import type { CatalogSnapshotV1 } from "@executor/ir/model";
+import { projectCatalogForAgentSdk } from "@executor/execution-ir/catalog";
+import type { CatalogSnapshotV1 } from "@executor/execution-ir/model";
 import { clearMcpConnectionPoolSession } from "@executor/source-mcp";
 import { createCatalogTypeProjector, projectedCatalogTypeRoots } from "../../catalog/catalog-typescript";
 import { invokeIrTool } from "../../execution/ir-execution";

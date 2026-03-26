@@ -56,6 +56,8 @@ export * from "./local/config";
 export * from "./local/installation";
 export * from "./local/storage";
 export * from "./local/workspace-database";
+export * from "./local/runtime-context";
+export * from "./local/errors";
 
 export * from "./local/tools";
 export * from "./catalog/schema-type-signature";
@@ -63,11 +65,65 @@ export * from "./sources/source-auth-service";
 export * from "./local/secret-material-providers";
 export * from "./sources/source-credential-interactions";
 export * from "./sources/source-adapters/mcp";
+export {
+  builtInSourceAdapters,
+  getSourceAdapter,
+  getSourceAdapterForSource,
+  findSourceAdapterByProviderKey,
+  sourceAdapterRequiresInteractiveConnect,
+  sourceAdapterUsesCredentialManagedAuth,
+  sourceBindingStateFromSource,
+  executorAddableSourceAdapters,
+  ExecutorAddSourceInputSchema,
+  type ExecutorAddSourceInput,
+  connectableSourceAdapters,
+  ConnectSourcePayloadSchema,
+  type ConnectSourcePayload,
+  localConfigurableSourceAdapters,
+  sourceAdapterCatalogKind,
+  isInternalSourceAdapter,
+} from "./sources/source-adapters";
 export * from "./store";
 export * from "./execution/workspace/environment";
+export * from "./execution/workspace/source-catalog";
 export * from "./sources/source-inspection";
 export * from "./sources/source-discovery";
+export * from "./sources/sources-operations";
+export * from "./sources/source-store";
 export * from "./execution/service";
+export * from "./local/operations";
+export * from "./policy/policies-operations";
+export * from "./effect-errors";
+export { slugify } from "./sources/slug";
+export { fromConfigSecretProviderId, toConfigSecretProviderId } from "./local/config-secrets";
+
+// Programs
+export {
+  persistSourceProgram,
+  removeSourceByIdProgram,
+} from "./programs/source/store";
+export {
+  persistMcpCatalogSnapshotProgram,
+  syncSourceCatalogProgram,
+} from "./programs/catalog/source-sync";
+
+// Catalog runtime
+export {
+  buildLoadedSourceCatalogToolContract,
+  expandCatalogToolByPath,
+  expandCatalogTools,
+  loadSourceWithCatalog,
+  SourceCatalogStore,
+  RuntimeSourceCatalogStoreLive,
+  type LoadedSourceCatalogTool,
+} from "./catalog/source/runtime";
+
+// Auth: MCP auth provider helpers
+export {
+  createPersistedMcpOAuthSourceAuth,
+  createPersistedMcpAuthProvider,
+} from "./auth/mcp-auth-provider";
+
 
 export type RuntimeEngineOptions = {
   executionResolver?: ResolveExecutionEnvironment;

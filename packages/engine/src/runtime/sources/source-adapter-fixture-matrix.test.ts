@@ -36,8 +36,8 @@ import {
 import * as Effect from "effect/Effect";
 import { Schema } from "effect";
 
-import { projectCatalogForAgentSdk } from "@executor/ir/catalog";
-import type { CatalogSnapshotV1 } from "@executor/ir/model";
+import { projectCatalogForAgentSdk } from "@executor/execution-ir/catalog";
+import type { CatalogSnapshotV1 } from "@executor/execution-ir/model";
 import {
   createCatalogTypeProjector,
   projectedCatalogTypeRoots,

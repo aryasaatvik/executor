@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { makeToolInvokerFromTools } from "@executor/codemode-core";
-import { makeDenoSubprocessExecutor } from "@executor/runtime-deno-subprocess";
+import { makeDenoSubprocessExecutor } from "@executor/execution-runtime-deno-subprocess";
 
 import {
   createEngineRuntime,

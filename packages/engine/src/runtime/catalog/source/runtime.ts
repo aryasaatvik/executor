@@ -26,15 +26,15 @@ import {
 import {
   projectCatalogForAgentSdk,
   type ProjectedCatalog,
-} from "@executor/ir/catalog";
-import type { ShapeSymbolId } from "@executor/ir/ids";
+} from "@executor/execution-ir/catalog";
+import type { ShapeSymbolId } from "@executor/execution-ir/ids";
 import type {
   Capability,
   CatalogSnapshotV1,
   CatalogV1,
   Executable,
   ShapeSymbol,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 import { LocalSourceArtifactMissingError } from "../../local/errors";
 import {
   createCatalogTypeProjector,

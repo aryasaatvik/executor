@@ -10,7 +10,7 @@ import { SourceIdSchema, WorkspaceIdSchema, type Source } from "#schema";
 import {
   createCatalogSnapshotV1,
   createEmptyCatalogV1,
-} from "@executor/ir/catalog";
+} from "@executor/execution-ir/catalog";
 import {
   CapabilityIdSchema,
   DocumentIdSchema,
@@ -19,8 +19,8 @@ import {
   ResponseSetIdSchema,
   ScopeIdSchema,
   ShapeSymbolIdSchema,
-} from "@executor/ir/ids";
-import type { CatalogV1, ProvenanceRef } from "@executor/ir/model";
+} from "@executor/execution-ir/ids";
+import type { CatalogV1, ProvenanceRef } from "@executor/execution-ir/model";
 import { syncWorkspaceSourceTypeDeclarationsNode } from "./type-declarations";
 
 const put = <K extends string, V>(record: Record<K, V>, key: K, value: V) => {

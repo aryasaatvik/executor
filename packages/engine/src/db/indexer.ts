@@ -12,8 +12,8 @@ import type {
 } from "#schema"
 import { catalog_tool, catalog, catalog_revision, catalog_document, source, workspace_state } from "./schema"
 import { removeVecTools } from "./vec"
-import { projectCatalogForAgentSdk } from "@executor/ir/catalog"
-import type { Capability, CatalogV1, Executable } from "@executor/ir/model"
+import { projectCatalogForAgentSdk } from "@executor/execution-ir/catalog"
+import type { Capability, CatalogV1, Executable } from "@executor/execution-ir/model"
 import type { ToolDescriptor as CatalogToolDescriptor, ToolContract } from "@executor/codemode-core"
 import {
   contentHash,

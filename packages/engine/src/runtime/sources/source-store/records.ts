@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 
 import { SqliteDrizzle } from "@effect/sql-drizzle/Sqlite";
 import { eq, and, desc } from "drizzle-orm";
-import type { CatalogSnapshotV1, CatalogV1, Capability, Executable } from "@executor/ir/model";
+import type { CatalogSnapshotV1, CatalogV1, Capability, Executable } from "@executor/execution-ir/model";
 
 import { sourceAuthFromAuthArtifact } from "../../auth/auth-artifacts";
 import { authArtifactSecretMaterialRefs } from "../../auth/auth-artifacts";

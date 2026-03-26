@@ -16,7 +16,7 @@ import {
   createCatalogSnapshotV1,
   createEmptyCatalogV1,
   projectCatalogForAgentSdk,
-} from "@executor/ir/catalog";
+} from "@executor/execution-ir/catalog";
 import {
   CapabilityIdSchema,
   DocumentIdSchema,
@@ -25,8 +25,8 @@ import {
   ResponseSetIdSchema,
   ScopeIdSchema,
   ShapeSymbolIdSchema,
-} from "@executor/ir/ids";
-import type { CatalogV1, ProvenanceRef } from "@executor/ir/model";
+} from "@executor/execution-ir/ids";
+import type { CatalogV1, ProvenanceRef } from "@executor/execution-ir/model";
 import {
   createCatalogTypeProjector,
   formatTypeNameSegment,

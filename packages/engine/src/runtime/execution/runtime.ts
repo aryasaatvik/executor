@@ -1,7 +1,7 @@
 import type { CodeExecutor } from "@executor/codemode-core";
-import { makeDenoSubprocessExecutor } from "@executor/runtime-deno-subprocess";
-import { makeQuickJsExecutor } from "@executor/runtime-quickjs";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeDenoSubprocessExecutor } from "@executor/execution-runtime-deno-subprocess";
+import { makeQuickJsExecutor } from "@executor/execution-runtime-quickjs";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 import type { LocalExecutorConfig, LocalExecutorRuntime } from "#schema";
 
 const DEFAULT_EXECUTION_RUNTIME: LocalExecutorRuntime = "quickjs";
