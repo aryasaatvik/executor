@@ -11,25 +11,16 @@
     "test:watch": "bunx vitest"
   },
   "dependencies": {
-    "@effect-atom/atom": "0.5.3",
-    "@effect-atom/atom-react": "0.5.0",
-    "@effect/platform": "catalog:",
-    "@effect/rpc": "^0.73.2",
-    "@executor/engine": "workspace:*",
-    "effect": "catalog:"
+    "@executor/api": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=18 <20"
   },
   "devDependencies": {
-    "@effect/platform-node": "catalog:",
-    "@effect/vitest": "catalog:",
-    "@types/jsdom": "^21.1.7",
     "@types/node": "catalog:",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
     "bun-types": "catalog:",
-    "jsdom": "^26.1.0",
     "react-dom": "^19.2.0",
     "vitest": "catalog:"
   },

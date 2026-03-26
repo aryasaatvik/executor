@@ -1,19 +1,20 @@
 # executor/clients/react
 
-React hooks and context provider for executor's engine API.
+React hooks and context provider for the executor REST API. Uses plain `fetch()` and types from `@executor/api`. No Effect dependency.
 
 ## Provider
 
 ```tsx
-import { ExecutorReactProvider } from "@executor/clients/react";
+import { ExecutorReactProvider } from "@executor/react";
 
 <ExecutorReactProvider baseUrl="http://localhost:8788">
   {children}
 </ExecutorReactProvider>
 ```
 
-- Wraps app in `@effect-atom/atom-react` RegistryProvider + executor query/mutation contexts
-- baseUrl defaults to `window.location.origin` in browser, `127.0.0.1:8788` in Node
+- Provider takes a `baseUrl` pointing to the selected executor's HTTP origin
+- Defaults to `http://127.0.0.1:8788` if not specified
+- Manages an invalidation counter — calling `invalidateQueries()` bumps it, causing all `useFetch`-based hooks to refetch
 
 ## Query Hooks
 
@@ -21,16 +22,20 @@ Return `Loadable<T>`: `{ status: "loading" } | { status: "error", error: Error }
 
 | Hook | Data |
 |------|------|
-| `useLocalInstallation()` | `LocalInstallation` — workspace/account IDs |
+| `useDiscover()` | `ExecutorDescriptor` — executor identity |
+| `useHealth()` | `HealthResponse` — health check |
+| `useLocalInstallation()` | `LocalInstallation` — workspace/account IDs (shim over /discover) |
 | `useInstanceConfig()` | `InstanceConfig` — instance settings |
-| `useSecrets()` | `ReadonlyArray<SecretListItem>` |
-| `useSources()` | `ReadonlyArray<Source>` — all sources in workspace |
+| `useSources()` | `ReadonlyArray<Source>` — all sources |
 | `useSource(id)` | `Source` — single source by ID |
-| `useSourceInspection(id)` | `SourceInspection` — tools + auth info for a source |
-| `useSourceToolDetail(id, toolPath)` | `SourceInspectionToolDetail \| null` — schema for specific tool |
-| `useSourceDiscovery({ sourceId, query, limit? })` | `SourceInspectionDiscoverResult` — search tools by intent |
-| `useExecutions()` | `ReadonlyArray<Execution>` |
+| `useSourceInspection(id)` | `SourceInspection` — tools + auth info |
+| `useSourceToolDetail(id, toolPath)` | `SourceInspectionToolDetail \| null` |
+| `useSourceDiscovery({ sourceId, query, limit? })` | `SourceInspectionDiscoverResult` |
+| `useToolSearch(query)` | `ToolSearchResultSet` |
+| `useExecutions()` | `ReadonlyArray<ExecutionRecord>` |
+| `useExecution(id)` | `ExecutionEnvelope` |
 | `useExecutionSteps(executionId)` | `ReadonlyArray<ExecutionStep>` |
+| `useSecrets()` | `ReadonlyArray<SecretListItem>` |
 | `useWorkspaceOauthClients(providerKey)` | `ReadonlyArray<WorkspaceOauthClient>` |
 
 ## Mutation Hooks
@@ -39,25 +44,40 @@ Return `{ status, data, error, mutateAsync, reset }`.
 
 | Hook | Payload | Result |
 |------|---------|--------|
-| `useCreateSource()` | `CreateSourcePayload` | `Source` |
-| `useUpdateSource()` | `{ sourceId, payload: UpdateSourcePayload }` | `Source` |
-| `useRemoveSource()` | `Source["id"]` | `{ removed: boolean }` |
+| `useCreateSource()` | `CreateSourceRequest` | `Source` |
+| `useUpdateSource()` | `{ sourceId, payload: UpdateSourceRequest }` | `Source` |
+| `useRemoveSource()` | `string` (sourceId) | `{ removed: boolean }` |
 | `useDiscoverSource()` | `DiscoverSourcePayload` | `SourceDiscoveryResult` |
 | `useConnectSource()` | `ConnectSourcePayload` | `ConnectSourceResult` |
 | `useConnectSourceBatch()` | `ConnectSourceBatchPayload` | `ConnectSourceBatchResult` |
 | `useStartSourceOAuth()` | `StartSourceOAuthPayload` | `StartSourceOAuthResult` |
-| `useCreateWorkspaceOauthClient()` | `CreateWorkspaceOauthClientPayload` | `WorkspaceOauthClient` |
-| `useRemoveWorkspaceOauthClient()` | `WorkspaceOauthClient["id"]` | `{ removed: boolean }` |
-| `useRemoveProviderAuthGrant()` | provider grant ID | `{ removed: boolean }` |
-| `useCreateSecret()` | `CreateSecretPayload` | `CreateSecretResult` |
-| `useUpdateSecret()` | `{ secretId, payload: UpdateSecretPayload }` | `UpdateSecretResult` |
-| `useDeleteSecret()` | `secretId: string` | `DeleteSecretResult` |
+| `useCreateExecution()` | `CreateExecutionRequest` | `ExecutionEnvelope` |
+| `useResumeExecution()` | `{ executionId, payload }` | `ExecutionEnvelope` |
+| `useCreateSecret()` | `CreateSecretRequest` | `CreateSecretResponse` |
+| `useUpdateSecret()` | `{ secretId, payload }` | `UpdateSecretResponse` |
+| `useDeleteSecret()` | `string` (secretId) | `DeleteSecretResponse` |
 | `useUpdateInstanceConfig()` | `{ semanticSearch: ... }` | `InstanceConfig` |
+| `useCreateWorkspaceOauthClient()` | `CreateWorkspaceOauthClientPayload` | `WorkspaceOauthClient` |
+| `useRemoveWorkspaceOauthClient()` | `string` (clientId) | `{ removed: boolean }` |
+| `useRemoveProviderAuthGrant()` | `string` (grantId) | `{ removed: boolean }` |
 
-Mutations support optimistic updates — provide `optimisticUpdate` and `onSuccess` callbacks.
+All mutations invalidate queries on success.
 
 ## Utility Hooks
 
-- `useInvalidateExecutorQueries()` — invalidates all tracked queries
-- `useRefreshInstanceConfig()` / `useRefreshSecrets()` — refresh specific atoms
-- `usePrefetchToolDetail(sourceId, toolPath)` — prefetch and mount a tool detail atom
+- `useInvalidateExecutorQueries()` — invalidates all queries (bumps version counter)
+- `useRefreshInstanceConfig()` / `useRefreshSecrets()` — alias for invalidation
+- `usePrefetchToolDetail()` — no-op (kept for API compat)
+
+## File Structure
+
+```
+src/
+  index.ts          # Re-exports everything
+  provider.tsx      # ExecutorReactProvider + context
+  hooks.ts          # All query and mutation hooks
+  types.ts          # Loadable, MutationResult, legacy shim types
+  use-fetch.ts      # useFetch hook + fetchJson utility
+  use-mutation.ts   # useMutation hook
+  index.test.tsx    # Tests against mock HTTP server
+```
