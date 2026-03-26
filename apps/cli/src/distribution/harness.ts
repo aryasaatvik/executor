@@ -358,7 +358,7 @@ export const LocalDistributionHarnessLive = Layer.scoped(
       try: () => writeFile(
         join(packageDir, "package.json"),
         createPackageJson({
-          packageName: "executor-cli",
+          packageName: "executor",
           packageVersion: cliPackageJson.version ?? "0.0.0",
           description:
             cliPackageJson.description
@@ -377,7 +377,7 @@ export const LocalDistributionHarnessLive = Layer.scoped(
       catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
     });
     yield* Effect.tryPromise({
-      try: () => writeFile(join(packageDir, "README.md"), "# executor-cli\n"),
+      try: () => writeFile(join(packageDir, "README.md"), "# executor\n"),
       catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
     });
     yield* Effect.tryPromise({
