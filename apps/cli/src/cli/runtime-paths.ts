@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   EXECUTOR_WEB_ASSETS_DIR_ENV,
-} from "@executor/server";
+} from "../server/config";
 
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 

@@ -2,12 +2,12 @@ import {
   DocumentIdSchema,
   ResourceIdSchema,
   ScopeIdSchema,
-} from "@executor/ir/ids";
+} from "@executor/execution-ir/ids";
 import type {
   CatalogFragmentV1,
   Scope,
   SourceDocument,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 
 import { namespaceFromSourceName } from "./discovery";
 import type { Source } from "./source-models";

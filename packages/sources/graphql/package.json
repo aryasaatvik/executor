@@ -9,7 +9,7 @@
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@executor/ir": "workspace:*",
+    "@executor/execution-ir": "workspace:*",
     "@executor/source-core": "workspace:*",
     "@executor/codemode-core": "workspace:*",
     "effect": "catalog:",

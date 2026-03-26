@@ -4,7 +4,7 @@ import {
   ExampleSymbolIdSchema,
   ResponseSetIdSchema,
   ResponseSymbolIdSchema,
-} from "@executor/ir/ids";
+} from "@executor/execution-ir/ids";
 import type {
   Capability,
   DocumentationBlock,
@@ -14,7 +14,7 @@ import type {
   ProvenanceRef,
   ResponseSet,
   SourceKind,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 
 import { namespaceFromSourceName } from "./discovery";
 import type { Source } from "./source-models";

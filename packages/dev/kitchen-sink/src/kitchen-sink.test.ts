@@ -10,7 +10,7 @@ import {
   makeToolInvokerFromTools,
   toExecutorTool,
 } from "@executor/codemode-core";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 import { kitchenSinkEffectError } from "./effect-errors";
 
 const numberPairInputSchema = Schema.standardSchemaV1(

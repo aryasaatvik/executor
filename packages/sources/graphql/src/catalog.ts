@@ -1,17 +1,17 @@
-import { createCatalogSnapshotV1FromFragments } from "@executor/ir/catalog";
+import { createCatalogSnapshotV1FromFragments } from "@executor/execution-ir/catalog";
 import {
   CapabilityIdSchema,
   DocumentIdSchema,
   ExecutableIdSchema,
   ResponseSymbolIdSchema,
   ScopeIdSchema,
-} from "@executor/ir/ids";
+} from "@executor/execution-ir/ids";
 import type {
   Capability,
   CatalogSnapshotV1,
   ResponseSymbol,
   Executable,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 import {
   type BaseCatalogOperationInput,
   type CatalogFragmentBuilder,

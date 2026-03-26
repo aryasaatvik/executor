@@ -1,10 +1,10 @@
 import { sha256Hex } from "@executor/codemode-core";
-import { createCatalogSnapshotV1FromFragments } from "@executor/ir/catalog";
+import { createCatalogSnapshotV1FromFragments } from "@executor/execution-ir/catalog";
 import type {
   CatalogFragmentV1,
   CatalogSnapshotV1,
   ImportMetadata,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 
 export const contentHash = (value: string): string => sha256Hex(value);
 

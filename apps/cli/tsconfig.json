@@ -12,5 +12,14 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.d.ts"
+  ],
+  "exclude": [
+    "src/server/api/**/*.ts",
+    "src/server/rpc/**/*.ts",
+    "src/server/index.ts",
+"src/server/config.ts",
+    "src/server/tracing.ts",
+    "src/server/effect-errors.ts",
+    "src/server/env.ts"
   ]
 }

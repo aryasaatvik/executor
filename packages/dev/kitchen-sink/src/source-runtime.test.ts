@@ -31,7 +31,7 @@ import {
   type ToolInvoker,
 } from "@executor/codemode-core";
 import { createOpenApiToolsFromSpec } from "@executor/source-openapi";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 
 const asToolPath = (value: string): ToolPath => value as ToolPath;
 const asSourceId = (value: string): SourceId => value as SourceId;

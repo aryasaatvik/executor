@@ -12,10 +12,10 @@
   },
   "dependencies": {
     "@executor/auth-mcp-oauth": "workspace:*",
-    "@executor/ir": "workspace:*",
+    "@executor/execution-ir": "workspace:*",
     "@executor/source-core": "workspace:*",
     "@executor/codemode-core": "workspace:*",
-    "@executor/runtime-ses": "workspace:*",
+    "@executor/execution-runtime-ses": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "effect": "catalog:"
   },

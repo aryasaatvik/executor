@@ -2,8 +2,8 @@ import {
   DocumentIdSchema,
   ScopeIdSchema,
   ShapeSymbolIdSchema,
-} from "@executor/ir/ids";
-import type { CatalogFragmentV1, EffectKind } from "@executor/ir/model";
+} from "@executor/execution-ir/ids";
+import type { CatalogFragmentV1, EffectKind } from "@executor/execution-ir/model";
 
 export type CatalogSourceDocumentInput = {
   documentKind: string;

@@ -14,7 +14,7 @@
     "@executor/codemode-core": "workspace:*",
     "@executor/source-openapi": "workspace:*",
     "@executor/engine": "workspace:*",
-    "@executor/runtime-ses": "workspace:*",
+    "@executor/execution-runtime-ses": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -3,7 +3,7 @@ import type {
   OnElicitation,
   ToolDescriptor as CatalogToolDescriptor,
 } from "@executor/codemode-core";
-import type { Capability, CatalogV1, Executable } from "@executor/ir/model";
+import type { Capability, CatalogV1, Executable } from "@executor/execution-ir/model";
 import * as Effect from "effect/Effect";
 import type { Schema } from "effect";
 

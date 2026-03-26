@@ -6,7 +6,7 @@ import * as Effect from "effect/Effect";
 import { z } from "zod/v4";
 
 import { makeToolInvokerFromTools } from "@executor/codemode-core";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 
 import {
   createMcpConnectorFromClient,

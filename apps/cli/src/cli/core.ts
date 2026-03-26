@@ -31,8 +31,8 @@ import {
   DEFAULT_SERVER_PORT,
   SERVER_POLL_INTERVAL_MS,
   SERVER_START_TIMEOUT_MS,
-  runLocalExecutorServer,
-} from "@executor/server";
+} from "../server/config";
+import { runLocalExecutorServer } from "../server";
 import {
   seedDemoMcpSourceInWorkspace,
   seedGithubOpenApiSourceInWorkspace,

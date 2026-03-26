@@ -1,4 +1,4 @@
-import { createCatalogSnapshotV1FromFragments } from "@executor/ir/catalog";
+import { createCatalogSnapshotV1FromFragments } from "@executor/execution-ir/catalog";
 import {
   CapabilityIdSchema,
   DocumentIdSchema,
@@ -8,7 +8,7 @@ import {
   ResponseSymbolIdSchema,
   ScopeIdSchema,
   SecuritySchemeSymbolIdSchema,
-} from "@executor/ir/ids";
+} from "@executor/execution-ir/ids";
 import type {
   AuthRequirement,
   Capability,
@@ -18,7 +18,7 @@ import type {
   Scope,
   SecuritySchemeSymbol,
   Executable,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 import {
   type BaseCatalogOperationInput,
   type CatalogFragmentBuilder,

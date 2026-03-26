@@ -5,7 +5,7 @@ import {
   makeToolInvokerFromTools,
   toExecutorTool,
 } from "@executor/codemode-core";
-import { makeSesExecutor } from "@executor/runtime-ses";
+import { makeSesExecutor } from "@executor/execution-runtime-ses";
 
 const numberPairInputSchema = Schema.standardSchemaV1(
   Schema.Struct({

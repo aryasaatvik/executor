@@ -3,13 +3,13 @@ import {
   DocumentIdSchema,
   ResourceIdSchema,
   ShapeSymbolIdSchema,
-} from "@executor/ir/ids";
+} from "@executor/execution-ir/ids";
 import type {
   ImportDiagnostic,
   NativeBlob,
   ShapeNode,
   ShapeSymbol,
-} from "@executor/ir/model";
+} from "@executor/execution-ir/model";
 
 import type { Source } from "./source-models";
 import type {

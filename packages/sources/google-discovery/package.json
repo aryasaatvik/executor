@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@effect/platform": "catalog:",
-    "@executor/ir": "workspace:*",
+    "@executor/execution-ir": "workspace:*",
     "@executor/source-core": "workspace:*",
     "@executor/codemode-core": "workspace:*",
     "effect": "catalog:"

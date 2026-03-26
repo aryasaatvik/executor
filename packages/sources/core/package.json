@@ -14,7 +14,7 @@
   "dependencies": {
     "@executor/auth-oauth2": "workspace:*",
     "@executor/codemode-core": "workspace:*",
-    "@executor/ir": "workspace:*",
+    "@executor/execution-ir": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "effect": "catalog:"
   },
