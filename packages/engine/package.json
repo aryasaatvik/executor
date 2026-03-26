@@ -7,7 +7,8 @@
     "./client": "./src/client.ts",
     "./schema": "./src/schema/index.ts",
     "./db": "./src/db/index.ts",
-    "./rpc": "./src/rpc/index.ts"
+    "./rpc": "./src/rpc/index.ts",
+    "./rpc/handler": "./src/rpc/handler.ts"
   },
   "imports": {
     "#schema": "./src/schema/index.ts",

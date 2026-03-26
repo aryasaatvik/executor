@@ -19,8 +19,8 @@ import {
 } from "@executor/engine";
 import {
   ExecutorRpcs,
-  ExecutorRpcHandlerLive,
 } from "@executor/engine/rpc";
+import { ExecutorRpcHandlerLive } from "@executor/engine/rpc/handler";
 import { createExecutorMcpRequestHandler } from "@executor/executor-mcp";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
