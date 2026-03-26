@@ -265,7 +265,7 @@ Main screens:
 - `/sources/:sourceId/edit`: edit source settings and auth
 - `/secrets`: create, update, and delete locally stored secrets
 
-The UI uses the same control-plane API as the CLI, so both surfaces are operating on the same local runtime state.
+The UI uses the same engine API as the CLI, so both surfaces are operating on the same local runtime state.
 
 ## Local-first runtime behavior
 
@@ -273,7 +273,7 @@ By default `executor` runs as a single local daemon process.
 
 It serves:
 
-- `/v1` for the local control-plane API
+- `/v1` for the local engine API
 - `/mcp` for the `executor` MCP endpoint
 - the web UI for normal browser routes
 
@@ -326,10 +326,10 @@ This does not make the system magically risk-free, but it gives the runtime plac
 
 If you are exploring the repo, these are the directories that matter most:
 
-- `apps/executor`: packaged CLI entrypoint and daemon lifecycle commands
+- `apps/cli`: packaged CLI entrypoint and daemon lifecycle commands
 - `apps/web`: local React web UI
-- `packages/platform/server`: local HTTP server that serves API, MCP, and UI
-- `packages/platform/control-plane`: source management, secrets, persistence, execution, and inspection
+- `apps/server`: local HTTP server that serves API, MCP, and UI
+- `packages/engine`: source management, secrets, persistence, execution, and inspection
 - `packages/kernel/runtime-deno-subprocess`: optional Deno subprocess runtime for TypeScript execution
 - `packages/kernel/runtime-quickjs`: default QuickJS sandbox runtime for TypeScript execution
 - `packages/kernel/runtime-ses`: optional SES sandbox runtime for TypeScript execution
@@ -341,15 +341,15 @@ If you are exploring the repo, these are the directories that matter most:
 - Add a changeset in any PR that should release: `bun run changeset`.
 - Merge that PR to `main`. `.github/workflows/release.yml` opens or updates a `Version Packages` release PR for version bumps and changelog updates.
 - Merge the `Version Packages` PR. The release workflow pushes the matching git tag and dispatches `.github/workflows/publish-executor-package.yml`, which publishes to npm and creates the GitHub release.
-- Do not edit `apps/executor/package.json` by hand for normal releases. Changesets owns the version.
+- Do not edit `apps/cli/package.json` by hand for normal releases. Changesets owns the version.
 - For a beta train, enter prerelease mode with `bun run release:beta:start`, commit `.changeset/pre.json`, and merge it. Release PRs will then use `-beta.x` versions until you exit with `bun run release:beta:stop`.
-- `bun run --cwd apps/executor release:publish` remains the publish implementation used by CI.
-- To build and pack the publish artifact locally without publishing, run `bun run --cwd apps/executor release:publish:dry-run`.
+- `bun run --cwd apps/cli release:publish` remains the publish implementation used by CI.
+- To build and pack the publish artifact locally without publishing, run `bun run --cwd apps/cli release:publish:dry-run`.
 - `.github/workflows/publish-executor-package.yml` can also be run manually with a tag input if a publish needs to be retried for an already-created version tag.
 - One-time npm setup: either configure npm trusted publishing for `RhysSullivan/executor` with the workflow file `.github/workflows/publish-executor-package.yml`, or add a GitHub Actions secret named `NPM_TOKEN` that can publish the `executor` package.
 - Stable releases use a normal semver like `1.2.3` and publish to npm under `latest`.
 - Beta releases use a prerelease semver like `1.3.0-beta.1` and publish to npm under `beta`.
-- When a release should become an upgrade test fixture, capture a real workspace snapshot with `bun run fixture:release:capture -- ...` and commit it under [`packages/platform/control-plane/src/runtime/__fixtures__`](./packages/platform/control-plane/src/runtime/__fixtures__/README.md).
+- When a release should become an upgrade test fixture, capture a real workspace snapshot with `bun run fixture:release:capture -- ...` and commit it under [`packages/engine/src/runtime/__fixtures__`](./packages/engine/src/runtime/__fixtures__/README.md).
 
 ## Project status
 

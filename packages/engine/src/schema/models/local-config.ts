@@ -1,0 +1,184 @@
+import { Schema } from "effect";
+
+import { localConfigurableSourceAdapters } from "../../runtime/sources/source-adapters";
+import { SecretRefSchema } from "./auth-artifact";
+
+export const LocalExecutorRuntimeSchema = Schema.Literal(
+  "quickjs",
+  "ses",
+  "deno",
+);
+
+export const LocalConfigSecretProviderSourceSchema = Schema.Literal(
+  "env",
+  "file",
+  "exec",
+  "params",
+);
+
+export const LocalConfigEnvSecretProviderSchema = Schema.Struct({
+  source: Schema.Literal("env"),
+});
+
+export const LocalConfigFileSecretProviderModeSchema = Schema.Literal(
+  "singleValue",
+  "json",
+);
+
+export const LocalConfigFileSecretProviderSchema = Schema.Struct({
+  source: Schema.Literal("file"),
+  path: Schema.String,
+  mode: Schema.optional(LocalConfigFileSecretProviderModeSchema),
+});
+
+export const LocalConfigExecSecretProviderSchema = Schema.Struct({
+  source: Schema.Literal("exec"),
+  command: Schema.String,
+  args: Schema.optional(Schema.Array(Schema.String)),
+  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  allowSymlinkCommand: Schema.optional(Schema.Boolean),
+  trustedDirs: Schema.optional(Schema.Array(Schema.String)),
+});
+
+export const LocalConfigSecretProviderSchema = Schema.Union(
+  LocalConfigEnvSecretProviderSchema,
+  LocalConfigFileSecretProviderSchema,
+  LocalConfigExecSecretProviderSchema,
+);
+
+export const LocalConfigExplicitSecretRefSchema = Schema.Struct({
+  source: LocalConfigSecretProviderSourceSchema,
+  provider: Schema.String,
+  id: Schema.String,
+});
+
+export const LocalConfigSecretInputSchema = Schema.Union(
+  Schema.String,
+  LocalConfigExplicitSecretRefSchema,
+);
+
+export const LocalConfigSourceConnectionSchema = Schema.Struct({
+  endpoint: Schema.String,
+  auth: Schema.optional(LocalConfigSecretInputSchema),
+});
+
+const LocalConfigSourceEntryBaseSchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  namespace: Schema.optional(Schema.String),
+  iconUrl: Schema.optional(Schema.String),
+  enabled: Schema.optional(Schema.Boolean),
+  connection: LocalConfigSourceConnectionSchema,
+});
+
+type SchemaTypeOf<TSchema> = TSchema extends { readonly Type: infer T } ? T : never;
+type LocalConfigSourceEntryBase = typeof LocalConfigSourceEntryBaseSchema.Type;
+
+type LocalConfigSourceFromAdapter<
+  TAdapter extends (typeof localConfigurableSourceAdapters)[number],
+> =
+  TAdapter extends {
+    key: infer TKey extends string;
+    localConfigBindingSchema: infer TSchema;
+  }
+    ? {
+        kind: TKey;
+        binding: SchemaTypeOf<TSchema>;
+      } & LocalConfigSourceEntryBase
+    : never;
+
+export type LocalConfigSource = LocalConfigSourceFromAdapter<
+  (typeof localConfigurableSourceAdapters)[number]
+>;
+
+const LocalConfigSourceEntrySchemas = localConfigurableSourceAdapters.map(
+  (adapter) =>
+    Schema.extend(
+      LocalConfigSourceEntryBaseSchema,
+      Schema.Struct({
+        kind: Schema.Literal(adapter.key as LocalConfigSource["kind"]),
+        binding: adapter.localConfigBindingSchema,
+      }),
+    ),
+);
+
+export const LocalConfigSourceSchema = Schema.Union(
+  ...((LocalConfigSourceEntrySchemas as unknown) as [
+    Schema.Schema<any, any, never>,
+    Schema.Schema<any, any, never>,
+    ...Array<Schema.Schema<any, any, never>>,
+  ]),
+) as Schema.Schema<LocalConfigSource, any, never>;
+
+export const LocalConfigSecretsSchema = Schema.Struct({
+  providers: Schema.optional(
+    Schema.Record({
+      key: Schema.String,
+      value: LocalConfigSecretProviderSchema,
+    }),
+  ),
+  defaults: Schema.optional(
+    Schema.Struct({
+      env: Schema.optional(Schema.String),
+      file: Schema.optional(Schema.String),
+      exec: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+export const LocalConfigWorkspaceSchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+});
+
+export const LocalConfigDaemonSchema = Schema.Struct({
+  baseUrl: Schema.optional(Schema.String),
+  port: Schema.optional(Schema.Number),
+});
+
+export const LocalConfigCallSchema = Schema.Struct({
+  baseUrl: Schema.optional(Schema.String),
+  noOpen: Schema.optional(Schema.Boolean),
+});
+
+export const LocalConfigSearchSchema = Schema.Struct({
+  limit: Schema.optional(Schema.Number),
+  source: Schema.optional(Schema.String),
+  namespace: Schema.optional(Schema.String),
+});
+
+export const LocalConfigSemanticSearchSchema = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.optional(Schema.String),
+  apiKeyRef: Schema.optional(SecretRefSchema),
+  dimensions: Schema.optional(Schema.Number),
+});
+
+export const LocalExecutorConfigSchema = Schema.Struct({
+  runtime: Schema.optional(LocalExecutorRuntimeSchema),
+  workspace: Schema.optional(LocalConfigWorkspaceSchema),
+  daemon: Schema.optional(LocalConfigDaemonSchema),
+  call: Schema.optional(LocalConfigCallSchema),
+  search: Schema.optional(LocalConfigSearchSchema),
+  semanticSearch: Schema.optional(Schema.NullOr(LocalConfigSemanticSearchSchema)),
+  sources: Schema.optional(
+    Schema.Record({
+      key: Schema.String,
+      value: LocalConfigSourceSchema,
+    }),
+  ),
+  secrets: Schema.optional(LocalConfigSecretsSchema),
+});
+
+export type LocalConfigSecretProviderSource =
+  typeof LocalConfigSecretProviderSourceSchema.Type;
+export type LocalConfigSecretProvider =
+  typeof LocalConfigSecretProviderSchema.Type;
+export type LocalConfigExplicitSecretRef =
+  typeof LocalConfigExplicitSecretRefSchema.Type;
+export type LocalConfigSecretInput = typeof LocalConfigSecretInputSchema.Type;
+export type LocalConfigSecrets = typeof LocalConfigSecretsSchema.Type;
+export type LocalConfigDaemon = typeof LocalConfigDaemonSchema.Type;
+export type LocalConfigCall = typeof LocalConfigCallSchema.Type;
+export type LocalConfigSearch = typeof LocalConfigSearchSchema.Type;
+export type LocalConfigSemanticSearch = typeof LocalConfigSemanticSearchSchema.Type;
+export type LocalExecutorRuntime = typeof LocalExecutorRuntimeSchema.Type;
+export type LocalExecutorConfig = typeof LocalExecutorConfigSchema.Type;

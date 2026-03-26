@@ -1,7 +1,7 @@
 import type {
   ExecutionEnvelope,
   ExecutionInteraction,
-} from "@executor/control-plane";
+} from "@executor/engine";
 
 export type ParsedInteractionPayload = {
   mode: "form" | "url";

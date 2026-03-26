@@ -5,7 +5,7 @@
 - TanStack Router (file-based route tree defined in `src/main.tsx`)
 - Tailwind v4 + tw-animate-css (CSS-first config in `src/globals.css`)
 - `@executor/react` from `packages/clients/react` (workspace:* dep)
-- `@executor/control-plane/client` for API calls (Effect-based RPC)
+- `@executor/engine/client` for API calls (Effect-based RPC)
 
 ## Directory Structure
 ```

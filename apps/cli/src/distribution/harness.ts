@@ -1,0 +1,484 @@
+import { spawn } from "node:child_process";
+import { chmod, cp, mkdir, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { FileSystem } from "@effect/platform";
+import { NodeFileSystem } from "@effect/platform-node";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import { executorAppEffectError } from "../effect-errors";
+
+const toError = (cause: unknown): Error =>
+  cause instanceof Error ? cause : new Error(String(cause));
+
+type CommandResult = {
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly exitCode: number;
+};
+
+export class DistributionHarness extends Context.Tag(
+  "@executor/apps/executor/distribution/DistributionHarness",
+)<
+  DistributionHarness,
+  {
+    readonly packageDir: string;
+    readonly launcherPath: string;
+    readonly tarballPath: string;
+    readonly executorHome: string;
+    readonly baseUrl: string;
+    readonly writeProjectConfig: (
+      contents: string,
+    ) => Effect.Effect<void, Error, never>;
+    readonly run: (
+      args: ReadonlyArray<string>,
+      options?: {
+        readonly okExitCodes?: ReadonlyArray<number>;
+      },
+    ) => Effect.Effect<CommandResult, Error, never>;
+    readonly runInstalled: (
+      args: ReadonlyArray<string>,
+      options?: {
+        readonly okExitCodes?: ReadonlyArray<number>;
+      },
+    ) => Effect.Effect<CommandResult, Error, never>;
+    readonly fetchText: (
+      pathname: string,
+    ) => Effect.Effect<{
+      readonly status: number;
+      readonly body: string;
+      readonly contentType: string | null;
+    }, Error, never>;
+  }
+>() {}
+
+const runCommand = (input: {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly okExitCodes?: ReadonlyArray<number>;
+}): Effect.Effect<CommandResult, Error, never> =>
+  Effect.async((resume) => {
+    const child = spawn(input.command, [...input.args], {
+      cwd: input.cwd,
+      env: input.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+    });
+
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk;
+    });
+
+    child.once("error", (error) => {
+      resume(Effect.fail(error));
+    });
+
+    child.once("close", (code) => {
+      const exitCode = code ?? -1;
+      const result = {
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        exitCode,
+      } satisfies CommandResult;
+      const okExitCodes = input.okExitCodes ?? [0];
+
+      if (okExitCodes.includes(exitCode)) {
+        resume(Effect.succeed(result));
+        return;
+      }
+
+      resume(Effect.fail(executorAppEffectError("distribution/harness", 
+        [
+          `${input.command} ${input.args.join(" ")} exited with code ${exitCode}`,
+          stdout.length > 0 ? `stdout:\n${stdout.trim()}` : null,
+          stderr.length > 0 ? `stderr:\n${stderr.trim()}` : null,
+        ].filter((part) => part !== null).join("\n\n"),
+      )));
+    });
+
+    return Effect.sync(() => {
+      child.kill("SIGTERM");
+    });
+  });
+
+const allocatePort = (): Effect.Effect<number, Error, never> =>
+  Effect.tryPromise({
+    try: async () => {
+      return await new Promise<number>((resolvePort, reject) => {
+        const server = createServer();
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            server.close(() => reject(new Error("Failed to allocate test port")));
+            return;
+          }
+
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+
+            resolvePort(address.port);
+          });
+        });
+      });
+    },
+    catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+  });
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
+const rootPackageRequire = createRequire(join(repoRoot, "package.json"));
+const cliPackageRequire = createRequire(join(repoRoot, "apps/cli/package.json"));
+
+const rootPackageJson = rootPackageRequire("./package.json") as {
+  catalog?: Record<string, string>;
+};
+
+const cliPackageJson = cliPackageRequire("./package.json") as {
+  version?: string;
+  description?: string;
+  keywords?: string[];
+  dependencies?: Record<string, string>;
+};
+
+const resolveRuntimeDependencies = (): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(cliPackageJson.dependencies ?? {}).flatMap(([name, version]) => {
+      if (version.startsWith("workspace:")) {
+        return [];
+      }
+
+      if (version === "catalog:") {
+        const resolvedVersion = rootPackageJson.catalog?.[name];
+        if (!resolvedVersion) {
+          throw new Error(`Missing catalog version for ${name}`);
+        }
+        return [[name, resolvedVersion]];
+      }
+
+      return [[name, version]];
+    }),
+  );
+
+const createPackageJson = (input: {
+  packageName: string;
+  packageVersion: string;
+  description: string;
+  keywords: ReadonlyArray<string>;
+  dependencies: Record<string, string>;
+}) => {
+  const packageJson = {
+    name: input.packageName,
+    version: input.packageVersion,
+    description: input.description,
+    keywords: input.keywords,
+    type: "module",
+    private: false,
+    bin: {
+      executor: "bin/executor.js",
+    },
+    files: [
+      "bin",
+      "resources",
+      "README.md",
+      "package.json",
+    ],
+    dependencies: input.dependencies,
+    engines: {
+      bun: ">=1.2.0",
+    },
+  };
+
+  return `${JSON.stringify(packageJson, null, 2)}\n`;
+};
+
+const createLauncherSource = () => [
+  "#!/usr/bin/env bun",
+  'import "./main.js";',
+  "",
+].join("\n");
+
+const resolveQuickJsWasmPath = (): string => {
+  const requireFromQuickJsRuntime = createRequire(
+    join(repoRoot, "packages/kernel/runtime-quickjs/package.json"),
+  );
+  const quickJsPackagePath = requireFromQuickJsRuntime.resolve(
+    "quickjs-emscripten/package.json",
+  );
+  return resolve(
+    dirname(quickJsPackagePath),
+    "../@jitl/quickjs-wasmfile-release-sync/dist/emscripten-module.wasm",
+  );
+};
+
+const resolveEngineMigrationsDir = (): string =>
+  join(repoRoot, "packages/engine/src/db/migrations");
+
+const packPackage = (packageDir: string, outputDir: string) =>
+  runCommand({
+    command: "npm",
+    args: ["pack", packageDir],
+    cwd: outputDir,
+  }).pipe(
+    Effect.flatMap((result) => {
+      const tarballName = result.stdout
+        .split(/\s+/)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .at(-1);
+
+      if (!tarballName) {
+        return Effect.fail(
+          executorAppEffectError("distribution/harness", `Unable to determine tarball name from npm pack output: ${result.stdout}`),
+        );
+      }
+
+      return Effect.succeed(join(outputDir, tarballName));
+    }),
+  );
+
+export const LocalDistributionHarnessLive = Layer.scoped(
+  DistributionHarness,
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const tempRoot = yield* Effect.acquireRelease(
+      fs.makeTempDirectory({
+        directory: tmpdir(),
+        prefix: "executor-distribution-",
+      }).pipe(Effect.mapError(toError)),
+      (path) =>
+        fs.remove(path, { recursive: true, force: true }).pipe(
+          Effect.mapError(toError),
+          Effect.orDie,
+        ),
+    );
+
+    const packageDir = join(tempRoot, "package");
+    const prefixDir = join(tempRoot, "prefix");
+    const homeDir = join(tempRoot, "home");
+    const executorHome = join(homeDir, ".executor");
+    const stagedWorkspaceRoot = packageDir;
+    const installedWorkspaceRoot = tempRoot;
+    const baseUrl = `http://127.0.0.1:${yield* allocatePort()}`;
+
+    yield* Effect.all([
+      fs.makeDirectory(packageDir, { recursive: true }),
+      fs.makeDirectory(prefixDir, { recursive: true }),
+      fs.makeDirectory(homeDir, { recursive: true }),
+      fs.makeDirectory(executorHome, { recursive: true }),
+    ]).pipe(Effect.mapError(toError));
+
+    yield* runCommand({
+      command: "bun",
+      args: [
+        "build",
+        "./apps/cli/src/cli/main.ts",
+        "--target",
+        "node",
+        "--external",
+        "@node-llama-cpp/*",
+        "--outdir",
+        join(packageDir, "bin"),
+      ],
+      cwd: repoRoot,
+    });
+    yield* Effect.tryPromise({
+      try: () => cp(resolveEngineMigrationsDir(), join(packageDir, "bin/migrations"), {
+        recursive: true,
+      }),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+
+    yield* Effect.tryPromise({
+      try: () => mkdir(join(packageDir, "resources/web"), { recursive: true }),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(
+        join(packageDir, "resources/web/index.html"),
+        "<!doctype html><html><body><div id=\"root\"></div></body></html>\n",
+      ),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => cp(resolveQuickJsWasmPath(), join(packageDir, "bin/emscripten-module.wasm")),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => mkdir(join(packageDir, "bin/openapi-extractor-wasm"), { recursive: true }),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => cp(
+        join(repoRoot, "packages/sources/openapi/src/openapi-extractor-wasm/openapi_extractor_bg.wasm"),
+        join(packageDir, "bin/openapi-extractor-wasm/openapi_extractor_bg.wasm"),
+      ),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => cp(
+        join(repoRoot, "packages/kernel/runtime-deno-subprocess/src/deno-subprocess-worker.mjs"),
+        join(packageDir, "bin/deno-subprocess-worker.mjs"),
+      ),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* runCommand({
+      command: "bun",
+      args: [
+        "build",
+        "./packages/kernel/runtime-ses/src/sandbox-worker.mjs",
+        "--target",
+        "node",
+        "--external",
+        "@node-llama-cpp/*",
+        "--outfile",
+        join(packageDir, "bin/sandbox-worker.mjs"),
+      ],
+      cwd: repoRoot,
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(
+        join(packageDir, "package.json"),
+        createPackageJson({
+          packageName: "executor",
+          packageVersion: cliPackageJson.version ?? "0.0.0",
+          description:
+            cliPackageJson.description
+            ?? "Local AI executor with a Bunli CLI, local API server, and web UI.",
+          keywords: cliPackageJson.keywords ?? [
+            "executor",
+            "ai",
+            "agent",
+            "cli",
+            "automation",
+            "local-first",
+          ],
+          dependencies: resolveRuntimeDependencies(),
+        }),
+      ),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(join(packageDir, "README.md"), "# executor\n"),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => writeFile(join(packageDir, "bin/executor.js"), createLauncherSource()),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* Effect.tryPromise({
+      try: () => chmod(join(packageDir, "bin/executor.js"), 0o755),
+      catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+    });
+    yield* runCommand({
+      command: "npm",
+      args: ["install", "--production"],
+      cwd: packageDir,
+    });
+
+    const tarballPath = yield* packPackage(packageDir, tempRoot);
+
+    const env = {
+      ...process.env,
+      HOME: homeDir,
+      EXECUTOR_HOME: executorHome,
+    } satisfies NodeJS.ProcessEnv;
+
+    const installedEnv = {
+      ...env,
+      NPM_CONFIG_PREFIX: prefixDir,
+      PATH: `${join(prefixDir, "bin")}:${process.env.PATH ?? ""}`,
+    } satisfies NodeJS.ProcessEnv;
+
+    yield* runCommand({
+      command: "npm",
+      args: ["install", "-g", tarballPath],
+      cwd: tempRoot,
+      env: installedEnv,
+    });
+
+    const run = (
+      args: ReadonlyArray<string>,
+      options?: { readonly okExitCodes?: ReadonlyArray<number> },
+    ) =>
+      runCommand({
+        command: "bun",
+        args: [join(packageDir, "bin/executor.js"), ...args],
+        cwd: packageDir,
+        env,
+        okExitCodes: options?.okExitCodes,
+      });
+
+    const runInstalled = (
+      args: ReadonlyArray<string>,
+      options?: { readonly okExitCodes?: ReadonlyArray<number> },
+    ) =>
+      runCommand({
+        command: "executor",
+        args,
+        cwd: tempRoot,
+        env: installedEnv,
+        okExitCodes: options?.okExitCodes,
+      });
+
+    const fetchText = (pathname: string) =>
+      Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(new URL(pathname, baseUrl));
+          return {
+            status: response.status,
+            body: await response.text(),
+            contentType: response.headers.get("content-type"),
+          };
+        },
+        catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
+      });
+
+    const writeProjectConfig = (contents: string) =>
+      Effect.forEach(
+        [stagedWorkspaceRoot, installedWorkspaceRoot],
+        (workspaceRoot) =>
+          Effect.gen(function* () {
+            const configDir = join(workspaceRoot, ".executor");
+            yield* fs.makeDirectory(configDir, { recursive: true }).pipe(
+              Effect.mapError(toError),
+            );
+            yield* fs.writeFileString(
+              join(configDir, "executor.jsonc"),
+              contents,
+            ).pipe(Effect.mapError(toError));
+          }),
+        { discard: true },
+      );
+
+    return DistributionHarness.of({
+      packageDir,
+      launcherPath: join(packageDir, "bin/executor.js"),
+      tarballPath,
+      executorHome,
+      baseUrl,
+      writeProjectConfig,
+      run,
+      runInstalled,
+      fetchText,
+    });
+  }).pipe(Effect.provide(NodeFileSystem.layer)),
+);

@@ -17,7 +17,7 @@ import {
   type Source,
   type SourceId,
   type WorkspaceId,
-} from "@executor/control-plane";
+} from "@executor/engine";
 import {
   createToolCatalogDiscovery,
   createToolCatalogFromTools,

@@ -1,6 +1,6 @@
 # executor/clients/react
 
-React hooks and context provider for executor's control-plane API.
+React hooks and context provider for executor's engine API.
 
 ## Provider
 

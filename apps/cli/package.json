@@ -1,0 +1,57 @@
+{
+  "name": "executor",
+  "version": "1.2.4-beta.4",
+  "description": "Local AI executor with a CLI, local API server, and web UI.",
+  "keywords": [
+    "executor",
+    "ai",
+    "agent",
+    "cli",
+    "automation",
+    "local-first"
+  ],
+  "homepage": "https://github.com/RhysSullivan/executor",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git"
+  },
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "executor": "bin/executor"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "start": "bun src/cli/main.ts",
+    "release:publish:dry-run": "bun src/distribution/publish.ts --dry-run",
+    "release:publish": "bun src/distribution/publish.ts"
+  },
+  "dependencies": {
+    "@bunli/core": "catalog:",
+    "@bunli/plugin-completions": "catalog:",
+    "@effect/platform": "catalog:",
+    "@effect/platform-node": "catalog:",
+    "@executor/client": "workspace:*",
+    "@executor/codemode-core": "workspace:*",
+    "@executor/engine": "workspace:*",
+    "@executor/executor-mcp": "workspace:*",
+    "@executor/server": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@executor/mcp-elicitation-demo": "workspace:*",
+    "@executor/runtime-ses": "workspace:*",
+    "@effect/vitest": "catalog:",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}

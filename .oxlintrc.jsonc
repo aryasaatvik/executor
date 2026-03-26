@@ -53,7 +53,7 @@
     {
       // JSON Schema conditionals legitimately use a `then` key.
       "files": [
-        "packages/platform/control-plane/src/runtime/catalog/source/runtime.ts",
+        "packages/engine/src/runtime/catalog/source/runtime.ts",
       ],
       "rules": {
         "unicorn/no-thenable": "off",
