@@ -11,7 +11,9 @@
     "test:watch": "bunx vitest"
   },
   "dependencies": {
-    "@executor/api": "workspace:*"
+    "@executor/api": "workspace:*",
+    "@executor/control-plane": "workspace:*",
+    "@executor/source-core": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=18 <20"

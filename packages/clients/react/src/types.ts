@@ -1,3 +1,19 @@
+import type {
+  SecretRef,
+  SourceInspection,
+  SourceInspectionDiscoverResult,
+  SourceInspectionToolDetail,
+  SourceTransport,
+  StringMap,
+  WorkspaceOauthClient,
+  Source,
+} from "../../../control-plane/src/model/index";
+import type {
+  SourceDiscoveryResult,
+  SourceOauthClientInput,
+  SourceProbeAuth,
+} from "../../../sources/core/src/index";
+
 // ---------------------------------------------------------------------------
 // Loadable — tri-state for async data
 // ---------------------------------------------------------------------------
@@ -20,111 +36,171 @@ export type MutationResult<TInput, TOutput> = {
 };
 
 // ---------------------------------------------------------------------------
-// Legacy types not yet in @executor/api — kept as local shims so the web
-// app compiles.  These should eventually move to executor-api.
+// Local API shapes not yet published from @executor/api.
 // ---------------------------------------------------------------------------
 
+export interface SecretProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly canStore: boolean;
+}
+
 export interface InstanceConfig {
+  readonly platform: string;
+  readonly secretProviders: readonly SecretProvider[];
+  readonly defaultSecretStoreProvider: string;
   readonly semanticSearch: {
-    readonly enabled: boolean;
-    readonly provider: string | null;
-  };
+    readonly provider: string;
+    readonly model?: string;
+    readonly apiKeyRef?: SecretRef;
+    readonly dimensions?: number;
+  } | null;
 }
 
-export interface SourceInspection {
-  readonly sourceId: string;
-  readonly sourceName: string;
-  readonly sourceKind: string;
-  readonly status: string;
-  readonly toolCount: number;
-  readonly tools: readonly SourceInspectionToolSummary[];
-  readonly authInfo: unknown;
-}
-
-export interface SourceInspectionToolSummary {
-  readonly path: string;
-  readonly description: string | null;
-}
-
-export interface SourceInspectionToolDetail {
-  readonly path: string;
-  readonly description: string | null;
-  readonly inputSchema: unknown;
-  readonly outputSchema: unknown;
-}
-
-export interface SourceInspectionDiscoverResult {
-  readonly query: string;
-  readonly queryTokens: readonly string[];
-  readonly bestPath: string | null;
-  readonly total: number;
-  readonly results: readonly SourceInspectionDiscoverHit[];
-}
-
-export interface SourceInspectionDiscoverHit {
-  readonly path: string;
-  readonly score: number;
-  readonly description: string | null;
-}
+export type { SourceInspection, SourceInspectionToolDetail, SourceInspectionDiscoverResult };
 
 export interface DiscoverSourcePayload {
-  readonly name: string;
-  readonly kind: string;
-  readonly endpoint: string;
+  readonly url: string;
+  readonly probeAuth?: SourceProbeAuth;
 }
 
-export interface SourceDiscoveryResult {
-  readonly name: string;
-  readonly kind: string;
-  readonly endpoint: string;
-  readonly iconUrl: string | null;
-  readonly tools: readonly SourceInspectionToolSummary[];
-}
-
-export interface WorkspaceOauthClient {
-  readonly id: string;
-  readonly workspaceId: string;
-  readonly providerKey: string;
-  readonly clientId: string;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-}
+export type { SourceDiscoveryResult, WorkspaceOauthClient };
 
 export interface CreateWorkspaceOauthClientPayload {
   readonly providerKey: string;
-  readonly clientId: string;
-  readonly clientSecret: string;
+  readonly label?: string | null;
+  readonly oauthClient: SourceOauthClientInput;
 }
 
-export interface ConnectSourcePayload {
-  readonly sourceId: string;
-}
+export type HttpConnectAuth =
+  | { readonly kind: "none" }
+  | {
+      readonly kind: "bearer";
+      readonly headerName?: string | null;
+      readonly prefix?: string | null;
+      readonly token?: string | null;
+      readonly tokenRef?: SecretRef | null;
+    }
+  | {
+      readonly kind: "oauth2";
+      readonly headerName?: string | null;
+      readonly prefix?: string | null;
+      readonly accessTokenRef?: SecretRef | null;
+      readonly refreshTokenRef?: SecretRef | null;
+    };
 
-export interface ConnectSourceResult {
-  readonly connected: boolean;
-}
+export type ConnectSourcePayload =
+  | {
+      readonly kind: "mcp";
+      readonly endpoint: string;
+      readonly name?: string | null;
+      readonly namespace?: string | null;
+      readonly transport?: SourceTransport;
+      readonly queryParams?: StringMap | null;
+      readonly headers?: StringMap | null;
+      readonly command?: string | null;
+      readonly args?: readonly string[] | null;
+      readonly env?: StringMap | null;
+      readonly cwd?: string | null;
+    }
+  | {
+      readonly kind: "openapi";
+      readonly endpoint: string;
+      readonly specUrl: string;
+      readonly name?: string | null;
+      readonly namespace?: string | null;
+      readonly importAuthPolicy?: string;
+      readonly importAuth?: HttpConnectAuth;
+      readonly auth?: HttpConnectAuth;
+    }
+  | {
+      readonly kind: "graphql";
+      readonly endpoint: string;
+      readonly name?: string | null;
+      readonly namespace?: string | null;
+      readonly importAuthPolicy?: string;
+      readonly importAuth?: HttpConnectAuth;
+      readonly auth?: HttpConnectAuth;
+    }
+  | {
+      readonly kind: "google_discovery";
+      readonly service: string;
+      readonly version: string;
+      readonly discoveryUrl?: string | null;
+      readonly scopes?: readonly string[] | null;
+      readonly oauthClient?: SourceOauthClientInput | null;
+      readonly workspaceOauthClientId?: WorkspaceOauthClient["id"];
+      readonly name?: string | null;
+      readonly namespace?: string | null;
+      readonly importAuthPolicy?: string;
+      readonly importAuth?: HttpConnectAuth;
+      readonly auth?: HttpConnectAuth;
+    };
+
+export type ConnectSourceResult =
+  | {
+      readonly kind: "connected";
+      readonly source: Source;
+    }
+  | {
+      readonly kind: "credential_required";
+      readonly source: Source;
+      readonly credentialSlot: "runtime" | "import";
+    }
+  | {
+      readonly kind: "oauth_required";
+      readonly source: Source;
+      readonly sessionId: string;
+      readonly authorizationUrl: string;
+    };
 
 export interface ConnectSourceBatchPayload {
-  readonly sourceIds: readonly string[];
+  readonly workspaceOauthClientId: WorkspaceOauthClient["id"];
+  readonly sources: ReadonlyArray<{
+    readonly service: string;
+    readonly version: string;
+    readonly discoveryUrl?: string | null;
+    readonly scopes?: readonly string[];
+    readonly name?: string | null;
+    readonly namespace?: string | null;
+  }>;
 }
 
 export interface ConnectSourceBatchResult {
-  readonly results: readonly { sourceId: string; connected: boolean }[];
+  readonly results: ReadonlyArray<{
+    readonly source: Source;
+    readonly status: "connected" | "pending_oauth";
+  }>;
+  readonly providerOauthSession: {
+    readonly sessionId: string;
+    readonly authorizationUrl: string;
+    readonly sourceIds: readonly string[];
+  } | null;
 }
 
 export interface StartSourceOAuthPayload {
-  readonly sourceId: string;
-  readonly providerKey: string;
-  readonly scopes: readonly string[];
-  readonly redirectUri: string;
+  readonly provider: "mcp";
+  readonly name?: string | null;
+  readonly endpoint: string;
+  readonly transport?: SourceTransport;
+  readonly queryParams?: StringMap | null;
+  readonly headers?: StringMap | null;
 }
 
 export interface StartSourceOAuthResult {
+  readonly sessionId: string;
   readonly authorizationUrl: string;
 }
 
 export interface CompleteSourceOAuthResult {
-  readonly completed: boolean;
+  readonly sessionId: string;
+  readonly auth: {
+    readonly kind: "oauth2";
+    readonly headerName: string;
+    readonly prefix: string;
+    readonly accessToken: SecretRef;
+    readonly refreshToken: SecretRef | null;
+  };
 }
 
 export interface LocalInstallation {
