@@ -9,6 +9,7 @@ export const createD1ExecutionStore = (): ExecutionStoreShape => ({
   list: (_input) => Effect.fail(new Error("TODO: implement D1 execution store list")),
   update: (_input) => Effect.fail(new Error("TODO: implement D1 execution store update")),
   createInteraction: (_input) => Effect.fail(new Error("TODO: implement D1 execution store createInteraction")),
+  getInteractionById: (_input) => Effect.fail(new Error("TODO: implement D1 execution store getInteractionById")),
   resolveInteraction: (_input) => Effect.fail(new Error("TODO: implement D1 execution store resolveInteraction")),
   getPendingInteraction: (_input) => Effect.fail(new Error("TODO: implement D1 execution store getPendingInteraction")),
   createStep: (_input) => Effect.fail(new Error("TODO: implement D1 execution store createStep")),

@@ -99,6 +99,9 @@ export const createInMemoryExecutionStore = (): ExecutionStoreShape => {
         return interaction;
       }),
 
+    getInteractionById: (input) =>
+      Effect.sync(() => interactions.get(input.interactionId) ?? null),
+
     resolveInteraction: (input) =>
       Effect.sync(() => {
         const existing = interactions.get(input.interactionId);
