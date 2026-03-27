@@ -8,9 +8,21 @@ import {
   listExecutions,
   resumeExecution,
 } from "@executor/control-plane/services/execution";
+import {
+  EngineStorageError,
+} from "../errors";
 
 import { EngineApi } from "../api";
 import { resolveRequestedLocalWorkspace } from "../local-context";
+
+const toExecutionStorageError = (operation: string, cause: unknown) => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  return new EngineStorageError({
+    operation,
+    message,
+    details: message,
+  });
+};
 
 export const EngineExecutionsLive = HttpApiBuilder.group(
   EngineApi,
@@ -24,7 +36,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
               workspaceId: path.workspaceId,
               payload,
               createdByAccountId: runtimeLocalWorkspace.installation.accountId,
-            })
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.create", cause),
+              ),
+            )
           ),
         ),
       )
@@ -34,7 +50,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
             getExecution({
               workspaceId: path.workspaceId,
               executionId: path.executionId,
-            }),
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.get", cause),
+              ),
+            ),
           ),
         ),
       )
@@ -46,7 +66,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
               executionId: path.executionId,
               payload,
               resumedByAccountId: runtimeLocalWorkspace.installation.accountId,
-            })
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.resume", cause),
+              ),
+            )
           ),
         ),
       )
@@ -55,7 +79,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
           Effect.zipRight(
             listExecutions({
               workspaceId: path.workspaceId,
-            }),
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.list", cause),
+              ),
+            ),
           ),
         ),
       )
@@ -65,7 +93,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
             listExecutionSteps({
               workspaceId: path.workspaceId,
               executionId: path.executionId,
-            }),
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.listSteps", cause),
+              ),
+            ),
           ),
         ),
       )
@@ -76,7 +108,11 @@ export const EngineExecutionsLive = HttpApiBuilder.group(
               workspaceId: path.workspaceId,
               executionSessionId: path.executionSessionId,
               accountId: runtimeLocalWorkspace.installation.accountId,
-            })
+            }).pipe(
+              Effect.mapError((cause) =>
+                toExecutionStorageError("executions.closeSession", cause),
+              ),
+            )
           ),
         ),
       ),

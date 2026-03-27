@@ -39,6 +39,7 @@ import {
   tracingSearchUrl,
 } from "./tracing";
 import { platformServerEffectError } from "./effect-errors";
+import { createEngineApiLayer } from "./api";
 import { ExecutorRpcs } from "./rpc";
 import { ExecutorRpcHandlerLive } from "./rpc/handler";
 
@@ -137,7 +138,9 @@ const createHttpWebHandler = (
         Layer.merge(
           HttpApiBuilder.middlewareOpenApi({ path: "/v1/openapi.json" }).pipe(
             Layer.provideMerge(
-              cp.apiLayer.pipe(
+              createEngineApiLayer(
+                cp.runtimeLayer as unknown as Layer.Layer<any, never, never>,
+              ).pipe(
                 Layer.provideMerge(tracingRuntime?.layer ?? Layer.empty),
               ),
             )

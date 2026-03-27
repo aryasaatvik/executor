@@ -23,6 +23,10 @@ import {
   SourceDiscoveryResultSchema,
   SourceProbeAuthSchema,
 } from "@executor/engine/schema";
+import {
+  ConnectSourcePayloadSchema,
+  type ConnectSourcePayload,
+} from "@executor/control-plane/services/engine/source-adapters";
 import * as Schema from "effect/Schema";
 
 import {
@@ -36,11 +40,6 @@ import {
   OptionalTrimmedNonEmptyStringSchema,
   TrimmedNonEmptyStringSchema,
 } from "../string-schemas";
-import {
-  ConnectSourcePayloadSchema,
-  type ConnectSourcePayload,
-} from "@executor/engine";
-
 const createSourcePayloadRequiredSchema = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   kind: SourceKindSchema,

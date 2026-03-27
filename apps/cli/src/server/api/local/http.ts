@@ -8,6 +8,12 @@ import { SecretMaterialIdSchema } from "@executor/control-plane/model";
 import { requireRuntimeLocalWorkspace } from "@executor/control-plane/services/engine/runtime-context";
 import { WorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
 import {
+  EngineStore,
+} from "@executor/control-plane/services/engine/store";
+import {
+  SourceStore,
+} from "@executor/control-plane/services/sources/source-service";
+import {
   createDefaultSecretMaterialDeleter,
   createDefaultSecretMaterialStorer,
   createDefaultSecretMaterialUpdater,
@@ -16,9 +22,7 @@ import {
   LOCAL_SECRET_PROVIDER_ID,
   parseSecretStoreProviderId,
   resolveDefaultSecretStoreProviderId,
-  SourceStore,
-  EngineStore,
-} from "@executor/engine";
+} from "@executor/world-local";
 import type {
   CreateSecretResult,
   InstanceConfig,

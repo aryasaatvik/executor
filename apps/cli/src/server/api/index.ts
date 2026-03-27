@@ -3,7 +3,7 @@ export {
   executorOpenApiSpec,
 } from "./api";
 
-export type { LocalInstallation } from "@executor/engine/schema";
+export type { LocalInstallation } from "@executor/world-local";
 
 export {
   EngineBadRequestError,

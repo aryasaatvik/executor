@@ -9,7 +9,7 @@ import * as Either from "effect/Either";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { SourceAuthService } from "@executor/engine";
+import { SourceAuthService } from "@executor/control-plane/services/sources/source-auth-service";
 import { EngineApi } from "../api";
 import {
   EngineBadRequestError,

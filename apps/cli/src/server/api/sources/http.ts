@@ -18,14 +18,18 @@ import {
   getSourceInspectionToolDetail,
 } from "@executor/control-plane/services/sources/source-inspection";
 import {
+  sourceAdapterRequiresInteractiveConnect,
+} from "@executor/control-plane/services/engine/source-adapters";
+import {
+  SourceAuthService,
+  type ExecutorAddSourceInput,
+} from "@executor/control-plane/services/sources/source-auth-service";
+import {
   createSource,
   updateSource,
   completeSourceCredentialSetup,
   getSourceCredentialInteraction,
   submitSourceCredentialInteraction,
-  sourceAdapterRequiresInteractiveConnect,
-  SourceAuthService,
-  type ExecutorAddSourceInput,
 } from "@executor/engine";
 
 import {
@@ -718,18 +722,20 @@ export const EngineSourcesLive = HttpApiBuilder.group(
                   cwd: payload.cwd,
                   baseUrl,
                 });
-              }
+	              }
 
-	              return yield* sourceAuthService.addExecutorSource(
-	                ({
-	                  workspaceId: path.workspaceId,
-	                  actorAccountId: runtimeLocalWorkspace.installation.accountId,
-	                  executionId: null,
-	                  interactionId: null,
-	                  ...(payload as Record<string, unknown>),
-	                } as ExecutorAddSourceInput),
-	                { baseUrl },
-	              );
+              const sourceInput = {
+                workspaceId: path.workspaceId,
+                actorAccountId: runtimeLocalWorkspace.installation.accountId,
+                executionId: null,
+                interactionId: null,
+                ...(payload as Record<string, unknown>),
+              } as unknown as ExecutorAddSourceInput;
+
+              return yield* sourceAuthService.addExecutorSource(
+                sourceInput,
+                { baseUrl },
+              );
             }).pipe(
               Effect.catchAll((cause) =>
                 Effect.fail(toBadRequestError("sources.connect", cause)),
@@ -846,7 +852,11 @@ export const EngineSourcesLive = HttpApiBuilder.group(
                 actorAccountId: runtimeLocalWorkspace.installation.accountId,
               }).pipe(
                 Effect.mapError((cause) =>
-                  toSourceStoreError("sources.list", cause),
+                  new EngineStorageError({
+                    operation: "sources.list",
+                    message: cause instanceof Error ? cause.message : String(cause),
+                    details: cause instanceof Error ? cause.message : String(cause),
+                  }),
                 ),
               );
             }),
@@ -936,7 +946,11 @@ export const EngineSourcesLive = HttpApiBuilder.group(
                 sourceId: path.sourceId,
               }).pipe(
                 Effect.mapError((cause) =>
-                  toSourceStoreError("sources.remove", cause),
+                  new EngineStorageError({
+                    operation: "sources.remove",
+                    message: cause instanceof Error ? cause.message : String(cause),
+                    details: cause instanceof Error ? cause.message : String(cause),
+                  }),
                 ),
               );
 

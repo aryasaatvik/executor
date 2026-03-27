@@ -1,6 +1,5 @@
 import type { WorkspaceId } from "@executor/control-plane/model";
 import {
-  RuntimeLocalWorkspaceMismatchError,
   requireRuntimeLocalWorkspace,
 } from "@executor/control-plane/services/engine/runtime-context";
 import * as Effect from "effect/Effect";
@@ -17,8 +16,11 @@ export const resolveRequestedLocalWorkspace = (
         operation,
         message: "Requested workspace is not the active local workspace",
         details:
-          cause instanceof RuntimeLocalWorkspaceMismatchError
-            ? `requestedWorkspaceId=${cause.requestedWorkspaceId} activeWorkspaceId=${cause.activeWorkspaceId}`
+          cause !== null
+          && typeof cause === "object"
+          && "requestedWorkspaceId" in cause
+          && "activeWorkspaceId" in cause
+            ? `requestedWorkspaceId=${String(cause.requestedWorkspaceId)} activeWorkspaceId=${String(cause.activeWorkspaceId)}`
             : "Runtime local workspace is unavailable",
       })
     ),
