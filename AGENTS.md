@@ -5,25 +5,25 @@
 
 ## OVERVIEW
 
-Local-first AI agent execution environment. Agent runs TypeScript against a typed tool catalog (MCP, OpenAPI, GraphQL sources) in a sandboxed runtime (QuickJS default). Daemon serves HTTP API + MCP endpoint + React UI at `http://127.0.0.1:8788`.
+Local-first AI agent execution environment. The repo is mid-migration from a single engine/daemon package to a control-plane architecture: typed API contract, execution runtimes, control-plane services, and platform-specific worlds. The local daemon still serves HTTP API + RPC + MCP, and the web app is now a TanStack Start control surface.
 
 ## STRUCTURE
 
 ```
 executor/
 ├── apps/
-│   ├── cli/          # CLI entrypoint, daemon lifecycle commands
-│   ├── server/       # HTTP server: /v1 API + /mcp + static UI
-│   └── web/          # React 19 + Vite + TanStack Router UI
+│   ├── cli/          # CLI entrypoint + local daemon server
+│   └── web/          # TanStack Start + Cloudflare Workers UI
 ├── packages/
-│   ├── engine/              # Core logic: sources, secrets, execution, persistence
-│   ├── kernel/
-│   │   ├── core/            # Tool abstractions, discovery, schemas
-│   │   ├── ir/              # Intermediate representation (catalog, ids)
-│   │   └── runtime-*/        # Sandbox runtimes (quickjs, ses, deno)
+│   ├── control-plane/       # Domain model, ports, service migration seam
+│   ├── engine/              # Transitional runtime/services still backing control-plane
+│   ├── execution/           # Runtime contract, IR, runtime implementations
+│   ├── executor-api/        # Typed REST contract
+│   ├── worlds/              # Local/cloudflare/testing world implementations
+│   ├── integrations/        # MCP bridge, AI SDK integration
 │   ├── sources/             # Source adapters (mcp, openapi, graphql, builtins…)
-│   ├── hosts/               # MCP bridge, AI SDK integration
-│   └── clients/react/       # React hooks
+│   ├── kernel/core/         # Remaining shared kernel abstractions
+│   └── clients/react/       # REST-based React hooks
 └── tools/oxlint/            # Custom monorepo lint rules
 ```
 
@@ -31,14 +31,15 @@ executor/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Source management logic | `packages/engine/src/runtime/sources/` | SourceStore, catalog sync, auth |
-| Execution creation/resume | `packages/engine/src/runtime/execution/` | ExecutionManager, pause/resume |
-| DB schema + migrations | `packages/engine/src/db/schema/` | Drizzle ORM, sqlite-vec |
-| HTTP API layer | `packages/engine/src/api/` | REST endpoints |
-| Effect Layer composition | `packages/engine/src/runtime/index.ts` | 5-tier runtime DAG |
-| Web UI components | `apps/web/src/components/` | React, Tailwind v4 |
+| Control-plane types | `packages/control-plane/src/create-control-plane.ts` | Shared control-plane runtime types only |
+| World contract | `packages/control-plane/src/world.ts` | Port surface for local/cloudflare/testing |
+| Local daemon server | `apps/cli/src/server/` | `/discover`, `/health`, `/rpc`, `/mcp`, `/v1/*` |
+| Local world implementation | `packages/worlds/local/src/` | Active local bootstrap + partially stubbed world ports |
+| REST contract | `packages/executor-api/src/` | Shared types for HTTP clients |
+| Web UI | `apps/web/src/` | TanStack Start routes, router, views |
+| React client hooks | `packages/clients/react/src/` | REST hooks over the control-plane API |
 | Source adapters | `packages/sources/*/src/` | MCP, OpenAPI, GraphQL, Google Discovery |
-| Sandbox runtimes | `packages/kernel/runtime-*/src/` | QuickJS (default), SES, Deno |
+| Sandbox runtimes | `packages/execution/runtime-*/src/` | QuickJS, SES, Deno, Cloudflare stub |
 
 ## CONVENTIONS
 
@@ -72,11 +73,9 @@ bun run trace:up    # Start Jaeger (docker)
 
 ## AGENTS.md LOCATIONS
 
-- `packages/engine/AGENTS.md` — Core business logic (Effect-TS, DB, runtime)
-- `apps/server/AGENTS.md` — HTTP server and routing
+- `packages/engine/AGENTS.md` — Transitional engine runtime/services
 - `packages/sources/AGENTS.md` — Source adapters domain
-- `packages/kernel/AGENTS.md` — Kernel abstractions and runtimes
-- `packages/hosts/AGENTS.md` — MCP bridge and AI SDK integration
-- `packages/clients/react/AGENTS.md` — React hooks
-- `apps/cli/AGENTS.md` — CLI entrypoint
-- `apps/web/AGENTS.md` — React web UI
+- `packages/kernel/AGENTS.md` — Remaining kernel abstractions
+- `packages/clients/react/AGENTS.md` — React REST hooks
+- `apps/cli/AGENTS.md` — CLI + local daemon
+- `apps/web/AGENTS.md` — TanStack Start web UI
