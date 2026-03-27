@@ -67,16 +67,12 @@ type SourceStoreShape = {
 
 /** Placeholder — engine's WorkspaceConfigStoreShape */
 type WorkspaceConfigStoreShape = {
-  load: (context: unknown) => Effect.Effect<{ config?: unknown } | null>;
+  load: (context: any) => Effect.Effect<{ config?: unknown } | null, unknown>;
 };
 
 /** Placeholder — engine's SourceAuthMaterial shape */
 type SourceAuthMaterialShape = {
-  resolve: (input: {
-    source: unknown;
-    actorAccountId: AccountId;
-    context?: unknown;
-  }) => Effect.Effect<unknown, unknown>;
+  resolve: (input: any) => Effect.Effect<unknown, unknown>;
 };
 
 /** Placeholder — engine's SourceAuthService shape */
@@ -87,7 +83,7 @@ type ResolveSecretMaterial = unknown;
 
 /** Placeholder — engine's LocalToolRuntimeLoaderShape */
 type LocalToolRuntimeLoaderShape = {
-  load: (context: unknown) => Effect.Effect<LocalToolRuntime>;
+  load: (context: any) => Effect.Effect<LocalToolRuntime, unknown>;
 };
 
 type WorkspaceCatalogCacheEntry = {

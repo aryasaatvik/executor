@@ -201,6 +201,7 @@ export {
 } from "./policy";
 
 export {
+  LocalConfigSemanticSearchSchema,
   LocalExecutorConfigSchema,
   type LocalExecutorRuntime,
   type LocalExecutorConfig,

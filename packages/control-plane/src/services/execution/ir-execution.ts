@@ -55,17 +55,7 @@ export type ResolvedSourceAuthMaterial = {
 /** Placeholder for engine's SourceAdapter */
 type SourceAdapter = {
   key: string;
-  invoke: (input: {
-    source: unknown;
-    capability: unknown;
-    executable: unknown;
-    descriptor: unknown;
-    catalog: unknown;
-    args: unknown;
-    auth: unknown;
-    onElicitation?: OnElicitation;
-    context?: Record<string, unknown>;
-  }) => Effect.Effect<unknown, unknown>;
+  invoke: (input: any) => Effect.Effect<unknown, unknown>;
 };
 
 // TODO: Replace with proper source adapter resolution from @executor/sources
