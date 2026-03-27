@@ -19,8 +19,6 @@ import {
   WorkspaceConfig,
 } from "@executor/control-plane/ports";
 import type { ExecutorWorld } from "@executor/control-plane/world";
-import {
-} from "@executor/engine";
 
 import { createSqliteExecutionStore } from "./stores/execution-store";
 import { createSqliteSourceStore } from "./stores/source-store";
@@ -155,6 +153,7 @@ export {
 
 export {
   type LocalInstallation,
+  LocalInstallationSchema,
   deriveLocalInstallation,
   loadLocalInstallation,
   getOrProvisionLocalInstallation,
@@ -198,6 +197,14 @@ export {
 } from "./stores/workspace-database";
 
 export {
+  ENV_SECRET_PROVIDER_ID,
+  KEYCHAIN_SECRET_PROVIDER_ID,
+  LOCAL_SECRET_PROVIDER_ID,
+  parseSecretStoreProviderId,
+  resolveDefaultSecretStoreProviderId,
+  createDefaultSecretMaterialStorer,
+  createDefaultSecretMaterialUpdater,
+  createDefaultSecretMaterialDeleter,
   SecretMaterialStore,
   SecretMaterialStoreLive,
   SecretMaterialLive,

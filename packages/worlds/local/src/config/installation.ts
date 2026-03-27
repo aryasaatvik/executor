@@ -6,6 +6,7 @@ import {
 } from "@executor/control-plane/model";
 import type { AccountId, WorkspaceId } from "@executor/control-plane/model";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import type { ResolvedLocalWorkspaceContext } from "./config";
 
@@ -13,6 +14,11 @@ export type LocalInstallation = {
   accountId: AccountId;
   workspaceId: WorkspaceId;
 };
+
+export const LocalInstallationSchema = Schema.Struct({
+  accountId: AccountIdSchema,
+  workspaceId: WorkspaceIdSchema,
+});
 
 const LOCAL_ACCOUNT_ID = AccountIdSchema.make("acc_local_default");
 

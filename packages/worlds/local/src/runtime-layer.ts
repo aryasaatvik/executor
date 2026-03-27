@@ -3,7 +3,7 @@ import type {
   ControlPlaneOptions,
   ControlPlaneRuntimeLayer,
 } from "@executor/control-plane";
-import { type RuntimeRegistryShape } from "@executor/control-plane/ports/runtime-registry";
+import { type RuntimeRegistryShape } from "@executor/control-plane/ports";
 import {
   ExecutionEnvironmentResolver,
   ExecutionManager as ControlPlaneExecutionManager,
@@ -17,48 +17,25 @@ import {
   SourceAuthMaterial as ControlPlaneSourceAuthMaterial,
   RuntimeSourceAuthMaterialLive,
 } from "@executor/control-plane/services/auth/source-auth-material";
-import {
-  SourceCatalogSync as ControlPlaneSourceCatalogSync,
-  RuntimeSourceCatalogSyncLive,
-} from "@executor/control-plane/services/catalog/catalog-sync";
-import {
-  EngineStore as ControlPlaneEngineStore,
-  type EngineStoreShape as ControlPlaneEngineStoreShape,
-} from "@executor/control-plane/services/engine/store";
+import { RuntimeSourceCatalogSyncLive } from "@executor/control-plane/services/catalog/catalog-sync";
+import { EngineStore as ControlPlaneEngineStore } from "@executor/control-plane/services/engine/store";
 import {
   RuntimeLocalWorkspace as ControlPlaneRuntimeLocalWorkspace,
   type RuntimeLocalWorkspaceState as ControlPlaneRuntimeLocalWorkspaceState,
 } from "@executor/control-plane/services/engine/runtime-context";
-import {
-  WorkspaceConfigStore as ControlPlaneWorkspaceConfigStore,
-  type WorkspaceConfigStoreShape as ControlPlaneWorkspaceConfigStoreShape,
-} from "@executor/control-plane/services/engine/local-storage";
-import {
-  WorkspaceDatabase as ControlPlaneWorkspaceDatabase,
-  type WorkspaceDatabaseShape as ControlPlaneWorkspaceDatabaseShape,
-} from "@executor/control-plane/services/engine/workspace-database";
-import {
-  SecretMaterialStore as ControlPlaneSecretMaterialStore,
-  type SecretMaterialStoreShape as ControlPlaneSecretMaterialStoreShape,
-} from "@executor/control-plane/services/engine/secret-material-store";
-import {
-  evaluateInvocationPolicy,
-} from "@executor/control-plane/services/policy/invocation-policy-engine";
-import {
-  loadRuntimeLocalWorkspacePolicies,
-} from "@executor/control-plane/services/policy/policies-operations";
-import {
-  getSourceAdapter,
-} from "@executor/control-plane/services/engine/source-adapters";
+import { WorkspaceConfigStore as ControlPlaneWorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
+import { WorkspaceDatabase as ControlPlaneWorkspaceDatabase } from "@executor/control-plane/services/engine/workspace-database";
+import { SecretMaterialStore as ControlPlaneSecretMaterialStore } from "@executor/control-plane/services/engine/secret-material-store";
+import { evaluateInvocationPolicy } from "@executor/control-plane/services/policy/invocation-policy-engine";
+import { loadRuntimeLocalWorkspacePolicies } from "@executor/control-plane/services/policy/policies-operations";
+import { getSourceAdapter } from "@executor/control-plane/services/engine/source-adapters";
 import {
   SourceStore as ControlPlaneSourceStore,
-  type RuntimeSourceStore as ControlPlaneRuntimeSourceStore,
   RuntimeSourceStoreLive,
 } from "@executor/control-plane/services/sources/source-service";
 import {
   SourceAuthService as ControlPlaneSourceAuthService,
   RuntimeSourceAuthServiceLive,
-  type RuntimeSourceAuthService,
 } from "@executor/control-plane/services/sources/source-auth-service";
 import {
   createEngineApiLayer,
@@ -68,7 +45,6 @@ import {
   RuntimeSourceCatalogStoreLive,
   SourceAuthService as EngineSourceAuthService,
   SourceCatalogStore as EngineSourceCatalogStore,
-  SourceCatalogSync as EngineSourceCatalogSync,
   SourceStore as EngineSourceStore,
   WorkspaceConfigStore as EngineWorkspaceConfigStore,
   WorkspaceDatabase as EngineWorkspaceDatabase,
@@ -92,6 +68,7 @@ import {
 import {
   WorkspaceDatabase,
   WorkspaceDatabaseLive,
+  makeWorkspaceDatabase,
 } from "./stores/workspace-database";
 import {
   SecretMaterialStore,
@@ -102,22 +79,13 @@ import {
   LocalToolRuntimeLoaderLive,
 } from "./registry/tool-runtime-loader";
 
-const bridgeService = (
-  service: Effect.Effect<any, never, never>,
-  tag: { of: (service: any) => any },
-) =>
-  Layer.effect(tag as never, Effect.map(service, (value) => tag.of(value)));
-
 const policyDecisionToLegacyShape = (
   decision: ReturnType<typeof evaluateInvocationPolicy>,
 ): {
   kind: "allow" | "deny" | "ask";
   reason: string;
 } => ({
-  kind:
-    decision.kind === "require_interaction"
-      ? "ask"
-      : decision.kind,
+  kind: decision.kind === "require_interaction" ? "ask" : decision.kind,
   reason: decision.reason,
 });
 
@@ -136,36 +104,48 @@ export const createLocalRuntimeLayer = (
   runtimeLayer: ControlPlaneRuntimeLayer;
   apiLayer: ReturnType<typeof createEngineApiLayer>;
 } => {
-  setSourceAdapterResolver(getSourceAdapter);
+  const liveExecutionManager = createLiveExecutionManager();
+  const runtimeLocalWorkspaceState =
+    input.localWorkspaceState as ControlPlaneRuntimeLocalWorkspaceState;
+  const workspaceDatabase = makeWorkspaceDatabase(input.localWorkspaceState);
+
+  setSourceAdapterResolver(
+    getSourceAdapter as Parameters<typeof setSourceAdapterResolver>[0],
+  );
   setPolicyResolver({
     evaluateInvocationPolicy: (policyInput) =>
       policyDecisionToLegacyShape(evaluateInvocationPolicy(policyInput as never)),
     loadRuntimeLocalWorkspacePolicies: (workspaceId) =>
       loadRuntimeLocalWorkspacePolicies(workspaceId).pipe(
+        Effect.provideService(
+          ControlPlaneRuntimeLocalWorkspace,
+          runtimeLocalWorkspaceState,
+        ),
+        Effect.provideService(
+          ControlPlaneWorkspaceDatabase,
+          workspaceDatabase as Effect.Effect.Success<
+            typeof ControlPlaneWorkspaceDatabase
+          >,
+        ),
         Effect.map(({ policies }) => ({ policies })),
       ),
   });
 
-  const liveExecutionManager = createLiveExecutionManager();
-
-  const runtimeLocalWorkspaceState =
-    input.localWorkspaceState as ControlPlaneRuntimeLocalWorkspaceState;
-
-  const tier1_foundation = Layer.mergeAll(
+  const foundationLayer = Layer.mergeAll(
     RuntimeLocalWorkspaceLive(input.localWorkspaceState),
     Layer.succeed(EngineStore, input.store),
     Layer.succeed(
       ControlPlaneEngineStore,
-      input.store as unknown as ControlPlaneEngineStoreShape,
+      input.store as Effect.Effect.Success<typeof ControlPlaneEngineStore>,
     ),
     Layer.succeed(
       EngineStoreTag,
-      input.store as unknown as Effect.Effect.Success<typeof EngineStoreTag>,
+      input.store as Effect.Effect.Success<typeof EngineStoreTag>,
     ),
     Layer.succeed(ControlPlaneRuntimeLocalWorkspace, runtimeLocalWorkspaceState),
     Layer.succeed(
       EngineRuntimeLocalWorkspace,
-      runtimeLocalWorkspaceState as unknown as Effect.Effect.Success<
+      runtimeLocalWorkspaceState as Effect.Effect.Success<
         typeof EngineRuntimeLocalWorkspace
       >,
     ),
@@ -188,25 +168,52 @@ export const createLocalRuntimeLayer = (
     Layer.provide(platformLayer),
   );
 
-  const workspaceConfigBridgeLayer = Layer.mergeAll(
-    bridgeService(WorkspaceConfigStore, ControlPlaneWorkspaceConfigStore),
-    bridgeService(WorkspaceConfigStore, EngineWorkspaceConfigStore),
+  const controlPlaneWorkspaceConfigLayer = Layer.effect(
+    ControlPlaneWorkspaceConfigStore,
+    Effect.map(
+      WorkspaceConfigStore,
+      (service) =>
+        service as Effect.Effect.Success<typeof ControlPlaneWorkspaceConfigStore>,
+    ),
   );
 
-  const tier2_filesystem = Layer.mergeAll(
+  const engineWorkspaceConfigLayer = Layer.effect(
+    EngineWorkspaceConfigStore,
+    Effect.map(
+      WorkspaceConfigStore,
+      (service) =>
+        service as Effect.Effect.Success<typeof EngineWorkspaceConfigStore>,
+    ),
+  );
+
+  const filesystemLayer = Layer.mergeAll(
     platformLayer,
     localWorkspaceConfigLayer,
     localToolRuntimeLayer,
-    workspaceConfigBridgeLayer,
+    controlPlaneWorkspaceConfigLayer,
+    engineWorkspaceConfigLayer,
   );
 
   const worldWorkspaceDatabaseLayer = WorkspaceDatabaseLive.pipe(
-    Layer.provide(tier1_foundation),
+    Layer.provide(foundationLayer),
   );
 
-  const workspaceDatabaseBridgeLayer = Layer.mergeAll(
-    bridgeService(WorkspaceDatabase, ControlPlaneWorkspaceDatabase),
-    bridgeService(WorkspaceDatabase, EngineWorkspaceDatabase),
+  const controlPlaneWorkspaceDatabaseLayer = Layer.effect(
+    ControlPlaneWorkspaceDatabase,
+    Effect.map(
+      WorkspaceDatabase,
+      (service) =>
+        service as Effect.Effect.Success<typeof ControlPlaneWorkspaceDatabase>,
+    ),
+  );
+
+  const engineWorkspaceDatabaseLayer = Layer.effect(
+    EngineWorkspaceDatabase,
+    Effect.map(
+      WorkspaceDatabase,
+      (service) =>
+        service as Effect.Effect.Success<typeof EngineWorkspaceDatabase>,
+    ),
   );
 
   const worldSecretMaterialLayer = SecretMaterialStoreLive({
@@ -214,71 +221,56 @@ export const createLocalRuntimeLayer = (
     localConfig: input.localWorkspaceState.loadedConfig.config,
     workspaceRoot: input.localWorkspaceState.context.workspaceRoot,
   }).pipe(
-    Layer.provide(Layer.mergeAll(tier1_foundation, tier2_filesystem)),
+    Layer.provide(Layer.mergeAll(foundationLayer, filesystemLayer)),
   );
 
-  const controlPlaneSecretMaterialLayer = bridgeService(
-    SecretMaterialStore.pipe(
-      Effect.map(
-        (service) =>
-          service as unknown as ControlPlaneSecretMaterialStoreShape,
-      ),
-    ),
+  const controlPlaneSecretMaterialLayer = Layer.effect(
     ControlPlaneSecretMaterialStore,
+    Effect.map(
+      SecretMaterialStore,
+      (service) =>
+        service as Effect.Effect.Success<typeof ControlPlaneSecretMaterialStore>,
+    ),
   );
 
   const controlPlaneSourceStoreLayer = RuntimeSourceStoreLive.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        tier1_foundation,
-        workspaceConfigBridgeLayer,
-      ),
-    ),
+    Layer.provide(Layer.mergeAll(foundationLayer, filesystemLayer)),
   );
 
-  const engineSourceStoreBridgeLayer = bridgeService(
-    ControlPlaneSourceStore.pipe(
-      Effect.map(
-        (service) =>
-          service as unknown as Effect.Effect.Success<typeof EngineSourceStore>,
-      ),
-    ),
+  const engineSourceStoreLayer = Layer.effect(
     EngineSourceStore,
+    Effect.map(
+      ControlPlaneSourceStore,
+      (service) =>
+        service as Effect.Effect.Success<typeof EngineSourceStore>,
+    ),
   );
 
   const engineSourceCatalogStoreLayer = RuntimeSourceCatalogStoreLive.pipe(
     Layer.provide(
       Layer.mergeAll(
-        tier1_foundation,
-        engineSourceStoreBridgeLayer,
-        workspaceDatabaseBridgeLayer,
+        foundationLayer,
+        engineSourceStoreLayer,
+        engineWorkspaceDatabaseLayer,
       ),
     ),
   );
 
   const controlPlaneSourceAuthMaterialLayer = RuntimeSourceAuthMaterialLive.pipe(
     Layer.provide(
-      Layer.mergeAll(
-        tier1_foundation,
-        controlPlaneSecretMaterialLayer,
-      ),
+      Layer.mergeAll(foundationLayer, controlPlaneSecretMaterialLayer),
     ),
   );
 
   const controlPlaneSourceCatalogSyncLayer = RuntimeSourceCatalogSyncLive.pipe(
     Layer.provide(
       Layer.mergeAll(
-        tier1_foundation,
+        foundationLayer,
         controlPlaneSourceAuthMaterialLayer,
         controlPlaneSecretMaterialLayer,
-        workspaceDatabaseBridgeLayer,
+        controlPlaneWorkspaceDatabaseLayer,
       ),
     ),
-  );
-
-  const engineSourceCatalogSyncBridgeLayer = bridgeService(
-    ControlPlaneSourceCatalogSync,
-    EngineSourceCatalogSync,
   );
 
   const controlPlaneSourceAuthServiceLayer = RuntimeSourceAuthServiceLive({
@@ -286,7 +278,7 @@ export const createLocalRuntimeLayer = (
   }).pipe(
     Layer.provide(
       Layer.mergeAll(
-        tier1_foundation,
+        foundationLayer,
         controlPlaneSourceStoreLayer,
         controlPlaneSourceCatalogSyncLayer,
         controlPlaneSecretMaterialLayer,
@@ -294,67 +286,63 @@ export const createLocalRuntimeLayer = (
     ),
   );
 
-  const engineSourceAuthServiceBridgeLayer = bridgeService(
-    ControlPlaneSourceAuthService.pipe(
-      Effect.map(
-        (service) =>
-          service as unknown as Effect.Effect.Success<typeof EngineSourceAuthService>,
-      ),
-    ),
+  const engineSourceAuthServiceLayer = Layer.effect(
     EngineSourceAuthService,
+    Effect.map(
+      ControlPlaneSourceAuthService,
+      (service) =>
+        service as Effect.Effect.Success<typeof EngineSourceAuthService>,
+    ),
   );
 
-  const executionResolverLayer =
-    input.executionResolver
-      ? Layer.succeed(ExecutionEnvironmentResolver, input.executionResolver)
-      : Layer.effect(
-          ExecutionEnvironmentResolver,
-          Effect.gen(function* () {
-            const sourceAuthMaterialService = yield* ControlPlaneSourceAuthMaterial;
-            const sourceAuthService = yield* ControlPlaneSourceAuthService;
-            const sourceCatalogStore = yield* EngineSourceCatalogStore;
-            const sourceStore = yield* ControlPlaneSourceStore;
-            const workspaceConfigStore = yield* ControlPlaneWorkspaceConfigStore;
-            const localToolRuntimeLoader = yield* LocalToolRuntimeLoader;
-            const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
-            const workspaceSourceCatalogManager =
-              yield* makeWorkspaceSourceCatalogManager();
+  const executionResolverLayer = input.executionResolver
+    ? Layer.succeed(ExecutionEnvironmentResolver, input.executionResolver)
+    : Layer.effect(
+        ExecutionEnvironmentResolver,
+        Effect.gen(function* () {
+          const sourceAuthMaterialService = yield* ControlPlaneSourceAuthMaterial;
+          const sourceAuthService = yield* ControlPlaneSourceAuthService;
+          const sourceCatalogStore = yield* EngineSourceCatalogStore;
+          const sourceStore = yield* ControlPlaneSourceStore;
+          const workspaceConfigStore = yield* ControlPlaneWorkspaceConfigStore;
+          const localToolRuntimeLoader = yield* LocalToolRuntimeLoader;
+          const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
+          const workspaceSourceCatalogManager =
+            yield* makeWorkspaceSourceCatalogManager();
 
-            return ExecutionEnvironmentResolver.of(
-              createWorkspaceExecutionEnvironmentResolver({
-                resolveSecretMaterial: secretMaterialStore.resolve,
-                sourceAuthMaterialService,
-                sourceAuthService,
-                sourceCatalogStore,
-                sourceStore,
-                runtimeRegistry: input.runtimeRegistry,
-                localToolRuntimeLoader,
-                workspaceConfigStore,
-                dependencies: {
-                  getRuntimeLocalWorkspaceOption: () =>
-                    Effect.succeed(input.localWorkspaceState),
-                  workspaceSourceCatalogManager,
-                },
-              }),
-            );
-          }),
-        );
+          return createWorkspaceExecutionEnvironmentResolver({
+            resolveSecretMaterial: secretMaterialStore.resolve,
+            sourceAuthMaterialService,
+            sourceAuthService,
+            sourceCatalogStore,
+            sourceStore,
+            runtimeRegistry: input.runtimeRegistry,
+            localToolRuntimeLoader,
+            workspaceConfigStore,
+            dependencies: {
+              getRuntimeLocalWorkspaceOption: () =>
+                Effect.succeed(input.localWorkspaceState),
+              workspaceSourceCatalogManager,
+            },
+          });
+        }),
+      );
 
   const runtimeLayer = Layer.mergeAll(
-    tier1_foundation,
-    tier2_filesystem,
+    foundationLayer,
+    filesystemLayer,
     worldWorkspaceDatabaseLayer,
-    workspaceDatabaseBridgeLayer,
+    controlPlaneWorkspaceDatabaseLayer,
+    engineWorkspaceDatabaseLayer,
     worldSecretMaterialLayer,
     controlPlaneSecretMaterialLayer,
     controlPlaneSourceStoreLayer,
-    engineSourceStoreBridgeLayer,
+    engineSourceStoreLayer,
     engineSourceCatalogStoreLayer,
     controlPlaneSourceAuthMaterialLayer,
     controlPlaneSourceCatalogSyncLayer,
-    engineSourceCatalogSyncBridgeLayer,
     controlPlaneSourceAuthServiceLayer,
-    engineSourceAuthServiceBridgeLayer,
+    engineSourceAuthServiceLayer,
     executionResolverLayer,
   ) as ControlPlaneRuntimeLayer;
 

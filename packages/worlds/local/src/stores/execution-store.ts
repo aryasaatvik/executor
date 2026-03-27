@@ -174,13 +174,15 @@ export const createSqliteExecutionStore = (
       }),
 
     getInteractionById: (input) =>
-      rows.executionInteractions.getById(input.interactionId).pipe(
+      rows.executionInteractions
+        .getById(ExecutionInteractionIdSchema.make(input.interactionId))
+        .pipe(
         Effect.map((option) => (Option.isSome(option) ? option.value : null)),
       ),
 
     resolveInteraction: (input) =>
       rows.executionInteractions
-        .update(input.interactionId, {
+        .update(ExecutionInteractionIdSchema.make(input.interactionId), {
           status: "resolved",
           responseJson: input.responseJson,
           responsePrivateJson: input.responsePrivateJson ?? null,
