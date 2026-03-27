@@ -1,54 +1,79 @@
 # Web App Agents
 
 ## Stack
-- React 19 + Vite (bunx --bun vite dev)
-- TanStack Router (file-based route tree defined in `src/main.tsx`)
-- Tailwind v4 + tw-animate-css (CSS-first config in `src/globals.css`)
-- `@executor/react` from `packages/clients/react` (workspace:* dep)
-- `@executor/engine/client` for API calls (Effect-based RPC)
 
-## Directory Structure
+- React 19
+- TanStack Start + file-based routes
+- Vite + Cloudflare Workers plugin
+- Tailwind v4 + tw-animate-css
+- `@executor/react` REST hooks
+
+## Entry points
+
 ```
 src/
-  main.tsx        — Router tree + App entry (ExecutorReactProvider wraps RouterProvider)
-  frontend.tsx    — Possibly alternative entry
-  server.ts       — Production server entry
-  globals.css     — Tailwind v4 theme (CSS @theme block), custom fonts (DM Sans, JetBrains Mono, Instrument Serif)
-  components/
-    shell.tsx     — AppShell: sidebar + Outlet. Sidebar has nav (Dashboard/Executions/Secrets/Settings) + source list
-    loadable.tsx  — LoadableBlock: renders {loading, error, ready} states from @executor/react Loadable type
-    ui/           — Button, Badge variants (cva + clsx + tailwind-merge)
-    code-block.tsx, document-panel.tsx, markdown.tsx, icons.tsx, etc.
+  start.tsx       — TanStack Start instance
+  server.ts       — Workers server entry
+  router.tsx      — createRouter(routeTree)
+  route-tree.gen.ts — generated route tree
+  globals.css     — global theme + fonts
+```
+
+## Directory Structure
+
+```
+src/
+  routes/
+    __root.tsx
+    index.tsx
+    executions.tsx
+    secrets.tsx
+    settings.tsx
+    sources/
+      add.tsx
+      new.tsx
+      $sourceId.tsx
+      $sourceId.edit.tsx
   views/
-    dashboard.tsx     — DashboardPage: stats cards, top tools bar chart, recent executions, source grid
-    executions.tsx    — ExecutionsPage: filter bar (status + search), stream-style row list, ExecutionDetailDrawer overlay
-    source-detail.tsx — SourceDetailPage: tabbed (model/discover), tool list, search, document panel
-    source-editor.tsx — EditSourcePage + NewSourcePage
-    add-source.tsx    — AddSourcePage
-    secrets.tsx       — SecretsPage
-    settings.tsx      — SettingsPage
-  lib/
-    utils.ts     — cn() helper (clsx + twMerge)
-    schema-display.ts, shiki.ts, source-favicon.ts
+    dashboard.tsx
+    executions.tsx
+    source-detail.tsx
+    source-editor.tsx
+    add-source.tsx
+    secrets.tsx
+    settings.tsx
+  components/
+    shell.tsx
+    loadable.tsx
+    ui/
 ```
 
 ## Routing
-- `rootRoute` -> `AppShell` component
-- Child routes: `/` (DashboardPage), `/executions` (ExecutionsPage), `/sources/new`, `/sources/add`, `/sources/$sourceId`, `/sources/$sourceId/edit`, `/secrets`, `/settings`
-- `SourceRouteSearch` type: `{ tab: "model"|"discover", tool?: string, query?: string }` — validated on `sourceRoute`
+
+- Root route wraps `AppShell` in `ExecutorReactProvider`
+- Active routes:
+  - `/`
+  - `/executions`
+  - `/secrets`
+  - `/settings`
+  - `/sources/add`
+  - `/sources/new`
+  - `/sources/$sourceId`
+  - `/sources/$sourceId/edit`
 
 ## API / State Layer
-- `ExecutorReactProvider` wraps the app — provides `RegistryProvider` (effect-atom/atom-react) + query context
-- Default base URL: `window.location.origin` in browser, `http://127.0.0.1:8788` fallback
-- All data hooks return `Loadable<T>`: `{ status: "loading" } | { status: "error", error: Error } | { status: "ready", data: T }`
-- Family atoms for: sources, source, sourceInspection, sourceInspectionTool, sourceDiscovery, executions, executionSteps, secrets, instanceConfig, localInstallation, workspaceOauthClients
-- Mutations (`useCreateSource`, `useUpdateSource`, `useRemoveSource`, `useConnectSource`, etc.) use optimistic updates with rollback via effect-atom registry cache
-- `invalidateTrackedQueries()` selectively refreshes atoms after mutations
 
-## Key UI Patterns
-- Sidebar: `w-52` fixed, source list with status dot (color-coded), "Add" button links to `/sources/add`
-- Source favicon: resolved from endpoint + kind + iconUrl via `lib/source-favicon.ts`
-- `LoadableBlock` component unwraps Loadable and renders children with loading/error states
-- Status colors: connected (primary), probing (amber), draft (muted), auth_required (amber), error (destructive)
-- Code display: shiki for syntax highlighting (themes + langs from npm)
-- Drawer overlay for execution details (ExecutionDetailDrawer)
+- `@executor/react` is plain fetch-based, not Effect RPC
+- Hooks now target the real server API shape:
+  - `/discover`
+  - `/health`
+  - `/v1/local/*`
+  - `/v1/workspaces/:workspaceId/*`
+  - `/v1/sources/discover`
+- `useLocalInstallation()` resolves the workspace scope that other hooks build on
+- All hooks return `Loadable<T>`
+
+## Notes
+
+- `apps/web` typechecks and builds cleanly
+- There is still a duplicated generated artifact risk if `routeTree.gen.ts` reappears; the active generated file is `route-tree.gen.ts`

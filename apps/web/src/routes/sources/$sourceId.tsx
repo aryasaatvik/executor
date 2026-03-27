@@ -9,7 +9,7 @@ type SourceRouteSearch = {
 
 const sourceTabs = ["model", "discover"] as const;
 
-export const Route = createFileRoute("/sources/$source-id")({
+export const Route = createFileRoute("/sources/$sourceId")({
   validateSearch: (search: Record<string, unknown>): SourceRouteSearch => ({
     tab:
       typeof search.tab === "string" &&

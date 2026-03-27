@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { EditSourcePage } from "../../views/source-editor";
 
-export const Route = createFileRoute("/sources/$source-id/edit")({
+export const Route = createFileRoute("/sources/$sourceId/edit")({
   component: EditSourceRouteComponent,
 });
 

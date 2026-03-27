@@ -15,8 +15,8 @@ import { Route as ExecutionsRouteImport } from './routes/executions'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SourcesNewRouteImport } from './routes/sources/new'
 import { Route as SourcesAddRouteImport } from './routes/sources/add'
-import { Route as SourcesSourceIdRouteImport } from './routes/sources/$source-id'
-import { Route as SourcesSourceIdEditRouteImport } from './routes/sources/$source-id.edit'
+import { Route as SourcesSourceIdRouteImport } from './routes/sources/$sourceId'
+import { Route as SourcesSourceIdEditRouteImport } from './routes/sources/$sourceId.edit'
 
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
@@ -49,8 +49,8 @@ const SourcesAddRoute = SourcesAddRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const SourcesSourceIdRoute = SourcesSourceIdRouteImport.update({
-  id: '/sources/$source-id',
-  path: '/sources/$source-id',
+  id: '/sources/$sourceId',
+  path: '/sources/$sourceId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SourcesSourceIdEditRoute = SourcesSourceIdEditRouteImport.update({
@@ -64,20 +64,20 @@ export interface FileRoutesByFullPath {
   '/executions': typeof ExecutionsRoute
   '/secrets': typeof SecretsRoute
   '/settings': typeof SettingsRoute
-  '/sources/$source-id': typeof SourcesSourceIdRouteWithChildren
+  '/sources/$sourceId': typeof SourcesSourceIdRouteWithChildren
   '/sources/add': typeof SourcesAddRoute
   '/sources/new': typeof SourcesNewRoute
-  '/sources/$source-id/edit': typeof SourcesSourceIdEditRoute
+  '/sources/$sourceId/edit': typeof SourcesSourceIdEditRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/executions': typeof ExecutionsRoute
   '/secrets': typeof SecretsRoute
   '/settings': typeof SettingsRoute
-  '/sources/$source-id': typeof SourcesSourceIdRouteWithChildren
+  '/sources/$sourceId': typeof SourcesSourceIdRouteWithChildren
   '/sources/add': typeof SourcesAddRoute
   '/sources/new': typeof SourcesNewRoute
-  '/sources/$source-id/edit': typeof SourcesSourceIdEditRoute
+  '/sources/$sourceId/edit': typeof SourcesSourceIdEditRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -85,10 +85,10 @@ export interface FileRoutesById {
   '/executions': typeof ExecutionsRoute
   '/secrets': typeof SecretsRoute
   '/settings': typeof SettingsRoute
-  '/sources/$source-id': typeof SourcesSourceIdRouteWithChildren
+  '/sources/$sourceId': typeof SourcesSourceIdRouteWithChildren
   '/sources/add': typeof SourcesAddRoute
   '/sources/new': typeof SourcesNewRoute
-  '/sources/$source-id/edit': typeof SourcesSourceIdEditRoute
+  '/sources/$sourceId/edit': typeof SourcesSourceIdEditRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -97,30 +97,30 @@ export interface FileRouteTypes {
     | '/executions'
     | '/secrets'
     | '/settings'
-    | '/sources/$source-id'
+    | '/sources/$sourceId'
     | '/sources/add'
     | '/sources/new'
-    | '/sources/$source-id/edit'
+    | '/sources/$sourceId/edit'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/executions'
     | '/secrets'
     | '/settings'
-    | '/sources/$source-id'
+    | '/sources/$sourceId'
     | '/sources/add'
     | '/sources/new'
-    | '/sources/$source-id/edit'
+    | '/sources/$sourceId/edit'
   id:
     | '__root__'
     | '/'
     | '/executions'
     | '/secrets'
     | '/settings'
-    | '/sources/$source-id'
+    | '/sources/$sourceId'
     | '/sources/add'
     | '/sources/new'
-    | '/sources/$source-id/edit'
+    | '/sources/$sourceId/edit'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -177,17 +177,17 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SourcesAddRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sources/$source-id': {
-      id: '/sources/$source-id'
-      path: '/sources/$source-id'
-      fullPath: '/sources/$source-id'
+    '/sources/$sourceId': {
+      id: '/sources/$sourceId'
+      path: '/sources/$sourceId'
+      fullPath: '/sources/$sourceId'
       preLoaderRoute: typeof SourcesSourceIdRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/sources/$source-id/edit': {
-      id: '/sources/$source-id/edit'
+    '/sources/$sourceId/edit': {
+      id: '/sources/$sourceId/edit'
       path: '/edit'
-      fullPath: '/sources/$source-id/edit'
+      fullPath: '/sources/$sourceId/edit'
       preLoaderRoute: typeof SourcesSourceIdEditRouteImport
       parentRoute: typeof SourcesSourceIdRoute
     }

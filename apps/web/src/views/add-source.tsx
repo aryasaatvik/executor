@@ -487,7 +487,7 @@ const buildConnectPayload = (form: ConnectFormState): ConnectSourcePayload => {
       workspaceOauthClientId:
         form.authKind === "oauth2" &&
         form.workspaceOauthClientId.trim().length > 0
-          ? form.workspaceOauthClientId.trim()
+          ? (form.workspaceOauthClientId.trim() as WorkspaceOauthClient["id"])
           : undefined,
       oauthClient:
         form.authKind === "oauth2" &&

@@ -1,7 +1,5 @@
 import { createStart } from "@tanstack/react-start";
 
-export const startInstance = createStart({
-  defaultSsr: true,
-});
+export const startInstance = createStart(() => ({}));
 
 export default startInstance;
