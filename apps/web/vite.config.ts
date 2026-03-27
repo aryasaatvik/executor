@@ -12,7 +12,7 @@ export default defineConfig({
       start: { entry: "./start.tsx" },
       server: { entry: "./server.ts" },
       tsr: {
-        generatedRouteTree: "./src/route-tree.gen.ts",
+        generatedRouteTree: "./src/routeTree.gen.ts",
         routesDirectory: "./src/routes",
       },
     }),

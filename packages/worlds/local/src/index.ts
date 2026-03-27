@@ -20,9 +20,6 @@ import {
 } from "@executor/control-plane/ports";
 import type { ExecutorWorld } from "@executor/control-plane/world";
 import {
-  createEngineApiLayer,
-  createRuntimeEngineLayer,
-  createLiveExecutionManager,
 } from "@executor/engine";
 
 import { createSqliteExecutionStore } from "./stores/execution-store";
@@ -38,6 +35,7 @@ import { resolveLocalWorkspaceContext } from "./config/config";
 import { LocalWorkspaceConfigStore } from "./config/local-storage";
 import { getOrProvisionLocalInstallation } from "./config/installation";
 import { createLocalEnginePersistence } from "./stores/engine-store";
+import { createLocalRuntimeLayer } from "./runtime-layer";
 
 export interface LocalConfig {
   readonly dataDir: string;
@@ -84,14 +82,14 @@ export const createLocalControlPlane = (
   options: LocalControlPlaneOptions = {},
 ): Effect.Effect<ControlPlane, Error> =>
   Effect.gen(function* () {
-    const world = createLocalWorld({
+    const baseWorld = createLocalWorld({
       dataDir: options.localDataDir ?? ":memory:",
       cwd: options.cwd,
       workspaceRoot: options.workspaceRoot,
     });
 
-    if (world.start) {
-      yield* world.start();
+    if (baseWorld.start) {
+      yield* baseWorld.start();
     }
 
     const context = yield* resolveLocalWorkspaceContext({
@@ -111,15 +109,22 @@ export const createLocalControlPlane = (
       loadedConfig,
     };
 
+    const world = {
+      ...baseWorld,
+      executionStore: createSqliteExecutionStore(persistence.rows),
+    } satisfies ExecutorWorld;
+
+    const { runtimeLayer: nativeRuntimeLayer, apiLayer } = createLocalRuntimeLayer({
+      executionResolver: options.executionResolver,
+      resolveSecretMaterial: options.resolveSecretMaterial,
+      getLocalServerBaseUrl: options.getLocalServerBaseUrl,
+      store: persistence.rows,
+      runtimeRegistry: world.runtimes,
+      localWorkspaceState: runtimeLocalWorkspaceState,
+    });
+
     const runtimeLayer = Layer.mergeAll(
-      createRuntimeEngineLayer({
-        executionResolver: options.executionResolver,
-        resolveSecretMaterial: options.resolveSecretMaterial,
-        getLocalServerBaseUrl: options.getLocalServerBaseUrl,
-        store: persistence.rows,
-        localWorkspaceState: runtimeLocalWorkspaceState,
-        liveExecutionManager: createLiveExecutionManager(),
-      }),
+      nativeRuntimeLayer,
       worldToPortLayers(world),
     ) as ControlPlaneRuntimeLayer;
 
@@ -130,7 +135,7 @@ export const createLocalControlPlane = (
       installation,
       runtimeLayer,
       managedRuntime,
-      apiLayer: createEngineApiLayer(runtimeLayer),
+      apiLayer,
       close: async () => {
         if (world.close) {
           await Effect.runPromise(world.close()).catch(() => undefined);
