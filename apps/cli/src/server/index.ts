@@ -10,18 +10,13 @@ import { FileSystem, HttpApiBuilder, HttpServer } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
 import * as RpcSerialization from "@effect/rpc/RpcSerialization";
 import * as RpcServer from "@effect/rpc/RpcServer";
-import {
-  createControlPlane,
-  type ControlPlane,
-} from "@executor/control-plane";
-import { createLocalWorld } from "@executor/world-local";
+import { type ControlPlane } from "@executor/control-plane";
+import { createLocalControlPlane } from "@executor/world-local";
 import type { ExecutorDescriptor, HealthResponse } from "@executor/api";
 import type {
   ResolveExecutionEnvironment,
-  ResolveSecretMaterial,
-} from "@executor/engine";
-import { ExecutorRpcs } from "@executor/engine/rpc";
-import { ExecutorRpcHandlerLive } from "@executor/engine/rpc/handler";
+} from "@executor/control-plane/services/execution";
+import type { ResolveSecretMaterial } from "@executor/control-plane/services/engine/secret-material-store";
 import { createExecutorMcpRequestHandler } from "@executor/executor-mcp";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -44,6 +39,8 @@ import {
   tracingSearchUrl,
 } from "./tracing";
 import { platformServerEffectError } from "./effect-errors";
+import { ExecutorRpcs } from "./rpc";
+import { ExecutorRpcHandlerLive } from "./rpc/handler";
 
 export {
   DEFAULT_EXECUTOR_DATA_DIR,
@@ -117,20 +114,18 @@ const bootstrapControlPlane = (
   localDataDir: string,
   getLocalServerBaseUrl: () => string | undefined,
   options: StartLocalExecutorServerOptions,
-) => {
-  const world = createLocalWorld({ dataDir: localDataDir });
-  return createControlPlane(world, {
+) =>
+  createLocalControlPlane({
+    localDataDir,
     workspaceRoot: options.workspaceRoot,
     executionResolver: options.executionResolver,
     resolveSecretMaterial: options.resolveSecretMaterial,
     getLocalServerBaseUrl,
-    localDataDir,
   }).pipe(
     Effect.mapError((cause) =>
       cause instanceof Error ? cause : new Error(String(cause)),
     ),
   );
-};
 
 const createHttpWebHandler = (
   cp: ControlPlane,
@@ -428,8 +423,13 @@ export const createLocalExecutorRequestHandler = (
     const apiHandler = yield* createHttpWebHandler(cp, tracingRuntime);
     const rpcHandler = yield* createRpcWebHandler(cp);
     const mcpHandler = yield* Effect.acquireRelease(
-      // MCP handler still takes EngineRuntime (transitional)
-      Effect.sync(() => createExecutorMcpRequestHandler(cp.engineRuntime)),
+      Effect.sync(() =>
+        createExecutorMcpRequestHandler({
+          workspaceId: cp.installation.workspaceId,
+          accountId: cp.installation.accountId,
+          runtimeLayer: cp.runtimeLayer,
+        })
+      ),
       (handler: ExecutorMcpHandler) =>
         Effect.tryPromise({
           try: () => handler.close(),

@@ -7,7 +7,7 @@ import {
   listExecutionSteps,
   listExecutions,
   resumeExecution,
-} from "@executor/engine";
+} from "@executor/control-plane/services/execution";
 
 import { EngineApi } from "../api";
 import { resolveRequestedLocalWorkspace } from "../local-context";

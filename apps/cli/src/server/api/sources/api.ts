@@ -3,6 +3,11 @@ import {
   ExecutionInteractionIdSchema,
   JsonObjectSchema,
   ProviderAuthGrantIdSchema,
+  SourceInspectionDiscoverPayloadSchema,
+  SourceInspectionDiscoverResultSchema,
+  SourceInspectionSchema,
+  SourceInspectionToolDetailSchema,
+  SourceOauthClientInputSchema,
   SourceAuthSchema,
   SourceAuthSessionIdSchema,
   SourceIdSchema,
@@ -15,12 +20,7 @@ import {
   WorkspaceIdSchema,
 } from "@executor/control-plane/model";
 import {
-  SourceOauthClientInputSchema,
   SourceDiscoveryResultSchema,
-  SourceInspectionDiscoverPayloadSchema,
-  SourceInspectionDiscoverResultSchema,
-  SourceInspectionSchema,
-  SourceInspectionToolDetailSchema,
   SourceProbeAuthSchema,
 } from "@executor/engine/schema";
 import * as Schema from "effect/Schema";

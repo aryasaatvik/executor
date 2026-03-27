@@ -5,10 +5,9 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
 import { SecretMaterialIdSchema } from "@executor/control-plane/model";
+import { requireRuntimeLocalWorkspace } from "@executor/control-plane/services/engine/runtime-context";
+import { WorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
 import {
-  getLocalInstallation,
-  requireRuntimeLocalWorkspace,
-  WorkspaceConfigStore,
   createDefaultSecretMaterialDeleter,
   createDefaultSecretMaterialStorer,
   createDefaultSecretMaterialUpdater,
@@ -84,6 +83,19 @@ const storageError = (operation: string, message: string) =>
     message,
     details: message,
   });
+
+const getLocalInstallation = () =>
+  requireRuntimeLocalWorkspace().pipe(
+    Effect.map((runtimeLocalWorkspace) => runtimeLocalWorkspace.installation),
+    Effect.mapError((cause) =>
+      storageError(
+        "local.installation",
+        cause instanceof Error
+          ? cause.message
+          : "Failed resolving local installation.",
+      ),
+    ),
+  );
 
 const loadInstanceConfig = () =>
   Effect.gen(function* () {

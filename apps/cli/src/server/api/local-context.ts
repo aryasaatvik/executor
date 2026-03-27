@@ -1,10 +1,10 @@
 import type { WorkspaceId } from "@executor/control-plane/model";
-import * as Effect from "effect/Effect";
-
 import {
   RuntimeLocalWorkspaceMismatchError,
   requireRuntimeLocalWorkspace,
-} from "@executor/engine";
+} from "@executor/control-plane/services/engine/runtime-context";
+import * as Effect from "effect/Effect";
+
 import { EngineForbiddenError } from "./errors";
 
 export const resolveRequestedLocalWorkspace = (

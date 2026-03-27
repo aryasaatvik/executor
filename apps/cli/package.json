@@ -46,6 +46,7 @@
     "@executor/engine": "workspace:*",
     "@executor/world-local": "workspace:*",
     "@executor/executor-mcp": "workspace:*",
+    "@executor/source-core": "workspace:*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-grpc": "^0.213.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.213.0",

@@ -2,22 +2,25 @@
 
 ## What it is
 
-Thin Bunli-based CLI shell over the executor runtime. The CLI drives the local HTTP daemon (control plane + MCP handler + optional web UI) and keeps the Effect-heavy engine/runtime code behind that boundary.
+Thin Bunli-based CLI shell plus the local daemon server. The daemon now lives in `apps/cli/src/server`, bootstraps `createLocalControlPlane()`, and still carries a hybrid REST + RPC + MCP boundary while control-plane migration is in progress.
 
 ## Entry point
 
-`apps/cli/bin/executor` -> `src/cli/main.ts` using Bunli.
+`apps/cli/bin/executor` -> `src/cli/main.ts`
 
 ## Daemon (`executor daemon ...`)
 
-- `runLocalExecutorServer()` from `@executor/server`
-- HTTP server on `localhost:idor` (default port 46789)
+- Local HTTP server in `src/server/index.ts`
+- Default host/port from `src/server/config.ts` (`127.0.0.1:8788`)
 - Serves:
-  - `/mcp` — MCP protocol handler
-  - `/v1/*` — control plane REST API
-  - `/` — optional bundled web UI assets
+  - `/discover`
+  - `/health`
+  - `/rpc`
+  - `/mcp`
+  - `/v1/*`
+  - `/` static web assets when provided
 - Writes PID to `~/.executor/server.pid` and logs to `~/.executor/server.log`
-- The internal `__local-server` path still exists for daemon bootstrap
+- The hidden `__local-server` command path still bootstraps the background daemon
 
 ## Commands
 
@@ -26,31 +29,30 @@ Thin Bunli-based CLI shell over the executor runtime. The CLI drives the local H
 | `executor daemon start` | Ensure the daemon is running |
 | `executor daemon stop` | Stop the daemon |
 | `executor daemon restart` | Restart the daemon |
-| `executor daemon status` | Show daemon status (PID, reachability, workspace) |
+| `executor daemon status` | Show daemon status and reachability |
 | `executor daemon debug bootstrap` | Run the daemon in the foreground |
 | `executor daemon debug paths` | Print daemon path defaults |
 | `executor daemon debug info` | Print low-level daemon debug information |
 | `executor doctor` | Health check: server, process, database, web assets, Deno |
-| `executor call [code]` | Execute code against the daemon; reads from `--file`, `--stdin`, or positional arg |
+| `executor call [code]` | Execute code against the daemon |
 | `executor resume --execution-id` | Resume a paused execution |
 
 ## Daemon lifecycle
 
-- `ensureServer()` checks reachability; spawns a background child process if not running
-- `startServerInBackground()` forks `bun src/cli/main.ts __local-server --port N` detached
-- PID file records `pid`, `port`, `host`, `baseUrl`, `startedAt`, `logFile`
+- `ensureServer()` checks reachability via `/rpc` and spawns a detached `__local-server` process if needed
+- `runLocalExecutorServer()` creates the request handler and Node HTTP server
+- `createLocalExecutorRequestHandler()` wires REST, RPC, MCP, health, and discovery endpoints
 
-## Code execution flow (`call`)
+## Current architecture notes
 
-1. Resolve code from args / file / stdin
-2. `ensureServer()` — start daemon if needed
-3. `client.executions.create()` — submit code to control plane
-4. `driveExecution()` — poll for `waiting_for_interaction`, prompt user or open URL, call `executions.resume()` until settled
-5. Print result (JSON or `completed`/`failed`)
+- REST uses `HttpApiBuilder` from `src/server/api/`
+- RPC is still wired through `@executor/engine/rpc`
+- MCP now uses `cp.installation` + `cp.runtimeLayer`
+- This app is still the main bridge between the new control-plane packages and remaining engine-backed API/RPC pieces
 
 ## Key dependencies
 
-- `@executor/server` — `runLocalExecutorServer`, server config constants
-- `@executor/engine` — `createEngineClient`, `createEngineRuntime`, execution types
+- `@executor/control-plane` — control-plane composition seam
+- `@executor/world-local` — local control-plane bootstrap + local world services
+- `@executor/engine` — transitional RPC handler and legacy API pieces
 - `@executor/executor-mcp` — MCP request handler
-- Bunli core + platform packages for command parsing, prompts, and terminal behavior

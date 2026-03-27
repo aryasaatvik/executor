@@ -4,37 +4,42 @@ import * as Option from "effect/Option";
 import type { SearchHit } from "@executor/codemode-core";
 
 import {
-  SecretMaterialIdSchema,
-  type ToolSearchBackendMode,
-  type ToolSearchMode,
-  type ToolSearchResultSet,
-} from "@executor/control-plane/model";
-import {
-  createSource,
-  getSource,
-  listSources,
-  removeSource,
-  updateSource,
-  discoverSourceInspectionTools,
-  getSourceInspection,
-  getSourceInspectionToolDetail,
-  discoverSource,
-  SourceAuthService,
-  type ExecutorAddSourceInput,
-  sourceAdapterRequiresInteractiveConnect,
   closeExecutionSession,
   createExecution,
   getExecution,
   listExecutionSteps,
   listExecutions,
   resumeExecution,
+} from "@executor/control-plane/services/execution";
+import { discoverSource } from "@executor/control-plane/services/sources/source-discovery";
+import { SourceStore as ControlPlaneSourceStore } from "@executor/control-plane/services/sources/source-service";
+import {
+  discoverSourceInspectionTools,
+  getSourceInspection,
+  getSourceInspectionToolDetail,
+} from "@executor/control-plane/services/sources/source-inspection";
+import {
   createPolicy,
   getPolicy,
   listPolicies,
   removePolicy,
   updatePolicy,
-  getLocalInstallation,
-  requireRuntimeLocalWorkspace,
+} from "@executor/control-plane/services/policy/policies-operations";
+import { requireRuntimeLocalWorkspace } from "@executor/control-plane/services/engine/runtime-context";
+import { WorkspaceConfigStore as ControlPlaneWorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
+import {
+  SecretMaterialIdSchema,
+  type ToolSearchBackendMode,
+  type ToolSearchMode,
+  type ToolSearchResultSet,
+  WorkspaceOauthClientIdSchema,
+} from "@executor/control-plane/model";
+import {
+  createSource,
+  updateSource,
+  SourceAuthService,
+  type ExecutorAddSourceInput,
+  sourceAdapterRequiresInteractiveConnect,
   WorkspaceConfigStore,
   SourceStore,
   EngineStore,
@@ -68,6 +73,16 @@ const resolveWorkspace = (operation: string) =>
       rpcError(operation, "No active local workspace", "unauthorized"),
     ),
   );
+
+const sourceStoreRpcError = (operation: string, cause: unknown): ExecutorRpcError => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+
+  if (cause instanceof Error && cause.message.startsWith("Source not found:")) {
+    return rpcError(operation, "Source not found", "not_found");
+  }
+
+  return rpcError(operation, message, "storage");
+};
 
 const mapError = (operation: string) => <A, E, R>(
   effect: Effect.Effect<A, E, R>,
@@ -173,17 +188,32 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     ListSources: () =>
       resolveWorkspace("ListSources").pipe(
         Effect.flatMap((ws) =>
-          listSources({ workspaceId: ws.installation.workspaceId, accountId: ws.installation.accountId }),
+          Effect.gen(function* () {
+            const sourceStore = yield* ControlPlaneSourceStore;
+            return yield* sourceStore.loadSourcesInWorkspace(
+              ws.installation.workspaceId,
+              { actorAccountId: ws.installation.accountId },
+            ).pipe(
+              Effect.mapError((cause) => sourceStoreRpcError("ListSources", cause)),
+            );
+          }),
         ),
-        mapError("ListSources"),
       ),
 
     GetSource: ({ sourceId }) =>
       resolveWorkspace("GetSource").pipe(
         Effect.flatMap((ws) =>
-          getSource({ workspaceId: ws.installation.workspaceId, sourceId, accountId: ws.installation.accountId }),
+          Effect.gen(function* () {
+            const sourceStore = yield* ControlPlaneSourceStore;
+            return yield* sourceStore.loadSourceById({
+              workspaceId: ws.installation.workspaceId,
+              sourceId,
+              actorAccountId: ws.installation.accountId,
+            }).pipe(
+              Effect.mapError((cause) => sourceStoreRpcError("GetSource", cause)),
+            );
+          }),
         ),
-        mapError("GetSource"),
       ),
 
     CreateSource: (payload) =>
@@ -210,9 +240,18 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     RemoveSource: ({ sourceId }) =>
       resolveWorkspace("RemoveSource").pipe(
         Effect.flatMap((ws) =>
-          removeSource({ workspaceId: ws.installation.workspaceId, sourceId }),
+          Effect.gen(function* () {
+            const sourceStore = yield* ControlPlaneSourceStore;
+            const removed = yield* sourceStore.removeSourceById({
+              workspaceId: ws.installation.workspaceId,
+              sourceId,
+            }).pipe(
+              Effect.mapError((cause) => sourceStoreRpcError("RemoveSource", cause)),
+            );
+
+            return { removed };
+          }),
         ),
-        mapError("RemoveSource"),
       ),
 
     DiscoverSource: (payload) =>
@@ -245,14 +284,58 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
                 baseUrl: null,
               });
             }
+
+            const baseInput = {
+              workspaceId: ws.installation.workspaceId,
+              actorAccountId: ws.installation.accountId,
+              executionId: null,
+              interactionId: null,
+            };
+
+            if (p.kind === "openapi") {
+              const openapi = p as Extract<ConnectSourcePayload, { kind: "openapi" }>;
+              return yield* sourceAuthService.addExecutorSource(
+                { ...baseInput, ...openapi } satisfies ExecutorAddSourceInput,
+                { baseUrl: null },
+              );
+            }
+
+            if (p.kind === "graphql") {
+              const graphql = p as Extract<ConnectSourcePayload, { kind: "graphql" }>;
+              return yield* sourceAuthService.addExecutorSource(
+                { ...baseInput, ...graphql } satisfies ExecutorAddSourceInput,
+                { baseUrl: null },
+              );
+            }
+
+            if (p.kind === "google_discovery") {
+              const googleDiscovery = p as Extract<ConnectSourcePayload, { kind: "google_discovery" }>;
+              return yield* sourceAuthService.addExecutorSource(
+                {
+                  ...baseInput,
+                  kind: "google_discovery",
+                  service: googleDiscovery.service,
+                  version: googleDiscovery.version,
+                  discoveryUrl: googleDiscovery.discoveryUrl,
+                  scopes: googleDiscovery.scopes,
+                  workspaceOauthClientId:
+                    googleDiscovery.workspaceOauthClientId == null
+                      ? googleDiscovery.workspaceOauthClientId
+                      : WorkspaceOauthClientIdSchema.make(googleDiscovery.workspaceOauthClientId),
+                  oauthClient: googleDiscovery.oauthClient,
+                  name: googleDiscovery.name,
+                  namespace: googleDiscovery.namespace,
+                  importAuthPolicy: googleDiscovery.importAuthPolicy,
+                  importAuth: googleDiscovery.importAuth,
+                  auth: googleDiscovery.auth,
+                } satisfies ExecutorAddSourceInput,
+                { baseUrl: null },
+              );
+            }
+
+            const mcp = p as Extract<ConnectSourcePayload, { kind?: "mcp" }>;
             return yield* sourceAuthService.addExecutorSource(
-              ({
-                workspaceId: ws.installation.workspaceId,
-                actorAccountId: ws.installation.accountId,
-                executionId: null,
-                interactionId: null,
-                ...(p as Record<string, unknown>),
-              } as ExecutorAddSourceInput),
+              { ...baseInput, ...mcp } satisfies ExecutorAddSourceInput,
               { baseUrl: null },
             );
           }),
@@ -536,12 +619,15 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     // -- Local -------------------------------------------------------------
 
     GetInstallation: () =>
-      getLocalInstallation().pipe(mapError("GetInstallation")),
+      resolveWorkspace("GetInstallation").pipe(
+        Effect.map((ws) => ws.installation),
+        mapError("GetInstallation"),
+      ),
 
     GetConfig: () =>
       Effect.gen(function* () {
         const ws = yield* resolveWorkspace("GetConfig");
-        const workspaceConfigStore = yield* WorkspaceConfigStore;
+        const workspaceConfigStore = yield* ControlPlaneWorkspaceConfigStore;
         const loadedConfig = yield* workspaceConfigStore.load(ws.context);
 
         const explicitDefaultStoreProvider =
@@ -577,7 +663,7 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     UpdateConfig: (payload) =>
       Effect.gen(function* () {
         const ws = yield* resolveWorkspace("UpdateConfig");
-        const workspaceConfigStore = yield* WorkspaceConfigStore;
+        const workspaceConfigStore = yield* ControlPlaneWorkspaceConfigStore;
         const loadedConfig = yield* workspaceConfigStore.load(ws.context);
 
         const semanticSearchValidationError = validateSemanticSearchConfigForWrite(

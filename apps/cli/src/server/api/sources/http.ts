@@ -7,18 +7,22 @@ import type { ExecutionInteraction, Source, WorkspaceId } from "@executor/contro
 import * as Effect from "effect/Effect";
 
 import {
-  createSource,
-  getSource,
-  listSources,
-  removeSource,
-  updateSource,
+  discoverSource,
+} from "@executor/control-plane/services/sources/source-discovery";
+import {
+  SourceStore as ControlPlaneSourceStore,
+} from "@executor/control-plane/services/sources/source-service";
+import {
   discoverSourceInspectionTools,
   getSourceInspection,
   getSourceInspectionToolDetail,
+} from "@executor/control-plane/services/sources/source-inspection";
+import {
+  createSource,
+  updateSource,
   completeSourceCredentialSetup,
   getSourceCredentialInteraction,
   submitSourceCredentialInteraction,
-  discoverSource,
   sourceAdapterRequiresInteractiveConnect,
   SourceAuthService,
   type ExecutorAddSourceInput,
@@ -71,6 +75,24 @@ const resolveRequestOrigin = (request: { url: string; headers: unknown }): strin
 const toBadRequestError = (operation: string, cause: unknown) => {
   const message = cause instanceof Error ? cause.message : String(cause);
   return new EngineBadRequestError({
+    operation,
+    message,
+    details: message,
+  });
+};
+
+const toSourceStoreError = (operation: string, cause: unknown) => {
+  const message = cause instanceof Error ? cause.message : String(cause);
+
+  if (cause instanceof Error && cause.message.startsWith("Source not found:")) {
+    return new EngineNotFoundError({
+      operation,
+      message: "Source not found",
+      details: message,
+    });
+  }
+
+  return new EngineStorageError({
     operation,
     message,
     details: message,
@@ -818,10 +840,16 @@ export const EngineSourcesLive = HttpApiBuilder.group(
       .handle("list", ({ path }) =>
         resolveRequestedLocalWorkspace("sources.list", path.workspaceId).pipe(
           Effect.flatMap((runtimeLocalWorkspace) =>
-            listSources({
-              workspaceId: path.workspaceId,
-              accountId: runtimeLocalWorkspace.installation.accountId,
-            })
+            Effect.gen(function* () {
+              const sourceStore = yield* ControlPlaneSourceStore;
+              return yield* sourceStore.loadSourcesInWorkspace(path.workspaceId, {
+                actorAccountId: runtimeLocalWorkspace.installation.accountId,
+              }).pipe(
+                Effect.mapError((cause) =>
+                  toSourceStoreError("sources.list", cause),
+                ),
+              );
+            }),
           ),
         ),
       )
@@ -839,11 +867,18 @@ export const EngineSourcesLive = HttpApiBuilder.group(
       .handle("get", ({ path }) =>
         resolveRequestedLocalWorkspace("sources.get", path.workspaceId).pipe(
           Effect.flatMap((runtimeLocalWorkspace) =>
-            getSource({
-              workspaceId: path.workspaceId,
-              sourceId: path.sourceId,
-              accountId: runtimeLocalWorkspace.installation.accountId,
-            })
+            Effect.gen(function* () {
+              const sourceStore = yield* ControlPlaneSourceStore;
+              return yield* sourceStore.loadSourceById({
+                workspaceId: path.workspaceId,
+                sourceId: path.sourceId,
+                actorAccountId: runtimeLocalWorkspace.installation.accountId,
+              }).pipe(
+                Effect.mapError((cause) =>
+                  toSourceStoreError("sources.get", cause),
+                ),
+              );
+            }),
           ),
         ),
       )
@@ -893,10 +928,19 @@ export const EngineSourcesLive = HttpApiBuilder.group(
       )
       .handle("remove", ({ path }) =>
         resolveRequestedLocalWorkspace("sources.remove", path.workspaceId).pipe(
-          Effect.zipRight(
-            removeSource({
-              workspaceId: path.workspaceId,
-              sourceId: path.sourceId,
+          Effect.flatMap(() =>
+            Effect.gen(function* () {
+              const sourceStore = yield* ControlPlaneSourceStore;
+              const removed = yield* sourceStore.removeSourceById({
+                workspaceId: path.workspaceId,
+                sourceId: path.sourceId,
+              }).pipe(
+                Effect.mapError((cause) =>
+                  toSourceStoreError("sources.remove", cause),
+                ),
+              );
+
+              return { removed };
             }),
           ),
         ),

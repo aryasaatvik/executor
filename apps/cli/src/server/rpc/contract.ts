@@ -5,23 +5,23 @@ import * as Schema from "effect/Schema";
 import {
   ExecutionEnvelopeSchema,
   ExecutionIdSchema,
+  ExecutionRecordSchema,
   ExecutionSessionIdSchema,
   ExecutionStepSchema,
+  LocalWorkspacePolicySchema,
   PolicyIdSchema,
   SourceIdSchema,
+  SourceInspectionDiscoverPayloadSchema,
+  SourceInspectionDiscoverResultSchema,
+  SourceInspectionSchema,
+  SourceInspectionToolDetailSchema,
   SourceSchema,
   ToolSearchPayloadSchema,
   ToolSearchResultSetSchema,
 } from "@executor/control-plane/model";
 import {
-  ExecutionSchema,
   LocalInstallationSchema,
-  LocalWorkspacePolicySchema,
   SourceDiscoveryResultSchema,
-  SourceInspectionSchema,
-  SourceInspectionToolDetailSchema,
-  SourceInspectionDiscoverPayloadSchema,
-  SourceInspectionDiscoverResultSchema,
 } from "@executor/engine/schema";
 
 import {
@@ -144,7 +144,7 @@ export const ExecutorRpcs = RpcGroup.make(
 
   // Executions
   Rpc.make("ListExecutions", {
-    success: Schema.Array(ExecutionSchema),
+    success: Schema.Array(ExecutionRecordSchema),
     error: ExecutorRpcError,
   }),
   Rpc.make("CreateExecution", {

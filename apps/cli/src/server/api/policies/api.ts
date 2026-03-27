@@ -1,10 +1,11 @@
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform";
-import { PolicyIdSchema, WorkspaceIdSchema } from "@executor/control-plane/model";
 import {
+  PolicyIdSchema,
+  WorkspaceIdSchema,
   LocalWorkspacePolicyApprovalModeSchema,
   LocalWorkspacePolicyEffectSchema,
   LocalWorkspacePolicySchema,
-} from "@executor/engine/schema";
+} from "@executor/control-plane/model";
 import * as Schema from "effect/Schema";
 
 import {

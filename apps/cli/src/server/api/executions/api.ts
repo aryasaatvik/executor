@@ -2,11 +2,11 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform";
 import {
   ExecutionIdSchema,
   ExecutionEnvelopeSchema,
+  ExecutionRecordSchema,
   ExecutionSessionIdSchema,
   ExecutionStepSchema,
   WorkspaceIdSchema,
 } from "@executor/control-plane/model";
-import { ExecutionSchema } from "@executor/engine/schema";
 import * as Schema from "effect/Schema";
 
 import {
@@ -72,7 +72,7 @@ export class ExecutionsApi extends HttpApiGroup.make("executions")
   )
   .add(
     HttpApiEndpoint.get("list")`/workspaces/${workspaceIdParam}/executions`
-      .addSuccess(Schema.Array(ExecutionSchema))
+      .addSuccess(Schema.Array(ExecutionRecordSchema))
       .addError(EngineBadRequestError)
       .addError(EngineUnauthorizedError)
       .addError(EngineForbiddenError)

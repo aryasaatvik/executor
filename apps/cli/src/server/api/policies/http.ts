@@ -6,7 +6,7 @@ import {
   listPolicies,
   removePolicy,
   updatePolicy,
-} from "@executor/engine";
+} from "@executor/control-plane/services/policy/policies-operations";
 
 import { EngineApi } from "../api";
 import { resolveRequestedLocalWorkspace } from "../local-context";
