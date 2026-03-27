@@ -35,6 +35,10 @@ const defaultPolicyEffect = "allow" as const;
 const defaultPolicyApprovalMode = "auto" as const;
 const defaultPolicyPriority = 0;
 
+const asLocalWorkspacePolicy = (
+  value: typeof policy.$inferSelect,
+): LocalWorkspacePolicy => value as unknown as LocalWorkspacePolicy;
+
 const basePolicySlug = (input: {
   resourcePattern: string;
   effect: "allow" | "deny";
@@ -136,7 +140,7 @@ export const loadRuntimeLocalWorkspacePolicies = (workspaceId: WorkspaceId) =>
 
     return {
       runtimeLocalWorkspace,
-      policies,
+      policies: policies.map(asLocalWorkspacePolicy),
     };
   });
 
@@ -228,7 +232,7 @@ export const getPolicy = (input: {
           );
         }
 
-        return resolved;
+        return asLocalWorkspacePolicy(resolved);
       }),
   });
 
@@ -263,7 +267,7 @@ export const updatePolicy = (input: {
 
         const updatedAt = Date.now();
         const nextPolicy: LocalWorkspacePolicy = {
-          ...(existing as unknown as LocalWorkspacePolicy),
+          ...asLocalWorkspacePolicy(existing),
           ...(input.payload.resourcePattern !== undefined
             ? { resourcePattern: input.payload.resourcePattern }
             : {}),

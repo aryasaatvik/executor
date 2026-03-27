@@ -8,6 +8,15 @@
     "./model": "./src/model/index.ts",
     "./ports": "./src/ports/index.ts",
     "./world": "./src/world.ts",
+    "./services/execution": "./src/services/execution/index.ts",
+    "./services/policy/policies-operations": "./src/services/policy/policies-operations.ts",
+    "./services/engine/runtime-context": "./src/services/engine/runtime-context.ts",
+    "./services/engine/local-storage": "./src/services/engine/local-storage.ts",
+    "./services/sources/source-discovery": "./src/services/sources/source-discovery.ts",
+    "./services/sources/source-inspection": "./src/services/sources/source-inspection.ts",
+    "./services/sources/source-service": "./src/services/sources/source-service.ts",
+    "./services/sources/executor-tools": "./src/services/sources/executor-tools.ts",
+    "./services/engine/secret-material-store": "./src/services/engine/secret-material-store.ts",
     "./services/*": "./src/services/*"
   },
   "scripts": {
@@ -21,7 +30,6 @@
     "@executor/auth-mcp-oauth": "workspace:*",
     "@executor/auth-oauth2": "workspace:*",
     "@executor/codemode-core": "workspace:*",
-    "@executor/engine": "workspace:*",
     "@executor/execution-contract": "workspace:*",
     "@executor/execution-ir": "workspace:*",
     "@executor/execution-runtime-deno-subprocess": "workspace:*",

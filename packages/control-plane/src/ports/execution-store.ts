@@ -42,6 +42,10 @@ export interface ExecutionStoreShape {
     payloadJson: string;
   }) => Effect.Effect<ExecutionInteraction, Error>;
 
+  readonly getInteractionById: (input: {
+    interactionId: string;
+  }) => Effect.Effect<ExecutionInteraction | null, Error>;
+
   readonly resolveInteraction: (input: {
     interactionId: string;
     responseJson: string | null;

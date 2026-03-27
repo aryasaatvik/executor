@@ -11,15 +11,12 @@ import type {
   ExecutionRecord,
   ExecutionInteraction,
 } from "../../model/index";
-import { ExecutionInteractionIdSchema } from "../../model/index";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-// TODO: EngineStoreShape is an engine internal; this should be replaced
-// with control-plane port interfaces (ExecutionStoreShape)
-import type { EngineStoreShape } from "../engine/store";
+import type { ExecutionStoreShape } from "../../ports/execution-store";
 
 type VisibleExecutionState =
   | "running"
@@ -44,7 +41,7 @@ type LiveExecutionManagerShape = {
     executionId: ExecutionRecord["id"],
   ) => Effect.Effect<Deferred.Deferred<VisibleExecutionState>>;
   createOnElicitation: (input: {
-    rows: EngineStoreShape;
+    rows: ExecutionStoreShape;
     executionId: ExecutionRecord["id"];
   }) => OnElicitation;
   resolveInteraction: (input: {
@@ -121,6 +118,15 @@ const interactionPurposeFromInput = (input: Parameters<OnElicitation>[0]): strin
   return "elicitation";
 };
 
+const findExecutionStepBySequence = (
+  rows: ExecutionStoreShape,
+  executionId: ExecutionRecord["id"],
+  sequence: number,
+) =>
+  rows.listSteps({ executionId }).pipe(
+    Effect.map((steps) => steps.find((step) => step.sequence === sequence) ?? null),
+  );
+
 
 export const createLiveExecutionManager = () => {
   const runs = new Map<ExecutionRecord["id"], LiveRunEntry>();
@@ -167,11 +173,8 @@ export const createLiveExecutionManager = () => {
         Effect.gen(function* () {
           const run = getOrCreateRun(executionId);
           const response = yield* Deferred.make<ElicitationResponse>();
-          const now = Date.now();
-          const interaction: ExecutionInteraction = {
-            id: ExecutionInteractionIdSchema.make(`${executionId}:${input.interactionId}`),
+          const interaction = yield* rows.createInteraction({
             executionId,
-            status: "pending",
             kind: input.elicitation.mode === "url" ? "url" : "form",
             purpose: interactionPurposeFromInput(input),
             payloadJson:
@@ -182,16 +185,27 @@ export const createLiveExecutionManager = () => {
                 context: input.context,
                 elicitation: input.elicitation,
               }) ?? "{}",
-            responseJson: null,
-            responsePrivateJson: null,
-            createdAt: now,
-            updatedAt: now,
-          };
+          });
+          const stepSequence = input.context?.executionStepSequence;
 
-          yield* rows.executionInteractions.insert(interaction);
-          yield* rows.executions.update(executionId, {
+          if (typeof stepSequence === "number" && Number.isSafeInteger(stepSequence) && stepSequence > 0) {
+            const step = yield* findExecutionStepBySequence(rows, executionId, stepSequence);
+            if (step !== null) {
+              yield* rows.updateStep({
+                stepId: step.id,
+                update: {
+                  status: "waiting",
+                  interactionId: interaction.id,
+                },
+              });
+            }
+          }
+
+          yield* rows.update({
+            executionId,
+            update: {
             status: "waiting_for_interaction",
-            updatedAt: now,
+            },
           });
 
           run.currentInteraction = {
@@ -206,17 +220,17 @@ export const createLiveExecutionManager = () => {
             });
 
             const resolved = yield* Deferred.await(response);
-            const resolvedAt = Date.now();
 
-            yield* rows.executionInteractions.update(interaction.id, {
-              status: resolved.action === "cancel" ? "cancelled" : "resolved",
+            yield* rows.resolveInteraction({
+              interactionId: interaction.id,
               responseJson: serializeJson(sanitizePersistedElicitationResponse(resolved)),
               responsePrivateJson: serializeJson(resolved),
-              updatedAt: resolvedAt,
             });
-            yield* rows.executions.update(executionId, {
-              status: "running",
-              updatedAt: resolvedAt,
+            yield* rows.update({
+              executionId,
+              update: {
+                status: "running",
+              },
             });
             yield* publishState({
               executionId,

@@ -25,6 +25,7 @@ import {
   type ManagedWorkspaceSourceCatalog,
 } from "./source-catalog";
 import type { AccountId, Source } from "../../model/index";
+import type { RuntimeRegistryShape } from "../../ports/runtime-registry";
 
 // Re-export for consumers
 export {
@@ -204,6 +205,7 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
   sourceAuthService: SourceAuthServiceShape;
   sourceCatalogStore: SourceCatalogStoreShape;
   sourceStore: SourceStoreShape;
+  runtimeRegistry: RuntimeRegistryShape;
   localToolRuntimeLoader: LocalToolRuntimeLoaderShape;
   workspaceConfigStore: WorkspaceConfigStoreShape;
   dependencies?: WorkspaceEnvironmentDependencies;
@@ -276,7 +278,8 @@ export const createWorkspaceExecutionEnvironmentResolver = (input: {
       const runtimeKind = resolveConfiguredExecutionRuntime(
         (loadedConfig as { config?: { runtime?: string } } | null)?.config as Parameters<typeof resolveConfiguredExecutionRuntime>[0],
       );
-      const executor = createCodeExecutorForRuntime(runtimeKind);
+      const runtime = yield* input.runtimeRegistry.get(runtimeKind);
+      const executor = createCodeExecutorForRuntime(runtime);
 
       return {
         executor,
