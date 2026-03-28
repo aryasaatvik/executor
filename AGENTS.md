@@ -1,28 +1,28 @@
 # AGENTS.md
 
-**Generated:** 2026-03-23
-**Commit:** 006dd578
+**Generated:** 2026-03-29
+**Commit:** dev (restructure in progress)
 
 ## OVERVIEW
 
-Local-first AI agent execution environment. The repo is mid-migration from a single engine/daemon package to a control-plane architecture: typed API contract, execution runtimes, control-plane services, and platform-specific worlds. The local daemon still serves HTTP API + RPC + MCP, and the web app is now a TanStack Start control surface.
+MCP gateway and tool orchestration engine. Aggregates MCP servers, OpenAPI, GraphQL, and Google Discovery APIs into a single unified MCP server for AI agents. Local daemon serves HTTP API + MCP, web app is a TanStack Start management UI.
 
 ## STRUCTURE
 
 ```
 executor/
 ├── apps/
-│   ├── cli/          # CLI entrypoint + local daemon server
-│   └── web/          # TanStack Start + Cloudflare Workers UI
+│   ├── cli/          # Bunli CLI + local daemon server
+│   └── web/          # TanStack Start + Cloudflare Pages UI
 ├── packages/
-│   ├── control-plane/       # Domain model, ports, service migration seam
-│   ├── engine/              # Transitional runtime/services still backing control-plane
+│   ├── core/                # Domain model, ports, services, DB schema
+│   ├── engine/              # Transitional (being deleted)
 │   ├── execution/           # Runtime contract, IR, runtime implementations
 │   ├── executor-api/        # Typed REST contract
 │   ├── worlds/              # Local/cloudflare/testing world implementations
 │   ├── integrations/        # MCP bridge, AI SDK integration
-│   ├── sources/             # Source adapters (mcp, openapi, graphql, builtins…)
-│   ├── kernel/core/         # Remaining shared kernel abstractions
+│   ├── sources/             # Source adapters (mcp, openapi, graphql, builtins)
+│   ├── kernel/core/         # Shared codemode-core abstractions
 │   └── clients/react/       # REST-based React hooks
 └── tools/oxlint/            # Custom monorepo lint rules
 ```
@@ -31,13 +31,13 @@ executor/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Control-plane types | `packages/control-plane/src/create-control-plane.ts` | Shared control-plane runtime types only |
-| World contract | `packages/control-plane/src/world.ts` | Port surface for local/cloudflare/testing |
-| Local daemon server | `apps/cli/src/server/` | `/discover`, `/health`, `/rpc`, `/mcp`, `/v1/*` |
-| Local world implementation | `packages/worlds/local/src/` | Active local bootstrap + partially stubbed world ports |
+| Core types & services | `packages/core/src/` | Domain model, ports, services |
+| World contract | `packages/core/src/world.ts` | Port surface for local/cloudflare/testing |
+| Local daemon server | `apps/cli/src/server/` | `/discover`, `/health`, `/mcp`, `/v1/*` |
+| Local world implementation | `packages/worlds/local/src/` | SQLite + FTS5 + sqlite-vec |
 | REST contract | `packages/executor-api/src/` | Shared types for HTTP clients |
 | Web UI | `apps/web/src/` | TanStack Start routes, router, views |
-| React client hooks | `packages/clients/react/src/` | REST hooks over the control-plane API |
+| React client hooks | `packages/clients/react/src/` | REST hooks over the core API |
 | Source adapters | `packages/sources/*/src/` | MCP, OpenAPI, GraphQL, Google Discovery |
 | Sandbox runtimes | `packages/execution/runtime-*/src/` | QuickJS, SES, Deno, Cloudflare stub |
 
@@ -48,7 +48,6 @@ executor/
 - **No Effect.run in tests**: Use `@effect/vitest` test harness — lint: `no-effect-run-in-effect-vitest-tests`
 - **No node:fs with Effect**: Keep Node.js `node:fs` separate from Effect imports — lint: `no-node-fs-with-effect-imports`
 - **No raw Effect.fail**: Use `fail` utility from `@/errors`
-- **Migration generation**: `bun run --filter=@executor/engine db:generate` after schema changes
 - **Changesets**: Every PR needing release must add `bun run changeset` — PR without changeset = no release
 
 ## ANTI-PATTERNS (THIS PROJECT)
@@ -56,7 +55,6 @@ executor/
 - Do NOT call `Effect.run*` inside vitest tests — use `Effect.annotationSchema` or `@effect/vitest`
 - Do NOT use `node:fs` imports alongside Effect imports in the same file
 - Do NOT read Effect tags directly — use `Layer.get()` or `Effect.serviceFunction()`
-- Do NOT edit `apps/cli/package.json` by hand (Changesets owns versioning)
 
 ## COMMANDS
 

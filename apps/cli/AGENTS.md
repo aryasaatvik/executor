@@ -46,13 +46,14 @@ Thin Bunli-based CLI shell plus the local daemon server. The daemon now lives in
 ## Current architecture notes
 
 - REST uses `HttpApiBuilder` from `src/server/api/`
-- RPC is still wired through `@executor/engine/rpc`
+- RPC contract now lives in `@executor/rpc` and is re-exported from `src/server/rpc/contract.ts`
 - MCP now uses `cp.installation` + `cp.runtimeLayer`
 - This app is still the main bridge between the new control-plane packages and remaining engine-backed API/RPC pieces
 
 ## Key dependencies
 
-- `@executor/control-plane` — control-plane composition seam
+- `@executor/core` — control-plane composition seam
+- `@executor/rpc` — shared RPC contract used by the daemon and client package
 - `@executor/world-local` — local control-plane bootstrap + local world services
 - `@executor/engine` — transitional RPC handler and legacy API pieces
 - `@executor/executor-mcp` — MCP request handler
