@@ -3,34 +3,36 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "@effect/platform";
-import type { ExecutionInteraction, Source, WorkspaceId } from "@executor/control-plane/model";
+import type { ExecutionInteraction, Source, WorkspaceId } from "@executor/core/model";
 import * as Effect from "effect/Effect";
 
 import {
   discoverSource,
-} from "@executor/control-plane/services/sources/source-discovery";
+} from "@executor/core/services/sources/source-discovery";
 import {
   SourceStore as ControlPlaneSourceStore,
-} from "@executor/control-plane/services/sources/source-service";
+} from "@executor/core/services/sources/source-service";
 import {
   discoverSourceInspectionTools,
   getSourceInspection,
   getSourceInspectionToolDetail,
-} from "@executor/control-plane/services/sources/source-inspection";
+} from "@executor/core/services/sources/source-inspection";
 import {
   sourceAdapterRequiresInteractiveConnect,
-} from "@executor/control-plane/services/engine/source-adapters";
+} from "@executor/core/services/engine/source-adapters";
 import {
   SourceAuthService,
   type ExecutorAddSourceInput,
-} from "@executor/control-plane/services/sources/source-auth-service";
+} from "@executor/core/services/sources/source-auth-service";
 import {
   createSource,
   updateSource,
+} from "@executor/core/services/sources/source-operations";
+import {
   completeSourceCredentialSetup,
   getSourceCredentialInteraction,
   submitSourceCredentialInteraction,
-} from "@executor/engine";
+} from "@executor/core/services/sources/source-credential-operations";
 
 import {
   EngineBadRequestError,

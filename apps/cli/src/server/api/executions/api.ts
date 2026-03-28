@@ -6,7 +6,7 @@ import {
   ExecutionSessionIdSchema,
   ExecutionStepSchema,
   WorkspaceIdSchema,
-} from "@executor/control-plane/model";
+} from "@executor/core/model";
 import * as Schema from "effect/Schema";
 
 import {

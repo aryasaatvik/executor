@@ -4,19 +4,16 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 
-import { SecretMaterialIdSchema } from "@executor/control-plane/model";
-import { requireRuntimeLocalWorkspace } from "@executor/control-plane/services/engine/runtime-context";
-import { WorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
+import { SecretMaterialIdSchema } from "@executor/core/model";
+import { requireRuntimeLocalWorkspace } from "@executor/core/services/engine/runtime-context";
+import { WorkspaceConfigStore } from "@executor/core/services/engine/local-storage";
 import {
-  EngineStore,
-} from "@executor/control-plane/services/engine/store";
+  SecretMaterialStore as ControlPlaneSecretMaterialStore,
+} from "@executor/core/services/engine/secret-material-store";
 import {
   SourceStore,
-} from "@executor/control-plane/services/sources/source-service";
+} from "@executor/core/services/sources/source-service";
 import {
-  createDefaultSecretMaterialDeleter,
-  createDefaultSecretMaterialStorer,
-  createDefaultSecretMaterialUpdater,
   ENV_SECRET_PROVIDER_ID,
   KEYCHAIN_SECRET_PROVIDER_ID,
   LOCAL_SECRET_PROVIDER_ID,
@@ -198,14 +195,14 @@ export const EngineLocalLive = HttpApiBuilder.group(
       )
         .handle("listSecrets", () =>
           Effect.gen(function* () {
-            const store = yield* EngineStore;
+            const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
             const sourceStore = yield* SourceStore;
             const runtimeLocalWorkspace = yield* requireRuntimeLocalWorkspace().pipe(
               Effect.mapError(() =>
                 storageError("secrets", "Failed resolving local workspace."),
               ),
             );
-            const rows = yield* store.secretMaterials.listAll().pipe(
+            const rows = yield* secretMaterialStore.listAll().pipe(
               Effect.mapError(() =>
                 storageError("secrets", "Failed listing secrets."),
               ),
@@ -250,15 +247,12 @@ export const EngineLocalLive = HttpApiBuilder.group(
               });
           }
 
-          const store = yield* EngineStore;
-          const storeSecretMaterial = createDefaultSecretMaterialStorer({
-            rows: store,
-            ...(requestedProviderId ? { storeProviderId: requestedProviderId } : {}),
-          });
-          const ref = yield* storeSecretMaterial({
+          const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
+          const ref = yield* secretMaterialStore.store({
             name,
             purpose,
             value,
+            ...(requestedProviderId ? { providerId: requestedProviderId } : {}),
           }).pipe(
             Effect.mapError((cause) => storageError(
               "secrets.create",
@@ -266,7 +260,7 @@ export const EngineLocalLive = HttpApiBuilder.group(
             )),
           );
           const secretId = SecretMaterialIdSchema.make(ref.handle);
-          const created = yield* store.secretMaterials.getById(secretId).pipe(
+          const created = yield* secretMaterialStore.getById(secretId).pipe(
             Effect.mapError(() =>
               storageError("secrets.create", "Failed loading created secret."),
             ),
@@ -292,9 +286,9 @@ export const EngineLocalLive = HttpApiBuilder.group(
       .handle("updateSecret", ({ path, payload }) =>
         Effect.gen(function* () {
           const secretId = SecretMaterialIdSchema.make(path.secretId);
-          const store = yield* EngineStore;
+          const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
 
-          const existing = yield* store.secretMaterials.getById(secretId).pipe(
+          const existing = yield* secretMaterialStore.getById(secretId).pipe(
             Effect.mapError(() =>
               storageError("secrets.update", "Failed looking up secret."),
             ),
@@ -312,10 +306,7 @@ export const EngineLocalLive = HttpApiBuilder.group(
           if (payload.name !== undefined) update.name = payload.name.trim() || null;
           if (payload.value !== undefined) update.value = payload.value;
 
-          const updateSecretMaterial = createDefaultSecretMaterialUpdater({
-            rows: store,
-          });
-          const updated = yield* updateSecretMaterial({
+          const updated = yield* secretMaterialStore.update({
             ref: {
               providerId: existing.value.providerId,
               handle: existing.value.id,
@@ -340,9 +331,9 @@ export const EngineLocalLive = HttpApiBuilder.group(
       .handle("deleteSecret", ({ path }) =>
         Effect.gen(function* () {
           const secretId = SecretMaterialIdSchema.make(path.secretId);
-          const store = yield* EngineStore;
+          const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
 
-          const existing = yield* store.secretMaterials.getById(secretId).pipe(
+          const existing = yield* secretMaterialStore.getById(secretId).pipe(
             Effect.mapError(() =>
               storageError("secrets.delete", "Failed looking up secret."),
             ),
@@ -356,10 +347,7 @@ export const EngineLocalLive = HttpApiBuilder.group(
               });
           }
 
-          const deleteSecretMaterial = createDefaultSecretMaterialDeleter({
-            rows: store,
-          });
-          const removed = yield* deleteSecretMaterial({
+          const removed = yield* secretMaterialStore.remove({
             providerId: existing.value.providerId,
             handle: existing.value.id,
           }).pipe(

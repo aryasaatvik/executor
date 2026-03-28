@@ -1,7 +1,7 @@
-import type { WorkspaceId } from "@executor/control-plane/model";
+import type { WorkspaceId } from "@executor/core/model";
 import {
   requireRuntimeLocalWorkspace,
-} from "@executor/control-plane/services/engine/runtime-context";
+} from "@executor/core/services/engine/runtime-context";
 import * as Effect from "effect/Effect";
 
 import { EngineForbiddenError } from "./errors";

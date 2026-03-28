@@ -5,7 +5,7 @@ import {
   LocalWorkspacePolicyApprovalModeSchema,
   LocalWorkspacePolicyEffectSchema,
   LocalWorkspacePolicySchema,
-} from "@executor/control-plane/model";
+} from "@executor/core/model";
 import * as Schema from "effect/Schema";
 
 import {

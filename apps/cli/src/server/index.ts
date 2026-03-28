@@ -8,15 +8,13 @@ import { dirname, extname, resolve } from "node:path";
 import { Readable } from "node:stream";
 import { FileSystem, HttpApiBuilder, HttpServer } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
-import * as RpcSerialization from "@effect/rpc/RpcSerialization";
-import * as RpcServer from "@effect/rpc/RpcServer";
-import { type ControlPlane } from "@executor/control-plane";
+import { type ControlPlane } from "@executor/core";
 import { createLocalControlPlane } from "@executor/world-local";
 import type { ExecutorDescriptor, HealthResponse } from "@executor/api";
 import type {
   ResolveExecutionEnvironment,
-} from "@executor/control-plane/services/execution";
-import type { ResolveSecretMaterial } from "@executor/control-plane/services/engine/secret-material-store";
+} from "@executor/core/services/execution";
+import type { ResolveSecretMaterial } from "@executor/core/services/engine/secret-material-store";
 import { createExecutorMcpRequestHandler } from "@executor/executor-mcp";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -143,8 +141,8 @@ const createHttpWebHandler = (
               ).pipe(
                 Layer.provideMerge(tracingRuntime?.layer ?? Layer.empty),
               ),
-            )
-          ),
+            ),
+          ) as Layer.Layer<any, never, never>,
           HttpServer.layerContext,
         ),
       ),

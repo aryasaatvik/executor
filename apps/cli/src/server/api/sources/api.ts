@@ -15,18 +15,16 @@ import {
   SourceKindSchema,
   SourceSchema,
   SourceStatusSchema,
+  SourceDiscoveryResultSchema,
+  SourceProbeAuthSchema,
   WorkspaceOauthClientIdSchema,
   WorkspaceOauthClientSchema,
   WorkspaceIdSchema,
-} from "@executor/control-plane/model";
-import {
-  SourceDiscoveryResultSchema,
-  SourceProbeAuthSchema,
-} from "@executor/engine/schema";
+} from "@executor/core/model";
 import {
   ConnectSourcePayloadSchema,
   type ConnectSourcePayload,
-} from "@executor/control-plane/services/engine/source-adapters";
+} from "@executor/core/services/engine/source-adapters";
 import * as Schema from "effect/Schema";
 
 import {

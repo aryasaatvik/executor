@@ -2,7 +2,7 @@ import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema } from "@effect/platform";
 import {
   LocalConfigSemanticSearchSchema,
   SecretMaterialPurposeSchema,
-} from "@executor/control-plane/model";
+} from "@executor/core/model";
 import { LocalInstallationSchema } from "@executor/world-local";
 import * as Schema from "effect/Schema";
 

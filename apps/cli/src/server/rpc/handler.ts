@@ -10,51 +10,52 @@ import {
   listExecutionSteps,
   listExecutions,
   resumeExecution,
-} from "@executor/control-plane/services/execution";
-import { discoverSource } from "@executor/control-plane/services/sources/source-discovery";
-import { SourceStore as ControlPlaneSourceStore } from "@executor/control-plane/services/sources/source-service";
+  SourceCatalogStore,
+} from "@executor/core/services/execution";
+import { discoverSource } from "@executor/core/services/sources/source-discovery";
+import { SourceStore as ControlPlaneSourceStore } from "@executor/core/services/sources/source-service";
 import {
   discoverSourceInspectionTools,
   getSourceInspection,
   getSourceInspectionToolDetail,
-} from "@executor/control-plane/services/sources/source-inspection";
+} from "@executor/core/services/sources/source-inspection";
+import {
+  createSource,
+  updateSource,
+} from "@executor/core/services/sources/source-operations";
+import {
+  SourceAuthService,
+  type ExecutorAddSourceInput,
+} from "@executor/core/services/sources/source-auth-service";
 import {
   createPolicy,
   getPolicy,
   listPolicies,
   removePolicy,
   updatePolicy,
-} from "@executor/control-plane/services/policy/policies-operations";
-import { requireRuntimeLocalWorkspace } from "@executor/control-plane/services/engine/runtime-context";
-import { WorkspaceConfigStore as ControlPlaneWorkspaceConfigStore } from "@executor/control-plane/services/engine/local-storage";
+} from "@executor/core/services/policy/policies-operations";
+import { requireRuntimeLocalWorkspace } from "@executor/core/services/engine/runtime-context";
+import { WorkspaceConfigStore as ControlPlaneWorkspaceConfigStore } from "@executor/core/services/engine/local-storage";
+import { SecretMaterialStore as ControlPlaneSecretMaterialStore } from "@executor/core/services/engine/secret-material-store";
+import {
+  type ConnectSourcePayload,
+  sourceAdapterRequiresInteractiveConnect,
+} from "@executor/core/services/engine/source-adapters";
 import {
   SecretMaterialIdSchema,
   type ToolSearchBackendMode,
   type ToolSearchMode,
   type ToolSearchResultSet,
   WorkspaceOauthClientIdSchema,
-} from "@executor/control-plane/model";
+} from "@executor/core/model";
 import {
-  createSource,
-  updateSource,
-  SourceAuthService,
-  type ExecutorAddSourceInput,
-  sourceAdapterRequiresInteractiveConnect,
-  WorkspaceConfigStore,
-  SourceStore,
-  EngineStore,
-  SourceCatalogStore,
-  createWorkspaceSourceCatalog,
-  createDefaultSecretMaterialDeleter,
-  createDefaultSecretMaterialStorer,
-  createDefaultSecretMaterialUpdater,
+  createLocalWorkspaceSourceCatalog,
   ENV_SECRET_PROVIDER_ID,
   KEYCHAIN_SECRET_PROVIDER_ID,
   LOCAL_SECRET_PROVIDER_ID,
   parseSecretStoreProviderId,
   resolveDefaultSecretStoreProviderId,
-  type ConnectSourcePayload,
-} from "@executor/engine";
+} from "@executor/world-local";
 import { validateSemanticSearchConfigForWrite } from "../api/local/semantic-search-config";
 import type { InstanceConfig, SecretProvider } from "../api/local/api";
 
@@ -459,9 +460,9 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
       resolveWorkspace("ListSecrets").pipe(
         Effect.flatMap((ws) =>
           Effect.gen(function* () {
-            const store = yield* EngineStore;
-            const sourceStore = yield* SourceStore;
-            const rows = yield* store.secretMaterials.listAll();
+            const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
+            const sourceStore = yield* ControlPlaneSourceStore;
+            const rows = yield* secretMaterialStore.listAll();
             const linkedSourcesMap = yield* sourceStore.listLinkedSecretSourcesInWorkspace(
               ws.installation.workspaceId,
               { actorAccountId: ws.installation.accountId },
@@ -495,14 +496,15 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
           );
         }
 
-        const store = yield* EngineStore;
-        const storeSecretMaterial = createDefaultSecretMaterialStorer({
-          rows: store,
-          ...(requestedProviderId ? { storeProviderId: requestedProviderId } : {}),
+        const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
+        const ref = yield* secretMaterialStore.store({
+          name,
+          purpose,
+          value,
+          ...(requestedProviderId ? { providerId: requestedProviderId } : {}),
         });
-        const ref = yield* storeSecretMaterial({ name, purpose, value });
         const secretId = SecretMaterialIdSchema.make(ref.handle);
-        const created = yield* store.secretMaterials.getById(secretId);
+        const created = yield* secretMaterialStore.getById(secretId);
 
         if (Option.isNone(created)) {
           return yield* Effect.fail(
@@ -523,9 +525,9 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     UpdateSecret: ({ secretId, update }) =>
       Effect.gen(function* () {
         const id = SecretMaterialIdSchema.make(secretId);
-        const store = yield* EngineStore;
+        const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
 
-        const existing = yield* store.secretMaterials.getById(id);
+        const existing = yield* secretMaterialStore.getById(id);
         if (Option.isNone(existing)) {
           return yield* Effect.fail(
             rpcError("UpdateSecret", `Secret not found: ${secretId}`, "not_found"),
@@ -536,8 +538,7 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
         if (update.name !== undefined) changes.name = update.name.trim() || null;
         if (update.value !== undefined) changes.value = update.value;
 
-        const updateSecretMaterial = createDefaultSecretMaterialUpdater({ rows: store });
-        const updated = yield* updateSecretMaterial({
+        const updated = yield* secretMaterialStore.update({
           ref: {
             providerId: existing.value.providerId,
             handle: existing.value.id,
@@ -558,17 +559,16 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
     DeleteSecret: ({ secretId }) =>
       Effect.gen(function* () {
         const id = SecretMaterialIdSchema.make(secretId);
-        const store = yield* EngineStore;
+        const secretMaterialStore = yield* ControlPlaneSecretMaterialStore;
 
-        const existing = yield* store.secretMaterials.getById(id);
+        const existing = yield* secretMaterialStore.getById(id);
         if (Option.isNone(existing)) {
           return yield* Effect.fail(
             rpcError("DeleteSecret", `Secret not found: ${secretId}`, "not_found"),
           );
         }
 
-        const deleteSecretMaterial = createDefaultSecretMaterialDeleter({ rows: store });
-        const removed = yield* deleteSecretMaterial({
+        const removed = yield* secretMaterialStore.remove({
           providerId: existing.value.providerId,
           handle: existing.value.id,
         });
@@ -747,12 +747,7 @@ export const ExecutorRpcHandlerLive = ExecutorRpcs.toLayer(
         Effect.flatMap((ws) =>
           Effect.gen(function* () {
             const sourceCatalogStore = yield* SourceCatalogStore;
-            const workspaceConfigStore = yield* WorkspaceConfigStore;
-            const catalog = createWorkspaceSourceCatalog({
-              workspaceId: ws.installation.workspaceId,
-              accountId: ws.installation.accountId,
-              sourceCatalogStore,
-              workspaceConfigStore,
+            const catalog = createLocalWorkspaceSourceCatalog({
               runtimeLocalWorkspace: ws,
             });
 

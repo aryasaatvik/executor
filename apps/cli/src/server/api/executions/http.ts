@@ -7,7 +7,7 @@ import {
   listExecutionSteps,
   listExecutions,
   resumeExecution,
-} from "@executor/control-plane/services/execution";
+} from "@executor/core/services/execution";
 import {
   EngineStorageError,
 } from "../errors";
