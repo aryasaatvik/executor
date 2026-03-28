@@ -4,14 +4,9 @@
   "type": "module",
   "packageManager": "bun@1.2.22",
   "workspaces": [
-    "packages/*/*",
-    "packages/engine",
-    "packages/client",
-    "packages/executor-api",
-    "packages/control-plane",
+    "packages/*",
     "apps/*",
-    "examples/*",
-    "apps/docs"
+    "examples/*"
   ],
   "catalog": {
     "@bunli/core": "^0.8.2",
