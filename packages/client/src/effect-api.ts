@@ -1,8 +1,8 @@
 import type * as Effect from "effect/Effect";
 import type { RpcClientError } from "@effect/rpc/RpcClientError";
-import type { ExecutorRpcError } from "@executor/engine/rpc";
+import type { ExecutorRpcError } from "@executor/rpc";
 import type * as Rpc from "@effect/rpc/Rpc";
-import type { ExecutorRpc } from "@executor/engine/rpc";
+import type { ExecutorRpc } from "@executor/rpc";
 import type { ExecutorRpcClient } from "./types";
 
 // ---------------------------------------------------------------------------

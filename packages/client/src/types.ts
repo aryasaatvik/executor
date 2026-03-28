@@ -1,7 +1,7 @@
 import type * as RpcClient from "@effect/rpc/RpcClient";
 import type { RpcClientError } from "@effect/rpc/RpcClientError";
-import type { ExecutorRpcs } from "@executor/engine/rpc";
-import type { WorkspaceId, AccountId } from "@executor/engine/schema";
+import type { ExecutorRpcs } from "@executor/rpc";
+import type { WorkspaceId, AccountId } from "@executor/core/model";
 
 import type { ExecutorEffectApi } from "./effect-api";
 import type { Promiseify } from "./promise-wrapper";

@@ -1,8 +1,8 @@
 import { FetchHttpClient } from "@effect/platform";
 import * as RpcClient from "@effect/rpc/RpcClient";
 import * as RpcSerialization from "@effect/rpc/RpcSerialization";
-import { ExecutorRpcs } from "@executor/engine/rpc";
-import type { WorkspaceId, AccountId } from "@executor/engine/schema";
+import { ExecutorRpcs } from "@executor/rpc";
+import type { WorkspaceId, AccountId } from "@executor/core/model";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";

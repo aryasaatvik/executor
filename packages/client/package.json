@@ -11,7 +11,8 @@
   "dependencies": {
     "@effect/platform": "catalog:",
     "@effect/rpc": "^0.73.2",
-    "@executor/engine": "workspace:*",
+    "@executor/core": "workspace:*",
+    "@executor/rpc": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
