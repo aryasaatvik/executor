@@ -38,8 +38,6 @@ import {
 } from "./tracing";
 import { platformServerEffectError } from "./effect-errors";
 import { createEngineApiLayer } from "./api";
-import { ExecutorRpcs } from "./rpc";
-import { ExecutorRpcHandlerLive } from "./rpc/handler";
 
 export {
   DEFAULT_EXECUTOR_DATA_DIR,
