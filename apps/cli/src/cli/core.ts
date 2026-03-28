@@ -10,14 +10,16 @@ import {
   type ExecutorEffectApi,
 } from "@executor/client";
 import {
+  type ExecutionEnvelope,
+  type ExecutionInteraction,
+  type LocalExecutorConfig,
   ExecutionIdSchema,
+} from "@executor/core/model";
+import {
   deriveLocalInstallation,
   loadLocalExecutorConfig,
   resolveLocalWorkspaceContext,
-  type LocalExecutorConfig,
-  type ExecutionEnvelope,
-  type ExecutionInteraction,
-} from "@executor/engine";
+} from "@executor/world-local";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";

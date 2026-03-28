@@ -2,13 +2,13 @@ import { defineCommand, defineGroup, option } from "@bunli/core";
 import {
   loadLocalExecutorConfig,
   mergeLocalExecutorConfigs,
-  type LoadedLocalExecutorConfig,
   resolveLocalWorkspaceContext,
-  type ResolvedLocalWorkspaceContext,
   writeHomeLocalExecutorConfig,
   writeProjectLocalExecutorConfig,
-  type LocalExecutorConfig,
-} from "@executor/engine";
+  type LoadedLocalExecutorConfig,
+  type ResolvedLocalWorkspaceContext,
+} from "@executor/world-local";
+import { type LocalExecutorConfig } from "@executor/core/model";
 import * as Effect from "effect/Effect";
 import { z } from "zod";
 
