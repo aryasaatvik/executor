@@ -1,0 +1,792 @@
+import { describe, expect, it } from "@effect/vitest";
+import { assertInstanceOf, assertNone, assertTrue } from "@effect/vitest/utils";
+import * as Either from "effect/Either";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+
+import * as Schema from "effect/Schema";
+import * as TestClock from "effect/TestClock";
+
+import {
+  allowAllToolInteractions,
+  createToolCatalogDiscovery,
+  createToolCatalogFromEntries,
+  createToolCatalogFromTools,
+  createStaticDiscoveryFromTools,
+  createSystemToolMap,
+  makeToolInvokerFromTools,
+  mergeToolCatalogs,
+  mergeToolMaps,
+  standardSchemaFromJsonSchema,
+  ToolInteractionDeniedError,
+  ToolInteractionPendingError,
+  toTool,
+  type ToolCatalog,
+  type CodeExecutor,
+  type ToolDescriptor,
+  type ToolMap,
+  type ToolPath,
+} from "./index";
+
+const asToolPath = (value: string): ToolPath => value as ToolPath;
+
+const numberPairInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    a: Schema.Number,
+    b: Schema.Number,
+  }),
+);
+
+const titleInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    title: Schema.String,
+  }),
+);
+
+const messageInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    message: Schema.String,
+  }),
+);
+
+
+describe("codemode-core", () => {
+  it.effect("builds static discovery from tool map keys", () =>
+    Effect.gen(function* () {
+      const tools = {
+        "math.add": {
+          description: "Add two numbers",
+          inputSchema: numberPairInputSchema,
+          execute: async ({ a, b }: { a: number; b: number }) => ({ sum: a + b }),
+        },
+        "issues.create": toTool({
+          tool: {
+            description: "Create issue",
+            inputSchema: titleInputSchema,
+            execute: async ({ title }: { title: string }) => ({ id: "issue_1", title }),
+          },
+          metadata: {
+            interaction: "required",
+          },
+        }),
+      } satisfies ToolMap;
+
+      const staticDiscovery = createStaticDiscoveryFromTools({
+        tools,
+        sourceKey: "api.demo",
+      });
+
+      expect(staticDiscovery.tools.map((tool) => tool.path)).toEqual([
+        "issues.create",
+        "math.add",
+      ]);
+
+      const createIssueDescriptor = staticDiscovery.tools.find(
+        (tool) => tool.path === "issues.create",
+      );
+      expect(createIssueDescriptor?.interaction).toBe("required");
+      expect(createIssueDescriptor?.sourceKey).toBe("api.demo");
+      expect(yield* staticDiscovery.executeDescription).toBe(
+        [
+          "Execute TypeScript in sandbox; call tools directly.",
+          "Available tools:",
+          "- issues.create: Create issue",
+          "- math.add: Add two numbers",
+          "Do not use fetch; use tools.* only.",
+        ].join("\n"),
+      );
+    }),
+  );
+
+
+  it.effect("returns pending interaction error for required tools", () =>
+    Effect.gen(function* () {
+      const invoker = makeToolInvokerFromTools({
+        tools: {
+          "issues.create": toTool({
+            tool: {
+              inputSchema: titleInputSchema,
+              execute: ({ title }: { title: string }) => ({ id: "issue_1", title }),
+            },
+            metadata: {
+              interaction: "required",
+            },
+          }),
+        },
+      });
+
+      const pendingError = yield* Effect.flip(
+        invoker.invoke({
+          path: "issues.create",
+          args: { title: "hello" },
+        }),
+      );
+
+      assertInstanceOf(pendingError, ToolInteractionPendingError);
+      expect(pendingError.path).toBe("issues.create");
+      expect(pendingError.elicitation.mode).toBe("form");
+    }),
+  );
+
+  it.effect("waits for elicitation response and executes when accepted", () =>
+    Effect.gen(function* () {
+      const invoker = makeToolInvokerFromTools({
+        tools: {
+          "issues.create": toTool({
+            tool: {
+              inputSchema: titleInputSchema,
+              execute: ({ title }: { title: string }) => ({ id: "issue_1", title }),
+            },
+            metadata: {
+              interaction: "required",
+            },
+          }),
+        },
+        onElicitation: () =>
+          Effect.succeed({
+            action: "accept" as const,
+          }),
+      });
+
+      const output = yield* invoker.invoke({
+        path: "issues.create",
+        args: { title: "hello" },
+        context: { runId: "run_1", callId: "call_1" },
+      });
+
+      expect(output).toEqual({ id: "issue_1", title: "hello" });
+    }),
+  );
+
+  it.effect("waits through polling-style elicitation callback and then executes", () =>
+    Effect.gen(function* () {
+      let pollingSleeps = 0;
+
+      const invoker = makeToolInvokerFromTools({
+        tools: {
+          "issues.create": toTool({
+            tool: {
+              inputSchema: titleInputSchema,
+              execute: ({ title }: { title: string }) => ({ id: "issue_1", title }),
+            },
+            metadata: {
+              interaction: "required",
+            },
+          }),
+        },
+        onElicitation: () =>
+          Effect.gen(function* () {
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              pollingSleeps += 1;
+              yield* Effect.sleep("200 seconds");
+            }
+
+            return {
+              action: "accept" as const,
+            };
+          }),
+      });
+
+      const fiber = yield* invoker.invoke({
+        path: "issues.create",
+        args: { title: "hello" },
+        context: { runId: "run_poll", callId: "call_poll" },
+      }).pipe(Effect.fork);
+
+      yield* TestClock.adjust("200 seconds");
+      const firstPoll = yield* Fiber.poll(fiber);
+      assertNone(firstPoll);
+
+      yield* TestClock.adjust("200 seconds");
+      const secondPoll = yield* Fiber.poll(fiber);
+      assertNone(secondPoll);
+
+      yield* TestClock.adjust("200 seconds");
+      const output = yield* Fiber.join(fiber);
+
+      expect(output).toEqual({ id: "issue_1", title: "hello" });
+      expect(pollingSleeps).toBe(3);
+    }),
+  );
+
+  it.effect("fails when elicitation is declined", () =>
+    Effect.gen(function* () {
+      const invoker = makeToolInvokerFromTools({
+        tools: {
+          "issues.create": toTool({
+            tool: {
+              inputSchema: titleInputSchema,
+              execute: ({ title }: { title: string }) => ({ id: "issue_1", title }),
+            },
+            metadata: {
+              interaction: "required",
+            },
+          }),
+        },
+        onElicitation: () =>
+          Effect.succeed({
+            action: "decline" as const,
+            content: {
+              reason: "User declined tool execution",
+            },
+          }),
+      });
+
+      const declinedError = yield* Effect.flip(
+        invoker.invoke({
+          path: "issues.create",
+          args: { title: "hello" },
+        }),
+      );
+
+      assertInstanceOf(declinedError, ToolInteractionDeniedError);
+      expect(declinedError.reason).toContain("User declined");
+    }),
+  );
+
+  it.effect("builds Standard Schema validators from JSON Schema", () =>
+    Effect.gen(function* () {
+      const tools = {
+        "math.add": {
+          description: "Add two numbers",
+          inputSchema: standardSchemaFromJsonSchema({
+            type: "object",
+            required: ["a", "b"],
+            properties: {
+              a: { type: "number" },
+              b: { type: "number" },
+            },
+            additionalProperties: false,
+          }),
+          execute: ({ a, b }: { a: number; b: number }) => ({ sum: a + b }),
+        },
+      } satisfies ToolMap;
+
+      const invoker = makeToolInvokerFromTools({ tools });
+
+      const success = yield* invoker.invoke({
+        path: "math.add",
+        args: { a: 1, b: 2 },
+      });
+      expect(success).toEqual({ sum: 3 });
+
+      const failure = yield* Effect.either(
+        invoker.invoke({
+          path: "math.add",
+          args: { a: "1", b: 2 },
+        }),
+      );
+
+      assertTrue(Either.isLeft(failure));
+      assertInstanceOf(failure.left, Error);
+      expect(failure.left.message).toContain("Input validation failed");
+    }),
+  );
+
+  it.effect("hydrates dynamic discover results via tool catalog", () =>
+    Effect.gen(function* () {
+      const searchCalls: Array<{
+        query: string;
+        namespace?: string;
+        sourceKey?: string;
+        limit: number;
+      }> = [];
+      const descriptors: Record<string, ToolDescriptor> = {
+        "source.docs.search": {
+          path: asToolPath("source.docs.search"),
+          sourceKey: "source.docs",
+          description: "Search docs",
+          contract: {
+            inputTypePreview: "object",
+            outputTypePreview: "object",
+          },
+        },
+        "source.issues.create": {
+          path: asToolPath("source.issues.create"),
+          sourceKey: "source.issues",
+          description: "Create issue",
+          interaction: "required",
+          contract: {
+            inputTypePreview: "object",
+            outputTypePreview: "object",
+          },
+        },
+      };
+
+      const catalog: ToolCatalog = {
+        listNamespaces: () =>
+          Effect.succeed([
+            {
+              namespace: "docs",
+              displayName: "Docs",
+              toolCount: 1,
+            },
+            {
+              namespace: "issues",
+              displayName: "Issues",
+              toolCount: 1,
+            },
+          ]),
+        listTools: ({ namespace, limit, includeSchemas = false }) =>
+          Effect.succeed(
+            Object.values(descriptors)
+              .filter((descriptor) =>
+                !namespace
+                  || descriptor.path.startsWith(`${namespace}.`)
+                  || descriptor.path.startsWith(`source.${namespace}.`)
+              )
+              .slice(0, limit)
+              .map((descriptor) => ({
+                ...descriptor,
+                ...(descriptor.contract
+                  ? {
+                      contract: {
+                        ...(descriptor.contract.inputTypePreview !== undefined
+                          ? { inputTypePreview: descriptor.contract.inputTypePreview }
+                          : {}),
+                        ...(descriptor.contract.outputTypePreview !== undefined
+                          ? { outputTypePreview: descriptor.contract.outputTypePreview }
+                          : {}),
+                        ...(includeSchemas && descriptor.contract.inputSchema !== undefined
+                          ? { inputSchema: descriptor.contract.inputSchema }
+                          : {}),
+                        ...(includeSchemas && descriptor.contract.outputSchema !== undefined
+                          ? { outputSchema: descriptor.contract.outputSchema }
+                          : {}),
+                      },
+                    }
+                  : {}),
+              })),
+          ),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(descriptors[path] ?? null),
+        searchTools: (input) => {
+          searchCalls.push(input);
+          return Effect.succeed([
+            { path: asToolPath("source.issues.create"), score: 0.93 },
+            { path: asToolPath("source.docs.search"), score: 0.72 },
+          ]);
+        },
+      };
+
+      const dynamic = createToolCatalogDiscovery({ catalog });
+
+      const namespaces = yield* dynamic.primitives.catalog!.namespaces({ limit: 10 });
+      expect(namespaces.namespaces).toHaveLength(2);
+
+      const discovered = yield* dynamic.primitives.discover!({
+        query: "create issue",
+        limit: 5,
+      });
+
+      expect(discovered.bestPath).toBe("source.issues.create");
+      expect(discovered.results[0]?.path).toBe("source.issues.create");
+      expect(discovered.results[0]?.interaction).toBe("required");
+      expect(searchCalls).toEqual([
+        {
+          query: "create issue",
+          limit: 5,
+        },
+      ]);
+
+      yield* dynamic.primitives.discover!({
+        query: "create issue",
+        sourceKey: "source.docs",
+        limit: 3,
+      });
+
+      expect(searchCalls[1]).toEqual({
+        query: "create issue",
+        sourceKey: "source.docs",
+        limit: 3,
+      });
+    }),
+  );
+
+  it.effect("builds a tool catalog from descriptor entries", () =>
+    Effect.gen(function* () {
+      const catalog = createToolCatalogFromEntries({
+        entries: [
+          {
+            namespace: "github.repos",
+            searchText: "github repository details get repo",
+            descriptor: {
+              path: asToolPath("github.repos.getRepo"),
+              sourceKey: "source.github",
+              description: "Get repository details",
+              contract: {
+                inputTypePreview: "{ owner: string; repo: string }",
+                outputTypePreview: "Repository",
+                inputSchema: { type: "object" },
+              },
+            },
+          },
+          {
+            namespace: "github.issues",
+            searchText: "github issues list repository issues",
+            score: (queryTokens) =>
+              queryTokens.includes("issues") && queryTokens.includes("repository")
+                ? 50
+                : 0,
+            descriptor: {
+              path: asToolPath("github.issues.list"),
+              sourceKey: "source.github",
+              description: "List repository issues",
+              contract: {
+                inputTypePreview: "{ owner: string; repo: string }",
+                outputTypePreview: "Issue[]",
+              },
+            },
+          },
+        ],
+      });
+
+      const namespaces = yield* catalog.listNamespaces({ limit: 10 });
+      expect(namespaces).toEqual([
+        { namespace: "github.repos", toolCount: 1 },
+        { namespace: "github.issues", toolCount: 1 },
+      ]);
+
+      const listed = yield* catalog.listTools({
+        namespace: "github.repos",
+        query: "repository details",
+        limit: 10,
+        includeSchemas: false,
+      });
+      expect(listed[0]?.path).toBe("github.repos.getRepo");
+      expect(listed[0]?.contract?.inputSchema).toBeUndefined();
+
+      const discovered = yield* catalog.searchTools({
+        query: "repository issues",
+        limit: 10,
+      });
+      expect(discovered[0]?.path).toBe("github.issues.list");
+
+      const sourceScoped = yield* catalog.searchTools({
+        query: "repository issues",
+        sourceKey: "source.github",
+        limit: 10,
+      });
+      expect(sourceScoped.map((hit) => hit.path)).toEqual([
+        "github.issues.list",
+        "github.repos.getRepo",
+      ]);
+
+      const described = yield* catalog.getToolByPath({
+        path: asToolPath("github.repos.getRepo"),
+        includeSchemas: true,
+      });
+      expect(described?.contract?.inputSchema).toEqual({ type: "object" });
+    }),
+  );
+
+  it.effect("system tools can be composed as normal tools", () =>
+    Effect.gen(function* () {
+      const catalog = createToolCatalogFromTools({
+        tools: {
+          "source.issues.create": toTool({
+            tool: {
+              description: "Create issue",
+              inputSchema: titleInputSchema,
+              execute: ({ title }: { title: string }) => ({ id: "issue_1", title }),
+            },
+            metadata: {
+              interaction: "required",
+              sourceKey: "source.issues",
+            },
+          }),
+        },
+        defaultNamespace: "issues",
+      });
+
+      const systemTools = createSystemToolMap({ catalog });
+      const allTools = mergeToolMaps([
+        {
+          "math.add": {
+            inputSchema: numberPairInputSchema,
+            execute: ({ a, b }: { a: number; b: number }) => ({ sum: a + b }),
+          },
+        },
+        systemTools,
+      ]);
+
+      const invoker = makeToolInvokerFromTools({ tools: allTools });
+      const discovered = yield* invoker.invoke({
+        path: "discover",
+        args: { query: "create issue", limit: 5 },
+      });
+
+      expect(discovered).toMatchObject({
+        bestPath: "source.issues.create",
+        total: 1,
+      });
+
+      const namespaces = yield* invoker.invoke({
+        path: "catalog.namespaces",
+        args: { limit: 10 },
+      });
+
+      expect(namespaces).toEqual({
+        namespaces: [
+          {
+            namespace: "issues",
+            toolCount: 1,
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("fuses merged catalog rankings instead of comparing raw scores across catalogs", () =>
+    Effect.gen(function* () {
+      const sourceCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "posthog.create_feature_flag"
+              ? {
+                  path: asToolPath("posthog.create_feature_flag"),
+                  sourceKey: "posthog",
+                  description: "Create a PostHog feature flag",
+                  interaction: "auto",
+                }
+              : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("posthog.create_feature_flag"), score: 0.9 },
+          ]),
+      };
+
+      const helperCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "catalog.namespaces"
+              ? {
+                  path: asToolPath("catalog.namespaces"),
+                  sourceKey: "system",
+                  description: "List namespaces",
+                  interaction: "auto",
+                }
+              : path === "catalog.tools"
+                ? {
+                    path: asToolPath("catalog.tools"),
+                    sourceKey: "system",
+                    description: "List tools",
+                    interaction: "auto",
+                  }
+                : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("catalog.namespaces"), score: 4 },
+            { path: asToolPath("catalog.tools"), score: 3 },
+          ]),
+      };
+
+      const catalog = mergeToolCatalogs({
+        catalogs: [sourceCatalog, helperCatalog],
+      });
+
+      const results = yield* (
+        catalog.searchTools({
+          query: "create a posthog feature flag",
+          limit: 5,
+        }) as Effect.Effect<
+          readonly { path: ToolPath; score: number }[],
+          unknown,
+          never
+        >
+      );
+
+      expect(results.map((result: { path: ToolPath }) => result.path)).toEqual([
+        "posthog.create_feature_flag",
+        "catalog.namespaces",
+        "catalog.tools",
+      ]);
+    }),
+  );
+
+  it.effect("boosts helper tools for introspection-oriented queries", () =>
+    Effect.gen(function* () {
+      const sourceCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "github.issue_write"
+              ? {
+                  path: asToolPath("github.issue_write"),
+                  sourceKey: "github",
+                  description: "Create or update a GitHub issue",
+                  interaction: "auto",
+                }
+              : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("github.issue_write"), score: 1.0 },
+          ]),
+      };
+
+      const helperCatalog: ToolCatalog = {
+        listNamespaces: () => Effect.succeed([]),
+        listTools: () => Effect.succeed([]),
+        getToolByPath: ({ path }) =>
+          Effect.succeed(
+            path === "discover"
+              ? {
+                  path: asToolPath("discover"),
+                  sourceKey: "system",
+                  description: "Discover tools by query",
+                  interaction: "auto",
+                }
+              : path === "describe.tool"
+                ? {
+                    path: asToolPath("describe.tool"),
+                    sourceKey: "system",
+                    description: "Describe a tool by path",
+                    interaction: "auto",
+                  }
+                : null,
+          ),
+        searchTools: () =>
+          Effect.succeed([
+            { path: asToolPath("discover"), score: 1.0 },
+            { path: asToolPath("describe.tool"), score: 0.9 },
+          ]),
+      };
+
+      const catalog = mergeToolCatalogs({
+        catalogs: [
+          { catalog: sourceCatalog, role: "persisted_source" },
+          { catalog: helperCatalog, role: "system_helper" },
+        ],
+      });
+
+      const results = yield* catalog.searchTools({
+        query: "find a tool for github issues",
+        limit: 5,
+      });
+
+      expect(results.map((result) => result.path)).toEqual([
+        "discover",
+        "describe.tool",
+        "github.issue_write",
+      ]);
+    }),
+  );
+
+  it.effect("executes code against tool map via executor contract", () =>
+    Effect.gen(function* () {
+      const tools = {
+        "math.add": {
+          inputSchema: numberPairInputSchema,
+          execute: async ({ a, b }: { a: number; b: number }) => ({ sum: a + b }),
+        },
+        "notifications.send": toTool({
+          tool: {
+            inputSchema: messageInputSchema,
+            execute: async ({ message }: { message: string }) => ({ delivered: true, message }),
+          },
+          metadata: { interaction: "required" },
+        }),
+      } satisfies ToolMap;
+
+      const executor: CodeExecutor = {
+        execute: (code, toolInvoker) =>
+          Effect.gen(function* () {
+            const math = yield* toolInvoker.invoke({
+              path: "math.add",
+              args: { a: 2, b: 3 },
+            });
+            const notification = yield* toolInvoker.invoke({
+              path: "notifications.send",
+              args: { message: "sum is 5" },
+            });
+            return {
+              result: { code, math, notification },
+              logs: ["executed"],
+            };
+          }),
+      };
+
+      const code = "return await tools.math.add({ a: 2, b: 3 });";
+      const output = yield* executor.execute(
+        code,
+        makeToolInvokerFromTools({
+          tools,
+          onToolInteraction: allowAllToolInteractions,
+        }),
+      );
+
+      expect(output.result).toEqual({
+        code,
+        math: { sum: 5 },
+        notification: { delivered: true, message: "sum is 5" },
+      });
+      expect(output.logs).toEqual(["executed"]);
+    }),
+  );
+
+  it.effect("supports lazy tool invoker without passing tools", () =>
+    Effect.gen(function* () {
+      let mathCalls = 0;
+
+      const toolInvoker = makeToolInvokerFromTools({
+        tools: {
+          "math.add": {
+            inputSchema: numberPairInputSchema,
+            execute: ({ a, b }: { a: number; b: number }) => {
+              mathCalls += 1;
+              return { sum: a + b };
+            },
+          },
+        },
+      });
+
+      const executor: CodeExecutor = {
+        execute: (code, invoker) =>
+          Effect.gen(function* () {
+            const math = yield* invoker.invoke({
+              path: "math.add",
+              args: { a: 20, b: 22 },
+            });
+            return {
+              result: { code, math },
+              logs: ["lazy"],
+            };
+          }),
+      };
+
+      const code = "return await tools.math.add({ a: 20, b: 22 });";
+      const output = yield* executor.execute(code, toolInvoker);
+
+      expect(mathCalls).toBe(1);
+      expect(output.result).toEqual({
+        code,
+        math: { sum: 42 },
+      });
+      expect(output.logs).toEqual(["lazy"]);
+    }),
+  );
+
+  it.effect("surfaces executor-reported errors", () =>
+    Effect.gen(function* () {
+      const executor: CodeExecutor = {
+        execute: (_code, _toolInvoker) =>
+          Effect.succeed({ result: null, error: "boom" }),
+      };
+
+      const output = yield* executor.execute(
+        "return 1",
+        makeToolInvokerFromTools({ tools: {} }),
+      );
+
+      expect(output.error).toBe("boom");
+    }),
+  );
+});

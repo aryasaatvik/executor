@@ -1,0 +1,27 @@
+{
+  "name": "@executor/executor-mcp",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@executor/codemode-core": "workspace:*",
+    "@executor/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "effect": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:",
+    "vitest": "catalog:"
+  },
+  "version": "0.0.0"
+}

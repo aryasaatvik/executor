@@ -1,0 +1,30 @@
+{
+  "name": "@executor/react",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit -p tsconfig.json",
+    "test": "bunx vitest run",
+    "test:watch": "bunx vitest"
+  },
+  "dependencies": {
+    "@executor/api": "workspace:*",
+    "@executor/core": "workspace:*",
+    "@executor/source-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": ">=18 <20"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
+    "bun-types": "catalog:",
+    "react-dom": "^19.2.0",
+    "vitest": "catalog:"
+  },
+  "version": "0.0.0"
+}
