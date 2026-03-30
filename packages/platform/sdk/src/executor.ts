@@ -112,6 +112,11 @@ const toPromiseExecutor = <
       remove: (policyId: Parameters<typeof executor.policies.remove>[0]) =>
         run(executor.policies.remove(policyId)),
     },
+    search: {
+      status: () => run(executor.search.status()),
+      refresh: () => run(executor.search.refresh()),
+      rebuild: () => run(executor.search.rebuild()),
+    },
     sources: {
       list: () => run(executor.sources.list()),
       get: (sourceId: Parameters<typeof executor.sources.get>[0]) =>
@@ -154,6 +159,7 @@ const toPromiseExecutor = <
     "secretStores",
     "secrets",
     "policies",
+    "search",
     "sources",
     "executions",
   ]);

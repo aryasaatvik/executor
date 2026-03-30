@@ -54,6 +54,12 @@ export {
 } from "./sources/api";
 
 export {
+  SearchApi,
+  SearchProviderStatusSchema,
+  type SearchProviderStatus,
+} from "./search/api";
+
+export {
   CreatePolicyPayloadSchema,
   PoliciesApi,
   UpdatePolicyPayloadSchema,

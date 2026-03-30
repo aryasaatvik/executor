@@ -8,6 +8,7 @@ import { ExecutorExecutionsLive } from "./executions/http";
 import { ExecutorLocalLive } from "./local/http";
 import { ExecutorPoliciesLive } from "./policies/http";
 import type { ExecutorHttpPlugin } from "./plugins";
+import { ExecutorSearchLive } from "./search/http";
 import { ExecutorSourcesLive } from "./sources/http";
 
 const createExecutorApiLive = (
@@ -17,6 +18,7 @@ const createExecutorApiLive = (
   const api = createExecutorApi({ plugins });
   let live: Layer.Layer<any, any, any> = HttpApiBuilder.api(api as any).pipe(
     Layer.provide(ExecutorLocalLive),
+    Layer.provide(ExecutorSearchLive),
     Layer.provide(ExecutorSourcesLive),
     Layer.provide(ExecutorPoliciesLive),
     Layer.provide(ExecutorExecutionsLive),

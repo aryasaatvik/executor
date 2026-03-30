@@ -4,6 +4,7 @@ import type { HttpApiGroup } from "@effect/platform";
 import { ExecutionsApi } from "./executions/api";
 import { LocalApi } from "./local/api";
 import { PoliciesApi } from "./policies/api";
+import { SearchApi } from "./search/api";
 import { SourcesApi } from "./sources/api";
 import type {
   ExecutorHttpApiExtension,
@@ -13,6 +14,7 @@ import type {
 
 export const CoreExecutorApi = HttpApi.make("executor")
   .add(LocalApi)
+  .add(SearchApi)
   .add(SourcesApi)
   .add(PoliciesApi)
   .add(ExecutionsApi)

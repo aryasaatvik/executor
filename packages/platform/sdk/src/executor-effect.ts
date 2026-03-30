@@ -52,6 +52,11 @@ import {
   updatePolicy,
 } from "./policies/operations";
 import {
+  getSearchStatus,
+  rebuildSearchIndex,
+  refreshSearchIndex,
+} from "./search/operations";
+import {
   discoverSourceInspectionTools,
   getSourceInspection,
   getSourceInspectionToolDetail,
@@ -169,6 +174,11 @@ export type ExecutorEffect = {
       policyId: string,
     ) => MappedProvidedEffect<ReturnType<typeof removePolicy>, boolean>;
   };
+  search: {
+    status: () => ProvidedEffect<ReturnType<typeof getSearchStatus>>;
+    refresh: () => ProvidedEffect<ReturnType<typeof refreshSearchIndex>>;
+    rebuild: () => ProvidedEffect<ReturnType<typeof rebuildSearchIndex>>;
+  };
   sources: {
     list: () => ProvidedEffect<ReturnType<typeof listSources>>;
     get: (sourceId: Source["id"]) => ProvidedEffect<ReturnType<typeof getSource>>;
@@ -260,6 +270,11 @@ const fromRuntime = (runtime: ExecutorRuntime): ExecutorEffect => {
         provide(removePolicy({ scopeId, policyId: policyId as never })).pipe(
           Effect.map((result) => result.removed),
         ),
+    },
+    search: {
+      status: () => provide(getSearchStatus()),
+      refresh: () => provide(refreshSearchIndex()),
+      rebuild: () => provide(rebuildSearchIndex()),
     },
     sources: {
       list: () => provide(listSources({ scopeId, actorScopeId })),
