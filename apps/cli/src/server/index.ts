@@ -37,7 +37,7 @@ import {
   tracingSearchUrl,
 } from "./tracing";
 import { platformServerEffectError } from "./effect-errors";
-import { createEngineApiLayer } from "./api";
+import { createExecutorApiLayer } from "./api";
 
 export {
   DEFAULT_EXECUTOR_DATA_DIR,
@@ -95,10 +95,6 @@ export type LocalExecutorRequestHandler = {
 
 type EngineWebHandler = ReturnType<typeof HttpApiBuilder.toWebHandler>;
 type ExecutorMcpHandler = ReturnType<typeof createExecutorMcpRequestHandler>;
-type RpcWebHandler = {
-  readonly handler: (request: Request) => Promise<Response>;
-  readonly dispose: () => Promise<void>;
-};
 
 const disposeControlPlane = (cp: ControlPlane) =>
   Effect.tryPromise({
@@ -134,7 +130,7 @@ const createHttpWebHandler = (
         Layer.merge(
           HttpApiBuilder.middlewareOpenApi({ path: "/v1/openapi.json" }).pipe(
             Layer.provideMerge(
-              createEngineApiLayer(
+              createExecutorApiLayer(
                 cp.runtimeLayer as unknown as Layer.Layer<any, never, never>,
               ).pipe(
                 Layer.provideMerge(tracingRuntime?.layer ?? Layer.empty),
@@ -146,36 +142,6 @@ const createHttpWebHandler = (
       ),
     ),
     (handler: EngineWebHandler) => Effect.tryPromise({ try: () => handler.dispose(), catch: (cause) => cause instanceof Error ? cause : new Error(String(cause ?? "web handler dispose failed")) }).pipe(Effect.orDie),
-  );
-
-const createRpcWebHandler = (
-  cp: ControlPlane,
-): Effect.Effect<RpcWebHandler, never, Scope.Scope> =>
-  Effect.acquireRelease(
-    Effect.sync(() =>
-      RpcServer.toWebHandler(ExecutorRpcs, {
-        layer: Layer.mergeAll(
-          ExecutorRpcHandlerLive,
-          RpcSerialization.layerNdjson,
-          HttpServer.layerContext,
-        ).pipe(
-          Layer.provide(
-            Layer.merge(
-              cp.runtimeLayer as unknown as Layer.Layer<any, never, never>,
-              NodeFileSystem.layer,
-            ),
-          ),
-        ),
-      }),
-    ),
-    (handler: RpcWebHandler) =>
-      Effect.tryPromise({
-        try: () => handler.dispose(),
-        catch: (cause) =>
-          cause instanceof Error
-            ? cause
-            : new Error(String(cause ?? "rpc handler dispose failed")),
-      }).pipe(Effect.orDie),
   );
 
 const safeFilePath = (assetsDir: string, pathname: string): string | null => {
@@ -376,7 +342,6 @@ const handleHealth = (): Response =>
 const isApiRequest = (request: Request): boolean => {
   const pathname = new URL(request.url).pathname;
   return pathname === "/mcp"
-    || pathname === "/rpc"
     || pathname === "/discover"
     || pathname === "/health"
     || pathname === "/v1"
@@ -420,7 +385,6 @@ export const createLocalExecutorRequestHandler = (
     );
 
     const apiHandler = yield* createHttpWebHandler(cp, tracingRuntime);
-    const rpcHandler = yield* createRpcWebHandler(cp);
     const mcpHandler = yield* Effect.acquireRelease(
       Effect.sync(() =>
         createExecutorMcpRequestHandler({
@@ -449,7 +413,6 @@ export const createLocalExecutorRequestHandler = (
         if (pathname === "/discover") return handleDiscover();
         if (pathname === "/health") return handleHealth();
         if (pathname === "/mcp") return mcpHandler.handleRequest(request);
-        if (pathname === "/rpc") return rpcHandler.handler(request);
 
         // /v1/* routes — add CORS to response
         const response = await apiHandler.handler(request);

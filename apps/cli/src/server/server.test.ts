@@ -37,18 +37,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import type { ExecutorEffectApi } from "@executor/client";
+import type { Executor } from "@executor/client";
 import {
   seedDemoMcpSourceInWorkspace,
   seedGithubOpenApiSourceInWorkspace,
 } from "../cli/dev";
 import { createLocalExecutorServer } from ".";
 
-/** Adapt a REST EngineClient's sources API to the new ExecutorEffectApi["sources"] shape. */
+/** Adapt a REST EngineClient's sources API to the new Executor["sources"] shape. */
 const adaptRestSourcesToEffectApi = (
   client: Effect.Effect.Success<ReturnType<typeof createEngineClient>>,
   workspaceId: string,
-): ExecutorEffectApi["sources"] => ({
+): Executor["sources"] => ({
   list: () => client.sources.list({ path: { workspaceId } } as any),
   get: (sourceId: any) => client.sources.get({ path: { workspaceId, sourceId } } as any),
   create: (payload: any) => client.sources.create({ path: { workspaceId }, payload } as any),
