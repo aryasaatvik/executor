@@ -39,7 +39,7 @@ import {
   EngineNotFoundError,
   EngineStorageError,
 } from "../errors";
-import { EngineApi } from "../api";
+import { ExecutorApi } from "../api";
 import type { ConnectSourcePayload } from "./api";
 import { resolveRequestedLocalWorkspace } from "../local-context";
 
@@ -685,8 +685,8 @@ const credentialSubmitErrorResponse = (input: {
     }),
   );
 
-export const EngineSourcesLive = HttpApiBuilder.group(
-  EngineApi,
+export const ExecutorSourcesLive = HttpApiBuilder.group(
+  ExecutorApi,
   "sources",
   (handlers) =>
     handlers

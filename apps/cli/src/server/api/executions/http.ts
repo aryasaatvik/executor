@@ -12,7 +12,7 @@ import {
   EngineStorageError,
 } from "../errors";
 
-import { EngineApi } from "../api";
+import { ExecutorApi } from "../api";
 import { resolveRequestedLocalWorkspace } from "../local-context";
 
 const toExecutionStorageError = (operation: string, cause: unknown) => {
@@ -24,8 +24,8 @@ const toExecutionStorageError = (operation: string, cause: unknown) => {
   });
 };
 
-export const EngineExecutionsLive = HttpApiBuilder.group(
-  EngineApi,
+export const ExecutorExecutionsLive = HttpApiBuilder.group(
+  ExecutorApi,
   "executions",
   (handlers) =>
     handlers

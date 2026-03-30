@@ -8,11 +8,11 @@ import {
   updatePolicy,
 } from "@executor/core/services/policy/policies-operations";
 
-import { EngineApi } from "../api";
+import { ExecutorApi } from "../api";
 import { resolveRequestedLocalWorkspace } from "../local-context";
 
-export const EnginePoliciesLive = HttpApiBuilder.group(
-  EngineApi,
+export const ExecutorPoliciesLive = HttpApiBuilder.group(
+  ExecutorApi,
   "policies",
   (handlers) =>
     handlers

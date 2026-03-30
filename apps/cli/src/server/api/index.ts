@@ -1,5 +1,5 @@
 export {
-  EngineApi,
+  ExecutorApi,
   executorOpenApiSpec,
 } from "./api";
 
@@ -14,10 +14,10 @@ export {
 } from "./errors";
 
 export {
-  EngineApiLive,
-  type EngineRuntimeContext,
-  type BuiltEngineApiLayer,
-  createEngineApiLayer,
+  ExecutorApiLive,
+  type ExecutorRuntimeContext,
+  type BuiltExecutorApiLayer,
+  createExecutorApiLayer,
 } from "./http";
 
 export {

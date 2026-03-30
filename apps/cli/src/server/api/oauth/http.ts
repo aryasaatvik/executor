@@ -10,7 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { SourceAuthService } from "@executor/core/services/sources/source-auth-service";
-import { EngineApi } from "../api";
+import { ExecutorApi } from "../api";
 import {
   EngineBadRequestError,
   EngineStorageError,
@@ -229,8 +229,8 @@ const sourceOAuthPopupResultDocument = (input: {
   </body>
 </html>`;
 
-export const EngineOAuthLive = HttpApiBuilder.group(
-  EngineApi,
+export const ExecutorOAuthLive = HttpApiBuilder.group(
+  ExecutorApi,
   "oauth",
   (handlers) =>
     handlers

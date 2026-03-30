@@ -29,7 +29,7 @@ import type {
 } from "./api";
 import { validateSemanticSearchConfigForWrite } from "./semantic-search-config";
 
-import { EngineApi } from "../api";
+import { ExecutorApi } from "../api";
 import {
   EngineBadRequestError,
   EngineNotFoundError,
@@ -179,8 +179,8 @@ const writeInstanceConfig = (
     return yield* loadInstanceConfig();
   });
 
-export const EngineLocalLive = HttpApiBuilder.group(
-  EngineApi,
+export const ExecutorLocalLive = HttpApiBuilder.group(
+  ExecutorApi,
   "local",
   (handlers) =>
     handlers
