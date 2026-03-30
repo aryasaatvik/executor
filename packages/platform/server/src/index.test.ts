@@ -1,5 +1,6 @@
 import { type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
+import { existsSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -1588,6 +1589,37 @@ describe("local-executor-server", () => {
       expect(execution.pendingInteraction).toBeNull();
       expect(execution.execution.resultJson).toContain("\"full_name\":\"vercel/ai\"");
       expect(openApiServer.seenAuthHeaders).toEqual([null]);
+    }),
+    15_000,
+  );
+
+  it.scoped("does not treat :memory: as a filesystem root for plugin storage", () =>
+    Effect.gen(function* () {
+      const leakedPath = resolve(process.cwd(), ":memory:");
+      rmSync(leakedPath, { recursive: true, force: true });
+
+      const openApiServer = yield* Effect.acquireRelease(
+        Effect.promise(() => startOpenApiDemoServer()),
+        (server) => Effect.promise(() => server.close()).pipe(Effect.orDie),
+      );
+      const { installation, client } = yield* createApiClientHarness();
+
+      const created = yield* client.openapi.createSource({
+        path: {
+          workspaceId: installation.scopeId,
+        },
+        payload: {
+          name: "GitHub",
+          specUrl: openApiServer.specUrl,
+          baseUrl: openApiServer.baseUrl,
+          auth: {
+            kind: "none",
+          },
+        },
+      });
+
+      expect(created.status).toBe("connected");
+      expect(existsSync(leakedPath)).toBe(false);
     }),
     15_000,
   );
