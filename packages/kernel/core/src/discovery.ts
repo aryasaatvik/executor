@@ -7,6 +7,7 @@ import type {
   DiscoverPrimitive,
   DiscoveryPrimitives,
   SearchHit,
+  ToolSearchResult,
   ToolCatalog,
   ToolCatalogEntry,
   ToolDescriptor,
@@ -241,21 +242,50 @@ export function createToolCatalogFromEntries(input: {
             })
           : null,
       ),
-    searchTools: ({ query, namespace, limit }) => {
+    searchTools: ({ query, namespace, limit, includeSchemas = false }) => {
       const queryTokens = tokenize(query);
 
       return Effect.succeed(
-        entries
-          .filter((entry) =>
-            !namespace || namespaceFromCatalogEntry(entry) === namespace,
-          )
-          .map((entry) => ({
-            path: entry.descriptor.path,
-            score: scoreCatalogEntry(queryTokens, entry),
-          }))
-          .filter((hit) => hit.score > 0)
-          .sort((left, right) => right.score - left.score)
-          .slice(0, limit),
+        (() => {
+          const results = entries
+            .filter((entry) =>
+              !namespace || namespaceFromCatalogEntry(entry) === namespace,
+            )
+            .map((entry) => ({
+              entry,
+              score: scoreCatalogEntry(queryTokens, entry),
+            }))
+            .filter((item) => item.score > 0)
+            .sort((left, right) => right.score - left.score)
+            .slice(0, limit)
+            .map(({ entry, score }) => {
+              const descriptor = projectDescriptor({
+                descriptor: entry.descriptor,
+                includeSchemas,
+              });
+
+              return {
+                path: descriptor.path,
+                score,
+                sourceKey: descriptor.sourceKey,
+                description: descriptor.description,
+                interaction: descriptor.interaction,
+                ...(descriptorContract(descriptor, includeSchemas)
+                  ? { contract: descriptorContract(descriptor, includeSchemas) }
+                  : {}),
+              } satisfies SearchHit;
+            });
+
+          return {
+            providerKey: "catalog",
+            mode: "lexical",
+            backend: "in-memory",
+            fallbackUsed: false,
+            bestPath: results[0]?.path ?? null,
+            total: results.length,
+            results,
+          } satisfies ToolSearchResult;
+        })(),
       );
     },
   } satisfies ToolCatalog;
@@ -307,7 +337,7 @@ export function mergeToolCatalogs(input: {
         return null;
       }),
 
-    searchTools: ({ query, namespace, limit }) =>
+    searchTools: ({ query, namespace, limit, includeSchemas = false }) =>
       Effect.gen(function* () {
         const groups = yield* Effect.forEach(
           catalogs,
@@ -316,11 +346,23 @@ export function mergeToolCatalogs(input: {
               query,
               ...(namespace !== undefined ? { namespace } : {}),
               limit: Math.max(limit, limit * catalogs.length),
+              includeSchemas,
             }),
           { concurrency: "unbounded" },
         );
 
-        return dedupeSearchHits(groups).slice(0, limit);
+        const results = dedupeSearchHits(groups.map((group) => group.results)).slice(0, limit);
+        const first = groups[0];
+
+        return {
+          providerKey: first?.providerKey,
+          mode: first?.mode,
+          backend: first?.backend,
+          fallbackUsed: groups.some((group) => group.fallbackUsed === true),
+          bestPath: results[0]?.path ?? null,
+          total: results.length,
+          results,
+        } satisfies ToolSearchResult;
       }),
   } satisfies ToolCatalog;
 }
@@ -377,56 +419,10 @@ export function createDiscoveryPrimitivesFromToolCatalog(input: {
     limit = 12,
     includeSchemas = false,
   }) =>
-    Effect.gen(function* () {
-      const hits = yield* catalog.searchTools({
-        query,
-        limit,
-      });
-
-      if (hits.length === 0) {
-        return {
-          bestPath: null,
-          results: [],
-          total: 0,
-        };
-      }
-
-      const descriptors = yield* Effect.forEach(
-        hits,
-        (hit) =>
-          catalog.getToolByPath({
-            path: hit.path,
-            includeSchemas,
-          }),
-        { concurrency: "unbounded" },
-      );
-
-      const hydrated = hits
-        .map((hit, index) => {
-          const descriptor = descriptors[index];
-          if (!descriptor) {
-            return null;
-          }
-
-          return {
-            path: descriptor.path,
-            score: hit.score,
-            description: descriptor.description,
-            interaction: descriptor.interaction ?? "auto",
-            ...(descriptorContract(descriptor, includeSchemas)
-              ? { contract: descriptorContract(descriptor, includeSchemas) }
-              : {}),
-          };
-        })
-        .filter(Boolean) as Array<
-        Record<string, unknown> & { path: ToolPath; score: number }
-      >;
-
-      return {
-        bestPath: hydrated[0]?.path ?? null,
-        results: hydrated,
-        total: hydrated.length,
-      };
+    catalog.searchTools({
+      query,
+      limit,
+      includeSchemas,
     });
 
   const catalogPrimitive: CatalogPrimitive = {

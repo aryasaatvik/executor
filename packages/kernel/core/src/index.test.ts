@@ -354,10 +354,21 @@ describe("codemode-core", () => {
         getToolByPath: ({ path }) =>
           Effect.succeed(descriptors[path] ?? null),
         searchTools: () =>
-          Effect.succeed([
-            { path: asToolPath("source.issues.create"), score: 0.93 },
-            { path: asToolPath("source.docs.search"), score: 0.72 },
-          ]),
+          Effect.succeed({
+            providerKey: "test",
+            mode: "lexical",
+            backend: "in-memory",
+            bestPath: asToolPath("source.issues.create"),
+            total: 2,
+            results: [
+              {
+                path: asToolPath("source.issues.create"),
+                score: 0.93,
+                interaction: "required",
+              },
+              { path: asToolPath("source.docs.search"), score: 0.72 },
+            ],
+          }),
       };
 
       const dynamic = createToolCatalogDiscovery({ catalog });
@@ -433,7 +444,7 @@ describe("codemode-core", () => {
         query: "repository issues",
         limit: 10,
       });
-      expect(discovered[0]?.path).toBe("github.issues.list");
+      expect(discovered.results[0]?.path).toBe("github.issues.list");
 
       const described = yield* catalog.getToolByPath({
         path: asToolPath("github.repos.getRepo"),

@@ -36,12 +36,19 @@ const catalog: ToolCatalog = {
     });
   },
   searchTools({ limit }) {
-    return Effect.succeed(
-      [
-        { path: asToolPath("source.src_api.github.issues.list"), score: 0.99 },
-        { path: asToolPath("source.src_api.github.issues.create"), score: 0.92 },
-      ].slice(0, limit),
-    );
+    const results = [
+      { path: asToolPath("source.src_api.github.issues.list"), score: 0.99 },
+      { path: asToolPath("source.src_api.github.issues.create"), score: 0.92 },
+    ].slice(0, limit);
+
+    return Effect.succeed({
+      providerKey: "demo",
+      mode: "lexical",
+      backend: "in-memory",
+      bestPath: results[0]?.path ?? null,
+      total: results.length,
+      results,
+    });
   },
 };
 

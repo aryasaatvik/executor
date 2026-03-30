@@ -174,10 +174,27 @@ export const ToolNamespaceSchema = Schema.Struct({
   toolCount: Schema.optional(Schema.Number),
 });
 
-export type SearchHit = {
+export type ToolSearchResultItem = {
   path: ToolPath;
   score: number;
+  sourceKey?: string;
+  description?: string;
+  interaction?: "auto" | "required";
+  contract?: ToolContract;
+  metadata?: Record<string, unknown>;
 };
+
+export type ToolSearchResult = {
+  providerKey?: string;
+  mode?: string;
+  backend?: string;
+  fallbackUsed?: boolean;
+  bestPath: ToolPath | null;
+  total: number;
+  results: readonly ToolSearchResultItem[];
+};
+
+export type SearchHit = ToolSearchResultItem;
 
 export type ToolCatalogEntry = {
   descriptor: ToolDescriptor;
@@ -207,7 +224,8 @@ export interface ToolCatalog {
     query: string;
     namespace?: string;
     limit: number;
-  }): Effect.Effect<readonly SearchHit[], unknown>;
+    includeSchemas?: boolean;
+  }): Effect.Effect<ToolSearchResult, unknown>;
 }
 
 export type CatalogPrimitive = {
@@ -239,14 +257,7 @@ export type DiscoverPrimitive = (input: {
   limit?: number;
   includeSchemas?: boolean;
 }) => Effect.Effect<
-  {
-    bestPath: ToolPath | null;
-    results: readonly (Record<string, unknown> & {
-      path: ToolPath;
-      score: number;
-    })[];
-    total: number;
-  },
+  ToolSearchResult,
   unknown
 >;
 
