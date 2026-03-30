@@ -1,11 +1,27 @@
 import { Link } from "@tanstack/react-router";
-import { useSources } from "@executor/react";
+import {
+  useRebuildSearchProvider,
+  useRefreshSearchProvider,
+  useSearchProviderStatus,
+  useSources,
+  type SearchProviderStatus,
+} from "@executor/react";
 import { sourcePluginsIndexPath } from "@executor/react/plugins";
 import { LoadableBlock } from "../components/loadable";
 import { LocalMcpInstallCard } from "../components/local-mcp-install-card";
 import { SourceFavicon } from "../components/source-favicon";
-import { Alert, Badge, Button, Card } from "@executor/react/plugins";
-import { IconSources, IconPlus } from "../components/icons";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@executor/react/plugins";
+import { IconSources, IconPlus, IconSpinner } from "../components/icons";
 import {
   getSourceFrontendPaths,
 } from "../plugins";
@@ -16,6 +32,145 @@ const statusVariant = (status: string) =>
     : status === "error"
       ? "destructive" as const
       : "muted" as const;
+
+const searchStatusVariant = (status: SearchProviderStatus) =>
+  status.healthy
+    ? status.fallbackUsed === true
+      ? "secondary" as const
+      : "default" as const
+    : "destructive" as const;
+
+const formatSearchCount = (value: number | undefined) =>
+  value === undefined ? "—" : value.toLocaleString();
+
+function SearchProviderCard() {
+  const status = useSearchProviderStatus();
+  const refreshSearchProvider = useRefreshSearchProvider();
+  const rebuildSearchProvider = useRebuildSearchProvider();
+
+  if (status.status === "loading") {
+    return (
+      <Card className="rounded-2xl">
+        <CardHeader className="border-b border-border/60">
+          <CardTitle>Workspace search</CardTitle>
+          <CardDescription>
+            Search provider status and index operations for this workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center gap-3 py-8 text-sm text-muted-foreground">
+          <IconSpinner />
+          Loading search status...
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (status.status === "error") {
+    return (
+      <Card className="rounded-2xl">
+        <CardHeader className="border-b border-border/60">
+          <CardTitle>Workspace search</CardTitle>
+          <CardDescription>
+            Search provider status and index operations for this workspace.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pb-0">
+          <Alert variant="destructive">
+            {status.error.message}
+          </Alert>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const data = status.data;
+  const alertVariant = data.healthy ? "warning" as const : "destructive" as const;
+  const detail =
+    data.detail ?? (data.fallbackUsed ? "Search results are currently using a fallback provider." : null);
+
+  return (
+    <Card className="rounded-2xl">
+      <CardHeader className="border-b border-border/60">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>Workspace search</CardTitle>
+            <CardDescription>
+              Search provider status and index operations for this workspace.
+            </CardDescription>
+          </div>
+          <Badge variant={searchStatusVariant(data)}>
+            {data.healthy ? (data.fallbackUsed ? "Fallback" : "Healthy") : "Degraded"}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatTile label="Provider" value={data.providerKey} />
+          <StatTile label="Configured" value={data.configuredProviderKey} />
+          <StatTile label="Backend" value={data.backend} />
+          <StatTile label="Mode" value={data.mode} />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <StatTile label="Sources" value={formatSearchCount(data.sourceCount)} />
+          <StatTile label="Documents" value={formatSearchCount(data.documentCount)} />
+          <StatTile label="Stale sources" value={formatSearchCount(data.staleSourceCount)} />
+        </div>
+        {detail && (
+          <Alert variant={alertVariant}>
+            {detail}
+          </Alert>
+        )}
+      </CardContent>
+      <CardFooter className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[12px] text-muted-foreground">
+          Refresh syncs the active provider. Rebuild regenerates the search index.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void refreshSearchProvider.mutateAsync(undefined);
+            }}
+            disabled={refreshSearchProvider.status === "pending"}
+          >
+            {refreshSearchProvider.status === "pending" ? (
+              <IconSpinner className="size-3.5" />
+            ) : null}
+            Refresh
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => {
+              void rebuildSearchProvider.mutateAsync(undefined);
+            }}
+            disabled={rebuildSearchProvider.status === "pending"}
+          >
+            {rebuildSearchProvider.status === "pending" ? (
+              <IconSpinner className="size-3.5" />
+            ) : null}
+            Rebuild
+          </Button>
+        </div>
+      </CardFooter>
+    </Card>
+  );
+}
+
+function StatTile(props: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+        {props.label}
+      </div>
+      <div className="mt-1 text-sm font-medium text-foreground">
+        {props.value}
+      </div>
+    </div>
+  );
+}
 
 export function HomePage() {
   const sources = useSources();
@@ -39,6 +194,10 @@ export function HomePage() {
               Add source
             </Button>
           </Link>
+        </div>
+
+        <div className="mb-8">
+          <SearchProviderCard />
         </div>
 
         <LocalMcpInstallCard className="mb-8" />
