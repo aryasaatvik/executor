@@ -7,7 +7,6 @@ import * as Scope from "effect/Scope";
 import {
   createExecutor,
   type Executor,
-  type ExecutorEffectApi,
 } from "@executor/client";
 import {
   type ExecutionEnvelope,
@@ -208,7 +207,7 @@ const getLocalAuthedClient = (baseUrl: string = DEFAULT_SERVER_BASE_URL) =>
 const isServerReachable = (baseUrl: string) =>
   Effect.tryPromise({
     try: () =>
-      fetch(`${baseUrl}/rpc`, { method: "HEAD" }).then((response) => response.ok),
+      fetch(`${baseUrl}/health`, { method: "GET" }).then((response) => response.ok),
     catch: () => false as const,
   }).pipe(Effect.catchAll(() => Effect.succeed(false)));
 
@@ -912,7 +911,7 @@ const promptInteraction = (input: {
   });
 
 const waitForExecutionProgress = (input: {
-  api: ExecutorEffectApi;
+  api: Executor;
   executionId: ExecutionEnvelope["execution"]["id"];
   pendingInteractionId: ExecutionInteraction["id"];
 }) =>
@@ -920,7 +919,7 @@ const waitForExecutionProgress = (input: {
     while (true) {
       yield* sleep(SERVER_POLL_INTERVAL_MS);
 
-      const next = yield* input.api.executions.get(input.executionId);
+      const next = yield* Effect.tryPromise({ try: () => input.api.executions.get(input.executionId), catch: toError });
 
       if (
         next.execution.status !== "waiting_for_interaction"
@@ -964,7 +963,7 @@ const printExecution = (envelope: ExecutionEnvelope) =>
   });
 
 const driveExecution = (input: {
-  api: ExecutorEffectApi;
+  api: Executor;
   envelope: ExecutionEnvelope;
   baseUrl: string;
   shouldOpenUrls: boolean;
@@ -1038,9 +1037,12 @@ const driveExecution = (input: {
         return current;
       }
 
-      current = yield* input.api.executions.resume(current.execution.id, {
-        responseJson,
-        interactionMode: executionInteractionMode(),
+      current = yield* Effect.tryPromise({
+        try: () => input.api.executions.resume(current.execution.id, {
+          responseJson,
+          interactionMode: executionInteractionMode(),
+        }),
+        catch: toError,
       });
     }
 
@@ -1064,14 +1066,17 @@ export const runCall = (input: {
 
     yield* ensureServer(baseUrl);
     const executor = yield* getLocalAuthedClient(baseUrl);
-    const created = yield* executor.effect.executions.create({
-      code: resolvedCode,
-      interactionMode: executionInteractionMode(),
+    const created = yield* Effect.tryPromise({
+      try: () => executor.executions.create({
+        code: resolvedCode,
+        interactionMode: executionInteractionMode(),
+      }),
+      catch: toError,
     });
 
     const settled = yield* driveExecution({
-      api: executor.effect,
-      envelope: created,
+      api: executor,
+      envelope: created as any,
       baseUrl,
       shouldOpenUrls: !(input.noOpen ?? false),
     });
@@ -1091,11 +1096,14 @@ export const runResume = (input: {
     const decodedExecutionId = yield* decodeExecutionId(input.executionId).pipe(
       Effect.mapError((cause) => toError(cause)),
     );
-    const execution = yield* executor.effect.executions.get(decodedExecutionId);
+    const execution = yield* Effect.tryPromise({
+      try: () => executor.executions.get(decodedExecutionId),
+      catch: toError,
+    });
 
     const settled = yield* driveExecution({
-      api: executor.effect,
-      envelope: execution,
+      api: executor,
+      envelope: execution as any,
       baseUrl,
       shouldOpenUrls: !(input.noOpen ?? false),
     });
@@ -1113,7 +1121,7 @@ export const runSeedDemoMcpSource = (input: {
     yield* ensureServer(input.baseUrl);
     const executor = yield* getLocalAuthedClient(input.baseUrl);
     const result = yield* seedDemoMcpSourceInWorkspace({
-      api: executor.effect.sources,
+      api: executor.sources,
       endpoint: input.endpoint,
       name: input.name,
       namespace: input.namespace,
@@ -1136,7 +1144,7 @@ export const runSeedGithubOpenApiSource = (input: {
     yield* ensureServer(input.baseUrl);
     const executor = yield* getLocalAuthedClient(input.baseUrl);
     const result = yield* seedGithubOpenApiSourceInWorkspace({
-      api: executor.effect.sources,
+      api: executor.sources,
       endpoint: input.endpoint,
       specUrl: input.specUrl,
       name: input.name,

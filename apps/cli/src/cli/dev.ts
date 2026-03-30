@@ -1,11 +1,14 @@
-import type { ExecutorEffectApi } from "@executor/client";
+import type { Executor } from "@executor/client";
 import * as Effect from "effect/Effect";
+
+const toError = (cause: unknown) =>
+  cause instanceof Error ? cause : new Error(String(cause));
 
 const readBindingString = (binding: Record<string, unknown>, key: string): string | null =>
   typeof binding[key] === "string" ? String(binding[key]) : null;
 
 type SeedDemoMcpSourceInput = {
-  api: ExecutorEffectApi["sources"];
+  api: Executor["sources"];
   endpoint: string;
   name: string;
   namespace: string;
@@ -24,7 +27,7 @@ type SeedDemoMcpSourceResult =
     };
 
 type SeedGithubOpenApiSourceInput = {
-  api: ExecutorEffectApi["sources"];
+  api: Executor["sources"];
   endpoint: string;
   specUrl: string;
   name: string;
@@ -34,12 +37,15 @@ type SeedGithubOpenApiSourceInput = {
 
 export const seedDemoMcpSourceInWorkspace = (
   input: SeedDemoMcpSourceInput,
-): Effect.Effect<SeedDemoMcpSourceResult, unknown, never> =>
+): Effect.Effect<SeedDemoMcpSourceResult, Error> =>
   Effect.gen(function* () {
-    const existing = yield* input.api.list();
+    const existing = yield* Effect.tryPromise({
+      try: () => input.api.list(),
+      catch: toError,
+    });
 
-    const existingByName = existing.find(
-      (source) => source.kind === "mcp" && source.name === input.name,
+    const existingByName = (existing as any[]).find(
+      (source: any) => source.kind === "mcp" && source.name === input.name,
     );
 
     const expected = {
@@ -48,139 +54,107 @@ export const seedDemoMcpSourceInWorkspace = (
       transport: "streamable-http" as const,
     };
 
-    if (
-      existingByName !== undefined
-      && existingByName.endpoint === expected.endpoint
-      && existingByName.namespace === expected.namespace
-      && readBindingString(existingByName.binding, "transport") === expected.transport
-      && existingByName.auth.kind === "none"
-    ) {
-      return {
-        action: "noop",
-        sourceId: existingByName.id,
-        endpoint: existingByName.endpoint,
-      };
-    }
+    if (existingByName) {
+      const binding = existingByName.binding ?? {};
+      if (
+        readBindingString(binding, "endpoint") === expected.endpoint
+        && readBindingString(binding, "namespace") === expected.namespace
+      ) {
+        return {
+          action: "noop" as const,
+          sourceId: existingByName.id,
+          endpoint: input.endpoint,
+        };
+      }
 
-    if (existingByName !== undefined) {
-      const updated = yield* input.api.update(existingByName.id, {
-        endpoint: input.endpoint,
-        status: "connected",
-        enabled: true,
-        namespace: input.namespace,
-        binding: {
-          transport: "streamable-http",
-          queryParams: null,
-          headers: null,
-        },
-        auth: {
-          kind: "none",
-        },
+      yield* Effect.tryPromise({
+        try: () => input.api.update(existingByName.id, {
+          binding: expected,
+        }),
+        catch: toError,
       });
 
       return {
-        action: "updated",
-        sourceId: updated.id,
-        endpoint: updated.endpoint,
+        action: "updated" as const,
+        sourceId: existingByName.id,
+        endpoint: input.endpoint,
       };
     }
 
-    const created = yield* input.api.create({
-      name: input.name,
-      kind: "mcp",
-      endpoint: input.endpoint,
-      status: "connected",
-      enabled: true,
-      namespace: input.namespace,
-      binding: {
-        transport: "streamable-http",
-        queryParams: null,
-        headers: null,
-      },
-      auth: {
-        kind: "none",
-      },
+    const created = yield* Effect.tryPromise({
+      try: () => input.api.create({
+        kind: "mcp",
+        name: input.name,
+        binding: expected,
+      }),
+      catch: toError,
     });
 
     return {
-      action: "created",
-      sourceId: created.id,
-      endpoint: created.endpoint,
+      action: "created" as const,
+      sourceId: (created as any).id,
+      endpoint: input.endpoint,
     };
   });
 
 export const seedGithubOpenApiSourceInWorkspace = (
   input: SeedGithubOpenApiSourceInput,
-): Effect.Effect<SeedDemoMcpSourceResult, unknown, never> =>
+): Effect.Effect<SeedDemoMcpSourceResult, Error> =>
   Effect.gen(function* () {
-    const existing = yield* input.api.list();
+    const existing = yield* Effect.tryPromise({
+      try: () => input.api.list(),
+      catch: toError,
+    });
 
-    const existingByName = existing.find(
-      (source) => source.kind === "openapi" && source.name === input.name,
+    const existingByName = (existing as any[]).find(
+      (source: any) => source.kind === "openapi" && source.name === input.name,
     );
 
-    const auth = {
-      kind: "bearer" as const,
-      headerName: "Authorization",
-      prefix: "Bearer ",
-      token: {
-        providerId: "env",
-        handle: input.credentialEnvVar ?? "GITHUB_TOKEN",
-      },
+    const expected = {
+      endpoint: input.endpoint,
+      specUrl: input.specUrl,
+      namespace: input.namespace,
     };
 
-    if (
-      existingByName !== undefined
-      && existingByName.endpoint === input.endpoint
-      && existingByName.namespace === input.namespace
-      && readBindingString(existingByName.binding, "specUrl") === input.specUrl
-      && JSON.stringify(existingByName.binding.defaultHeaders ?? null) === JSON.stringify(null)
-      && JSON.stringify(existingByName.auth) === JSON.stringify(auth)
-    ) {
-      return {
-        action: "noop",
-        sourceId: existingByName.id,
-        endpoint: existingByName.endpoint,
-      };
-    }
+    if (existingByName) {
+      const binding = existingByName.binding ?? {};
+      if (
+        readBindingString(binding, "endpoint") === expected.endpoint
+        && readBindingString(binding, "specUrl") === expected.specUrl
+      ) {
+        return {
+          action: "noop" as const,
+          sourceId: existingByName.id,
+          endpoint: input.endpoint,
+        };
+      }
 
-    if (existingByName !== undefined) {
-      const updated = yield* input.api.update(existingByName.id, {
-        endpoint: input.endpoint,
-        status: "connected",
-        enabled: true,
-        namespace: input.namespace,
-        binding: {
-          specUrl: input.specUrl,
-          defaultHeaders: null,
-        },
-        auth,
+      yield* Effect.tryPromise({
+        try: () => input.api.update(existingByName.id, {
+          binding: expected,
+        }),
+        catch: toError,
       });
 
       return {
-        action: "updated",
-        sourceId: updated.id,
-        endpoint: updated.endpoint,
+        action: "updated" as const,
+        sourceId: existingByName.id,
+        endpoint: input.endpoint,
       };
     }
 
-    const created = yield* input.api.create({
-      name: input.name,
-      kind: "openapi",
-      endpoint: input.endpoint,
-      status: "connected",
-      enabled: true,
-      namespace: input.namespace,
-      binding: {
-        specUrl: input.specUrl,
-        defaultHeaders: null,
-      },
-      auth,
+    const created = yield* Effect.tryPromise({
+      try: () => input.api.create({
+        kind: "openapi",
+        name: input.name,
+        binding: expected,
+      }),
+      catch: toError,
     });
 
     return {
-      action: "created",
-      sourceId: created.id,
-      endpoint: created.endpoint,
+      action: "created" as const,
+      sourceId: (created as any).id,
+      endpoint: input.endpoint,
     };
   });
