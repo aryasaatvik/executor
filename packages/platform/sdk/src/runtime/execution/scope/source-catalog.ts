@@ -2,6 +2,7 @@ import {
   createToolCatalogFromEntries,
   type ToolCatalog,
   type ToolNamespace,
+  type ToolPath,
 } from "@executor/codemode-core";
 import type {
   ScopeId,
@@ -14,6 +15,9 @@ import {
   type LoadedSourceCatalogToolIndexEntry,
   catalogToolCatalogEntry,
 } from "../../catalog/source/runtime";
+import type {
+  RuntimeSearchManagerService,
+} from "../../search/manager";
 import type {
   RuntimeLocalScopeState,
 } from "../../scope/runtime-context";
@@ -298,6 +302,7 @@ export const createScopeSourceCatalog = (input: {
   scopeId: Source["scopeId"];
   actorScopeId: ScopeId;
   sourceCatalogStore: Effect.Effect.Success<typeof RuntimeSourceCatalogStoreService>;
+  searchManager: Effect.Effect.Success<typeof RuntimeSearchManagerService>;
   scopeConfigStore: ScopeConfigStoreShape;
   scopeStateStore: ScopeStateStoreShape;
   sourceArtifactStore: SourceArtifactStoreShape;
@@ -379,13 +384,22 @@ export const createScopeSourceCatalog = (input: {
         input.runtimeLocalScope,
       ),
 
-    searchTools: ({ query, namespace, limit }) =>
+    searchTools: ({ query, namespace, limit, includeSchemas = false }) =>
       provideRuntimeLocalScope(
-        Effect.flatMap(leanSharedCatalog, (catalog) =>
-          catalog.searchTools({
+        Effect.map(
+          input.searchManager.searchWorkspace({
             query,
             ...(namespace !== undefined ? { namespace } : {}),
             limit,
+            includeSchemas,
+          }),
+          (result) => ({
+            ...result,
+            bestPath: result.bestPath as ToolPath | null,
+            results: result.results.map((item) => ({
+              ...item,
+              path: item.path as ToolPath,
+            })),
           }),
         ),
         input.runtimeLocalScope,

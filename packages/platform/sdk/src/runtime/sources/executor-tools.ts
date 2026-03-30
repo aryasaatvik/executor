@@ -1,6 +1,7 @@
 import { toTool, type ToolMap } from "@executor/codemode-core";
 import {
   type ScopeId,
+  SearchProviderStatusSchema,
   SourceIdSchema,
   SourceSchema,
   type Source,
@@ -20,6 +21,11 @@ import {
   saveManagedSourceRecord,
   createManagedSourceRecord,
 } from "../../sources/operations";
+import {
+  getSearchStatus,
+  rebuildSearchIndex,
+  refreshSearchIndex,
+} from "../../search/operations";
 import {
   deriveSchemaTypeSignature,
 } from "../catalog/schema-type-signature";
@@ -63,8 +69,12 @@ import {
   type RuntimeSourceStore,
   RuntimeSourceStoreService,
 } from "./source-store";
+import {
+  RuntimeSearchManagerService,
+} from "../search/manager";
 
 const SourceArraySchema = Schema.Array(SourceSchema);
+const EmptyInputSchema = Schema.Struct({});
 const SourceIdInputSchema = Schema.Struct({
   sourceId: SourceIdSchema,
 });
@@ -82,6 +92,9 @@ const coreSourceManagementHelpLines = (): readonly string[] => [
   `- executor.sources.get: ${deriveSchemaTypeSignature(SourceIdInputSchema, 180)}`,
   `- executor.sources.refresh: ${deriveSchemaTypeSignature(SourceIdInputSchema, 180)}`,
   `- executor.sources.remove: ${deriveSchemaTypeSignature(SourceIdInputSchema, 180)}`,
+  "- executor.search.status",
+  "- executor.search.refresh",
+  "- executor.search.rebuild",
 ];
 
 export const getExecutorInternalToolHelpLines = (
@@ -153,6 +166,7 @@ type ExecutorToolRuntimeServices =
   | SourceArtifactStore
   | ExecutorStateStore
   | RuntimeSourceStoreService
+  | RuntimeSearchManagerService
   | RuntimeSourceCatalogSyncService
   | SecretMaterialResolverService
   | SecretMaterialStorerService
@@ -167,6 +181,7 @@ const runExecutorToolEffect = async <A, E>(
     sourceCatalogSyncService: Effect.Effect.Success<
       typeof RuntimeSourceCatalogSyncService
     >;
+    searchManager: Effect.Effect.Success<typeof RuntimeSearchManagerService>;
     installationStore: InstallationStoreShape;
     scopeConfigStore: ScopeConfigStoreShape;
     scopeStateStore: ScopeStateStoreShape;
@@ -189,6 +204,7 @@ const runExecutorToolEffect = async <A, E>(
     }),
     Layer.succeed(ExecutorStateStore, input.executorStateStore),
     Layer.succeed(RuntimeSourceStoreService, input.sourceStore),
+    Layer.succeed(RuntimeSearchManagerService, input.searchManager),
     Layer.succeed(
       RuntimeSourceCatalogSyncService,
       input.sourceCatalogSyncService,
@@ -275,6 +291,7 @@ export const createExecutorToolMap = (input: {
   sourceCatalogSyncService: Effect.Effect.Success<
     typeof RuntimeSourceCatalogSyncService
   >;
+  searchManager: Effect.Effect.Success<typeof RuntimeSearchManagerService>;
   installationStore: InstallationStoreShape;
   scopeConfigStore: ScopeConfigStoreShape;
   scopeStateStore: ScopeStateStoreShape;
@@ -300,6 +317,7 @@ export const createExecutorToolMap = (input: {
     executorStateStore: input.executorStateStore,
     sourceStore: input.sourceStore,
     sourceCatalogSyncService: input.sourceCatalogSyncService,
+    searchManager: input.searchManager,
     installationStore: input.installationStore,
     scopeConfigStore: input.scopeConfigStore,
     scopeStateStore: input.scopeStateStore,
@@ -315,6 +333,48 @@ export const createExecutorToolMap = (input: {
   });
 
   const coreTools: ToolMap = {
+    "executor.search.status": toTool({
+      tool: {
+        description: "Get workspace search provider status.",
+        inputSchema: Schema.standardSchemaV1(EmptyInputSchema),
+        outputSchema: Schema.standardSchemaV1(SearchProviderStatusSchema),
+        execute: async () =>
+          toSerializableValue(
+            await runExecutorToolEffect(
+              getSearchStatus(),
+              runtime,
+            ),
+          ),
+      },
+    }),
+    "executor.search.refresh": toTool({
+      tool: {
+        description: "Refresh the active workspace search provider.",
+        inputSchema: Schema.standardSchemaV1(EmptyInputSchema),
+        outputSchema: Schema.standardSchemaV1(SearchProviderStatusSchema),
+        execute: async () =>
+          toSerializableValue(
+            await runExecutorToolEffect(
+              refreshSearchIndex(),
+              runtime,
+            ),
+          ),
+      },
+    }),
+    "executor.search.rebuild": toTool({
+      tool: {
+        description: "Rebuild the active workspace search provider.",
+        inputSchema: Schema.standardSchemaV1(EmptyInputSchema),
+        outputSchema: Schema.standardSchemaV1(SearchProviderStatusSchema),
+        execute: async () =>
+          toSerializableValue(
+            await runExecutorToolEffect(
+              rebuildSearchIndex(),
+              runtime,
+            ),
+          ),
+      },
+    }),
     "executor.sources.list": toTool({
       tool: {
         description: "List sources in the current executor scope.",

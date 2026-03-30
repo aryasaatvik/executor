@@ -30,6 +30,10 @@ export const registeredSecretStoreContributions = (
   registry: ExecutorSdkPluginRegistry,
 ) => registry.secretStores;
 
+export const registeredSearchProviders = (
+  registry: ExecutorSdkPluginRegistry,
+) => registry.searchProviders;
+
 export const registeredManagementToolContributions = (
   registry: ExecutorSdkPluginRegistry,
 ) => registry.managementTools;
@@ -53,6 +57,11 @@ export const getSecretStoreContributionForStore = (
   registry: ExecutorSdkPluginRegistry,
   store: Parameters<ExecutorSdkPluginRegistry["getSecretStoreContributionForStore"]>[0],
 ) => registry.getSecretStoreContributionForStore(store);
+
+export const getSearchProvider = (
+  registry: ExecutorSdkPluginRegistry,
+  providerKey: string,
+) => registry.getSearchProvider(providerKey);
 
 export const hasRegisteredExternalSourcePlugins = (
   registry: ExecutorSdkPluginRegistry,

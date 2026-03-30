@@ -68,6 +68,10 @@ const noopSourceArtifactStore = {
   remove: () => Effect.void,
 } as any;
 
+const noopSearchManager = {
+  searchWorkspace: () => Effect.die("unexpected workspace search"),
+} as any;
+
 describe("scope source catalog", () => {
   it.effect("lists namespaces from projected tool paths without loading the tool index", () =>
     Effect.gen(function* () {
@@ -104,6 +108,7 @@ describe("scope source catalog", () => {
         scopeConfigStore: noopScopeConfigStore,
         scopeStateStore: noopScopeStateStore,
         sourceArtifactStore: noopSourceArtifactStore,
+        searchManager: noopSearchManager,
         runtimeLocalScope: null,
       });
 
@@ -175,6 +180,22 @@ describe("scope source catalog", () => {
         scopeConfigStore: noopScopeConfigStore,
         scopeStateStore: noopScopeStateStore,
         sourceArtifactStore: noopSourceArtifactStore,
+        searchManager: {
+          searchWorkspace: () =>
+            Effect.succeed({
+              provider: {
+                providerKey: "lexical",
+                mode: "lexical",
+                backend: "in-memory",
+              },
+              bestPath: "github.issues.list",
+              total: 1,
+              results: [{
+                path: "github.issues.list",
+                score: 24,
+              }],
+            }),
+        } as any,
         runtimeLocalScope: null,
       });
 
@@ -201,9 +222,10 @@ describe("scope source catalog", () => {
         includeSchemas: true,
       });
 
-      expect(hits).toHaveLength(1);
-      expect(hits[0]?.path).toBe("github.issues.list");
-      expect(hits[0]?.score).toBeGreaterThan(0);
+      expect(hits.total).toBe(1);
+      expect(hits.bestPath).toBe("github.issues.list");
+      expect(hits.results[0]?.path).toBe("github.issues.list");
+      expect(hits.results[0]?.score).toBeGreaterThan(0);
       expect(first?.contract?.inputTypePreview).toBeUndefined();
       expect(second?.contract?.outputTypePreview).toBeUndefined();
       expect(listed).toHaveLength(1);
@@ -302,6 +324,7 @@ describe("scope source catalog", () => {
         scopeConfigStore: noopScopeConfigStore,
         scopeStateStore: noopScopeStateStore,
         sourceArtifactStore: noopSourceArtifactStore,
+        searchManager: noopSearchManager,
         runtimeLocalScope: null,
       });
 

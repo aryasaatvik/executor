@@ -21,6 +21,9 @@ import {
   RuntimeSourceCatalogSyncLive,
 } from "./catalog/source/sync";
 import {
+  RuntimeSearchManagerLive,
+} from "./search/manager";
+import {
   SourceTypeDeclarationsRefresherService,
   type SourceTypeDeclarationsRefresherShape,
 } from "./catalog/source/type-declarations";
@@ -104,6 +107,9 @@ export * from "./catalog/catalog-typescript";
 export * from "./catalog/source/runtime";
 export * from "./catalog/source/sync";
 export * from "./sources/source-store";
+export * from "./search/manager";
+export * from "./search/semantic";
+export * from "./search/types";
 export * from "./executor-state-store";
 export * from "./effect-errors";
 export * from "./execution/scope/environment";
@@ -148,6 +154,7 @@ export {
   createExecutorPluginRegistry,
   emptyExecutorPluginRegistry,
   registeredSourceContributions,
+  registeredSearchProviders,
   registeredSecretStoreContributions,
   registeredManagementToolContributions,
   hasRegisteredExternalSourcePlugins,
@@ -155,6 +162,7 @@ export {
   ExecutorPluginRegistryService,
   getSourceContribution,
   getSourceContributionForSource,
+  getSearchProvider,
   getSecretStoreContribution,
   getSecretStoreContributionForStore,
 } from "./sources/source-plugins";
@@ -410,9 +418,22 @@ export const createExecutorRuntimeLayer = (
     Layer.provide(Layer.mergeAll(baseLayer, sourceStoreLayer)),
   );
 
+  const searchManagerLayer = RuntimeSearchManagerLive.pipe(
+    Layer.provide(
+      Layer.mergeAll(baseLayer, sourceCatalogStoreLayer),
+    ),
+  );
+
   const sourceCatalogSyncLayer = RuntimeSourceCatalogSyncLive.pipe(
     Layer.provide(
-      Layer.mergeAll(baseLayer, secretMaterialLayer, localToolRuntimeLayer),
+      Layer.mergeAll(
+        baseLayer,
+        secretMaterialLayer,
+        sourceStoreLayer,
+        sourceCatalogStoreLayer,
+        searchManagerLayer,
+        localToolRuntimeLayer,
+      ),
     ),
   );
 
@@ -427,6 +448,7 @@ export const createExecutorRuntimeLayer = (
         sourceStoreLayer,
         sourceCatalogSyncLayer,
         sourceCatalogStoreLayer,
+        searchManagerLayer,
         localToolRuntimeLayer,
       ),
     ),
@@ -439,6 +461,7 @@ export const createExecutorRuntimeLayer = (
     sourceStoreLayer,
     sourceCatalogSyncLayer,
     sourceCatalogStoreLayer,
+    searchManagerLayer,
     localToolRuntimeLayer,
     executionResolverLayer,
   ) as ExecutorRuntimeLayer;

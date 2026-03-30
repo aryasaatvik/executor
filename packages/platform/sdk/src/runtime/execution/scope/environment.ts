@@ -24,6 +24,9 @@ import {
   RuntimeSourceCatalogSyncService,
 } from "../../catalog/source/sync";
 import {
+  RuntimeSearchManagerService,
+} from "../../search/manager";
+import {
   getRuntimeLocalScopeOption,
 } from "../../scope/runtime-context";
 import {
@@ -83,6 +86,7 @@ export const createScopeExecutionEnvironmentResolver =
     sourceCatalogStore: Effect.Effect.Success<
       typeof RuntimeSourceCatalogStoreService
     >;
+    searchManager: Effect.Effect.Success<typeof RuntimeSearchManagerService>;
     localToolRuntimeLoader: LocalToolRuntimeLoaderShape;
     installationStore: InstallationStoreShape;
     scopeConfigStore: ScopeConfigStoreShape;
@@ -114,6 +118,7 @@ export const createScopeExecutionEnvironmentResolver =
         sourceStore: input.sourceStore,
         sourceCatalogSyncService: input.sourceCatalogSyncService,
         sourceCatalogStore: input.sourceCatalogStore,
+        searchManager: input.searchManager,
         installationStore: input.installationStore,
         scopeConfigStore: input.scopeConfigStore,
         scopeStateStore: input.scopeStateStore,
@@ -158,6 +163,7 @@ export const RuntimeExecutionResolverLive = (
           const sourceCatalogSyncService =
             yield* RuntimeSourceCatalogSyncService;
           const sourceCatalogStore = yield* RuntimeSourceCatalogStoreService;
+          const searchManager = yield* RuntimeSearchManagerService;
           const localToolRuntimeLoader = yield* LocalToolRuntimeLoaderService;
           const installationStore = yield* InstallationStore;
           const scopeConfigStore = yield* ScopeConfigStore;
@@ -174,6 +180,7 @@ export const RuntimeExecutionResolverLive = (
             sourceStore,
             sourceCatalogSyncService,
             sourceCatalogStore,
+            searchManager,
             localToolRuntimeLoader,
             installationStore,
             scopeConfigStore,

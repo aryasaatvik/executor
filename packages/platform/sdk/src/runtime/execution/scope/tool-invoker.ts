@@ -60,6 +60,9 @@ import {
 import {
   RuntimeSourceCatalogSyncService,
 } from "../../catalog/source/sync";
+import type {
+  RuntimeSearchManagerService,
+} from "../../search/manager";
 import {
   invokeIrTool,
 } from "../ir-execution";
@@ -90,6 +93,7 @@ export const createScopeToolInvoker = (input: {
   sourceCatalogStore: Effect.Effect.Success<
     typeof RuntimeSourceCatalogStoreService
   >;
+  searchManager: Effect.Effect.Success<typeof RuntimeSearchManagerService>;
   installationStore: InstallationStoreShape;
   scopeConfigStore: ScopeConfigStoreShape;
   scopeStateStore: ScopeStateStoreShape;
@@ -144,6 +148,7 @@ export const createScopeToolInvoker = (input: {
     executorStateStore: input.executorStateStore,
     sourceStore: input.sourceStore,
     sourceCatalogSyncService: input.sourceCatalogSyncService,
+    searchManager: input.searchManager,
     installationStore: input.installationStore,
     scopeConfigStore: input.scopeConfigStore,
     scopeStateStore: input.scopeStateStore,
@@ -155,6 +160,7 @@ export const createScopeToolInvoker = (input: {
     scopeId: input.scopeId,
     actorScopeId: input.actorScopeId,
     sourceCatalogStore: input.sourceCatalogStore,
+    searchManager: input.searchManager,
     scopeConfigStore: input.scopeConfigStore,
     scopeStateStore: input.scopeStateStore,
     sourceArtifactStore: input.sourceArtifactStore,

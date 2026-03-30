@@ -27,6 +27,9 @@ import {
 import {
   RuntimeSourceStoreService,
 } from "../runtime/sources/source-store";
+import {
+  RuntimeSearchManagerService,
+} from "../runtime/search/manager";
 
 const sourceOps = {
   list: operationErrors("sources.list"),
@@ -360,6 +363,13 @@ export const removeSource = (input: {
   Effect.flatMap(ExecutorStateStore, () =>
     Effect.gen(function* () {
       const sourceStore = yield* RuntimeSourceStoreService;
+      const searchManager = yield* RuntimeSearchManagerService;
+      const source = yield* sourceStore.loadSourceById({
+        scopeId: input.scopeId,
+        sourceId: input.sourceId,
+      }).pipe(
+        Effect.catchAll(() => Effect.succeed(null)),
+      );
       const removed = yield* mapPersistenceError(
         sourceOps.remove.child("remove"),
         sourceStore.removeSourceById({
@@ -367,6 +377,16 @@ export const removeSource = (input: {
           sourceId: input.sourceId,
         }),
       );
+
+      if (removed || source) {
+        yield* Effect.catchAll(
+          searchManager.removeSource({
+            sourceId: input.sourceId,
+            reason: "removed",
+          }),
+          () => Effect.void,
+        );
+      }
 
       return { removed };
     }),
