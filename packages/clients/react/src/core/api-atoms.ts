@@ -6,6 +6,7 @@ import type {
   InstanceConfig,
   LocalInstallation,
   SecretListItem,
+  SearchProviderStatus,
 } from "@executor/platform-api";
 import type {
   Execution,
@@ -26,6 +27,7 @@ import {
   localInstallationReactivityKey,
   secretsReactivityKey,
   sourceDiscoveryReactivityKey,
+  searchProviderStatusReactivityKey,
   sourceInspectionReactivityKey,
   sourceInspectionToolReactivityKey,
   sourceReactivityKey,
@@ -138,6 +140,11 @@ export const sourceInspectionToolAtom = (
 const emptyDiscoveryResult: SourceInspectionDiscoverResult = {
   query: "",
   queryTokens: [],
+  provider: {
+    providerKey: "lexical",
+    mode: "lexical",
+    backend: "in-memory",
+  },
   bestPath: null,
   total: 0,
   results: [],
@@ -171,6 +178,17 @@ export const sourceDiscoveryAtom = (
         timeToLive: "15 seconds",
       });
 
+export const searchProviderStatusAtom = (
+  workspaceId: Source["scopeId"],
+) =>
+  getExecutorApiHttpClient().query("search", "status", {
+    path: {
+      workspaceId,
+    },
+    reactivityKeys: searchProviderStatusReactivityKey(workspaceId),
+    timeToLive: "15 seconds",
+  });
+
 export type ExecutorApiAtoms = {
   localInstallationAtom: typeof localInstallationAtom;
   instanceConfigAtom: typeof instanceConfigAtom;
@@ -183,6 +201,7 @@ export type ExecutorApiAtoms = {
   sourceInspectionAtom: typeof sourceInspectionAtom;
   sourceInspectionToolAtom: typeof sourceInspectionToolAtom;
   sourceDiscoveryAtom: typeof sourceDiscoveryAtom;
+  searchProviderStatusAtom: typeof searchProviderStatusAtom;
 };
 
 export type ExecutorApiAtomValues = {
@@ -197,4 +216,5 @@ export type ExecutorApiAtomValues = {
   sourceInspection: SourceInspection;
   sourceInspectionTool: SourceInspectionToolDetail | null;
   sourceDiscovery: SourceInspectionDiscoverResult;
+  searchProviderStatus: SearchProviderStatus;
 };

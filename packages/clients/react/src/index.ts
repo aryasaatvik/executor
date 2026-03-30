@@ -20,6 +20,7 @@ export type {
   LocalInstallation,
   SecretListItem,
   SecretStore,
+  SearchProviderStatus,
   UpdateSecretStorePayload,
   UpdateSecretPayload,
   UpdateSecretResult,
@@ -83,6 +84,11 @@ export {
   useExecution,
   useExecutions,
 } from "./hooks/executions";
+export {
+  useRebuildSearchProvider,
+  useRefreshSearchProvider,
+  useSearchProviderStatus,
+} from "./hooks/search";
 export {
   usePrefetchToolDetail,
   useRemoveSource,

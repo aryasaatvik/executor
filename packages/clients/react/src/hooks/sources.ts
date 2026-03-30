@@ -20,6 +20,7 @@ import {
 import { disabledAtom, useLoadableAtom } from "../core/loadable";
 import {
   sourceDiscoveryReactivityKey,
+  searchProviderStatusReactivityKey,
   sourceInspectionReactivityKey,
   sourceInspectionToolReactivityKey,
   sourceReactivityKey,
@@ -147,6 +148,7 @@ export const useRemoveSource = () => {
             ...sourceInspectionReactivityKey(workspace.workspaceId, sourceId),
             ...sourceInspectionToolReactivityKey(workspace.workspaceId, sourceId),
             ...sourceDiscoveryReactivityKey(workspace.workspaceId, sourceId),
+            ...searchProviderStatusReactivityKey(workspace.workspaceId),
           },
         });
       },

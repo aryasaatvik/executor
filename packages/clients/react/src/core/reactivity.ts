@@ -69,3 +69,9 @@ export const sourceDiscoveryReactivityKey = (
       ? [workspaceId, sourceId]
       : [workspaceId, sourceId, query, limit ?? null],
 });
+
+export const searchProviderStatusReactivityKey = (
+  workspaceId: Source["scopeId"],
+): ReactivityKeys => ({
+  searchProviderStatus: [workspaceId],
+});
