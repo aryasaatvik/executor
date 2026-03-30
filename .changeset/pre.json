@@ -50,6 +50,9 @@
     "@executor/plugin-openapi-shared": "0.0.0"
   },
   "changesets": [
-    "funny-forks-listen"
+    "funny-forks-listen",
+    "fuzzy-camels-cheer",
+    "quick-cars-approve",
+    "tame-trains-confess"
   ]
 }

@@ -145,6 +145,10 @@ function DialogDescription({
   )
 }
 
+function DialogPopup({ ...props }: DialogPrimitive.Popup.Props) {
+  return <DialogPrimitive.Popup data-slot="dialog-popup" {...props} />
+}
+
 export {
   Dialog,
   DialogClose,
@@ -153,6 +157,7 @@ export {
   DialogFooter,
   DialogHeader,
   DialogOverlay,
+  DialogPopup,
   DialogPortal,
   DialogTitle,
   DialogTrigger,

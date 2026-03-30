@@ -58,6 +58,12 @@ export const sourceInspectionToolReactivityKey = (
       : [workspaceId, sourceId, toolPath],
 });
 
+export const policiesReactivityKey = (
+  workspaceId: Source["scopeId"],
+): ReactivityKeys => ({
+  policies: [workspaceId],
+});
+
 export const sourceDiscoveryReactivityKey = (
   workspaceId: Source["scopeId"],
   sourceId: Source["id"],

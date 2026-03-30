@@ -34,12 +34,12 @@ const workspaceExecutorPackages = Object.keys(webPackage.dependencies ?? {}).fil
   (name) => name.startsWith("@executor/"),
 );
 
-const pluginWorkspaceSegment = `${path.sep}plugins${path.sep}`;
+const pluginsWorkspaceRoot = path.resolve(import.meta.dirname, "../../plugins") + path.sep;
 
 const reloadOnPluginChange = () => ({
   name: "executor-reload-on-plugin-change",
   handleHotUpdate({ file, server }: { file: string; server: { hot: { send: (payload: { type: "full-reload" }) => void } } }) {
-    if (!file.includes(pluginWorkspaceSegment)) {
+    if (!file.startsWith(pluginsWorkspaceRoot)) {
       return;
     }
 
@@ -91,6 +91,9 @@ export default defineConfig({
       ignored: [
         "!**/node_modules/@executor/**",
       ],
+      // WSL2 inotify doesn't reliably detect changes through symlinked workspace packages
+      usePolling: true,
+      interval: 500,
     },
   },
 });

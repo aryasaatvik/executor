@@ -68,8 +68,11 @@ export const getFrontendPluginRoute = (
   routeKey: string,
 ) => frontendPluginRegistry.getRoute(pluginKey, routeKey);
 
+const resolveSourcePluginKey = (kind: string): string =>
+  isGoogleDiscoverySource(kind) ? "google-discovery" : kind;
+
 export const getSourceFrontendPlugin = (kind: string) => {
-  const plugin = getFrontendPlugin(kind);
+  const plugin = getFrontendPlugin(resolveSourcePluginKey(kind));
   return plugin && isSourceFrontendPlugin(plugin) ? plugin : null;
 };
 

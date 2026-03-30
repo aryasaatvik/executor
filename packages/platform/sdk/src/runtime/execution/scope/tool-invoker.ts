@@ -6,6 +6,7 @@ import {
   mergeToolMaps,
   type ToolCatalog,
   type ToolInvoker,
+  type DiscoverResultItem,
 } from "@executor/codemode-core";
 import type {
   ScopeId,
@@ -69,6 +70,15 @@ import {
 import {
   authorizePersistedToolInvocation,
 } from "./authorization";
+import {
+  evaluateInvocationPolicy,
+} from "../../policy/invocation-policy-engine";
+import {
+  loadRuntimeLocalScopePolicies,
+} from "../../../policies/operations";
+import {
+  RuntimeLocalScopeService,
+} from "../../scope/runtime-context";
 import {
   provideRuntimeLocalScope,
 } from "./local";
@@ -174,6 +184,47 @@ export const createScopeToolInvoker = (input: {
       }
 
       return catalog;
+    },
+    filterDiscoverResults: async (results: readonly DiscoverResultItem[]) => {
+      if (!input.runtimeLocalScope) {
+        return results;
+      }
+
+      const { policies } = await Effect.runPromise(
+        loadRuntimeLocalScopePolicies(input.scopeId).pipe(
+          Effect.provide(persistedToolRuntimeLayer),
+          Effect.provide(
+            Layer.succeed(
+              RuntimeLocalScopeService,
+              input.runtimeLocalScope,
+            ),
+          ),
+        ),
+      );
+
+      if (policies.length === 0) {
+        return results;
+      }
+
+      return results.filter((result) => {
+        const decision = evaluateInvocationPolicy({
+          descriptor: {
+            toolPath: result.path,
+            sourceId: "" as Source["id"],
+            sourceName: "",
+            sourceKind: "mcp" as Source["kind"],
+            sourceNamespace: null,
+            operationKind: "unknown",
+            interaction: "auto",
+            approvalLabel: null,
+          },
+          args: null,
+          policies,
+          context: { scopeId: input.scopeId },
+        });
+
+        return decision.kind !== "deny";
+      });
     },
   });
   const hasLocalToolsSourceContribution = registeredSourceContributions(input.pluginRegistry)

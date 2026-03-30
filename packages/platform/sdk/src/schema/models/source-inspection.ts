@@ -65,6 +65,7 @@ export const SourceInspectionSectionSchema = Schema.Union(
 export const SourceInspectionToolListItemSchema = Schema.Struct({
   path: Schema.String,
   method: Schema.NullOr(Schema.String),
+  interaction: Schema.optional(Schema.Literal("auto", "required")),
   inputTypePreview: Schema.optional(Schema.String),
   outputTypePreview: Schema.optional(Schema.String),
 });

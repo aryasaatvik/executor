@@ -74,6 +74,7 @@ export const McpStartOAuthInputSchema = Schema.Struct({
 
 export const McpDiscoverInputSchema = Schema.Struct({
   endpoint: Schema.String,
+  queryParams: Schema.optional(Schema.NullOr(StringMapSchema)),
   probeAuth: Schema.optional(Schema.NullOr(SourceProbeAuthSchema)),
 });
 

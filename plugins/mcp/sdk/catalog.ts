@@ -111,33 +111,33 @@ const createMcpCapability = (input: {
   const callShapeId =
     input.operation.inputSchema === undefined
       ? input.importer.importSchema(
-          {
-            type: "object",
-            properties: {},
-            additionalProperties: false,
-          },
-          `#/mcp/${input.operation.providerData.toolId}/call`,
-        )
+        {
+          type: "object",
+          properties: {},
+          additionalProperties: false,
+        },
+        `#/mcp/${input.operation.providerData.toolId}/call`,
+      )
       : isObjectLikeJsonSchema(input.operation.inputSchema)
         ? input.importer.importSchema(
-            input.operation.inputSchema,
-            `#/mcp/${input.operation.providerData.toolId}/call`,
-            input.operation.inputSchema,
-          )
+          input.operation.inputSchema,
+          `#/mcp/${input.operation.providerData.toolId}/call`,
+          input.operation.inputSchema,
+        )
         : input.importer.importSchema(
-            schemaWithMergedDefs(
-              {
-                type: "object",
-                properties: {
-                  input: input.operation.inputSchema,
-                },
-                required: ["input"],
-                additionalProperties: false,
+          schemaWithMergedDefs(
+            {
+              type: "object",
+              properties: {
+                input: input.operation.inputSchema,
               },
-              input.operation.inputSchema,
-            ),
-            `#/mcp/${input.operation.providerData.toolId}/call`,
-          );
+              required: ["input"],
+              additionalProperties: false,
+            },
+            input.operation.inputSchema,
+          ),
+          `#/mcp/${input.operation.providerData.toolId}/call`,
+        );
   const resultStatusShapeId = input.importer.importSchema(
     { type: "null" },
     `#/mcp/${input.operation.providerData.toolId}/status`,
@@ -154,22 +154,22 @@ const createMcpCapability = (input: {
         input.operation.providerData.description ?? input.operation.description,
     })
       ? {
-          docs: docsFrom({
-            description:
-              input.operation.providerData.description ??
-              input.operation.description,
-          })!,
-        }
+        docs: docsFrom({
+          description:
+            input.operation.providerData.description ??
+            input.operation.description,
+        })!,
+      }
       : {}),
     ...(outputShapeId
       ? {
-          contents: [
-            {
-              mediaType: "application/json",
-              shapeId: outputShapeId,
-            },
-          ],
-        }
+        contents: [
+          {
+            mediaType: "application/json",
+            shapeId: outputShapeId,
+          },
+        ],
+      }
       : {}),
     synthetic: false,
     provenance: provenanceFor(
@@ -238,6 +238,9 @@ const createMcpCapability = (input: {
     auth: { kind: "none" },
     interaction: {
       ...interaction,
+      approval: {
+        mayRequire: false,
+      },
       resume: {
         supported: mcpResumeSupport(input.operation.providerData.execution),
       },

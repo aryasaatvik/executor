@@ -24,6 +24,7 @@ import {
   SourcePluginsIndexPage,
 } from "./plugins/pages";
 import { HomePage } from "./views/home";
+import { PoliciesPage } from "./views/policies";
 import { SecretsPage } from "./views/secrets";
 
 const rootRoute = createRootRoute({
@@ -46,6 +47,12 @@ const secretsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/secrets",
   component: SecretsPage,
+});
+
+const policiesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/policies",
+  component: PoliciesPage,
 });
 
 const createExecutorPluginNavigation = (
@@ -107,6 +114,7 @@ const frontendPluginRoutes = registeredFrontendPluginRoutes.map(({ plugin, route
 const routeTree = rootRoute.addChildren([
   homeRoute,
   secretsRoute,
+  policiesRoute,
   sourcePluginsIndexRoute,
   ...frontendPluginRoutes,
 ]);

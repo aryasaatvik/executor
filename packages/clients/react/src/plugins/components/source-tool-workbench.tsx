@@ -22,6 +22,8 @@ import {
   IconSearch,
   IconTool,
 } from "./icons";
+import { ToolPermissionBadge, ToolPermissionDot, resolveToolPermission, type ToolPermissionLevel } from "./tool-permission-badge";
+import type { LocalScopePolicy } from "@executor/platform-sdk/schema";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { cn } from "../lib/cn";
@@ -41,8 +43,16 @@ export type SourceToolDiscoveryResult = {
   }>;
 };
 
+export type ToolPermissionChangeRequest = {
+  toolPath: string;
+  level: ToolPermissionLevel;
+};
+
 export type SourceToolDetailPanelProps = {
   detail: SourceInspectionToolDetail;
+  policies?: ReadonlyArray<LocalScopePolicy>;
+  onSetPermission?: (request: ToolPermissionChangeRequest) => void | Promise<void>;
+  permissionPending?: boolean;
   renderHeaderMeta?: (detail: SourceInspectionToolDetail) => ReactNode;
   renderSchemaExtras?: (detail: SourceInspectionToolDetail) => ReactNode;
 };
@@ -53,6 +63,9 @@ export type SourceToolModelWorkbenchProps = {
   selectedToolPath: string | null;
   onSelectTool: (toolPath: string) => void;
   sourceId: string;
+  policies?: ReadonlyArray<LocalScopePolicy>;
+  onSetPermission?: (request: ToolPermissionChangeRequest) => void | Promise<void>;
+  permissionPending?: boolean;
   renderDetail?: (detail: SourceInspectionToolDetail) => ReactNode;
 };
 
@@ -196,6 +209,7 @@ const SourceToolTree = (props: {
   search: string;
   isFiltered: boolean;
   sourceId: string;
+  policies?: ReadonlyArray<LocalScopePolicy>;
 }) => {
   const tree = useMemo(() => buildToolTree(props.tools), [props.tools]);
   const prefetch = usePrefetchToolDetail();
@@ -216,6 +230,7 @@ const SourceToolTree = (props: {
           defaultOpen={props.isFiltered}
           sourceId={props.sourceId}
           prefetch={prefetch}
+          policies={props.policies}
         />
       ))}
     </div>
@@ -231,6 +246,7 @@ const SourceToolTreeNodeView = (props: {
   defaultOpen: boolean;
   sourceId: string;
   prefetch: ReturnType<typeof usePrefetchToolDetail>;
+  policies?: ReadonlyArray<LocalScopePolicy>;
 }) => {
   const {
     node,
@@ -285,6 +301,7 @@ const SourceToolTreeNodeView = (props: {
         depth={depth}
         sourceId={sourceId}
         prefetch={prefetch}
+        policies={props.policies}
       />
     );
   }
@@ -327,6 +344,7 @@ const SourceToolTreeNodeView = (props: {
             className="flex-1 pl-1"
             sourceId={sourceId}
             prefetch={prefetch}
+            policies={props.policies}
           />
         </div>
       ) : (
@@ -381,6 +399,7 @@ const SourceToolTreeNodeView = (props: {
               defaultOpen={defaultOpen}
               sourceId={sourceId}
               prefetch={prefetch}
+              policies={props.policies}
             />
           ))}
         </div>
@@ -398,6 +417,7 @@ const SourceToolListItem = (props: {
   className?: string;
   sourceId: string;
   prefetch: ReturnType<typeof usePrefetchToolDetail>;
+  policies?: ReadonlyArray<LocalScopePolicy>;
 }) => {
   const ref = useRef<HTMLButtonElement>(null);
   const paddingLeft = props.depth >= 0 ? 8 + props.depth * 16 + 8 : undefined;
@@ -435,7 +455,110 @@ const SourceToolListItem = (props: {
         {highlightMatch(label, props.search)}
       </span>
       {props.tool.method && <MethodBadge method={props.tool.method} />}
+      {props.policies && (
+        <ToolPermissionDot
+          toolPath={props.tool.path}
+          policies={props.policies}
+          interaction={props.tool.interaction}
+        />
+      )}
     </Button>
+  );
+};
+
+const permissionLevels: Array<{
+  level: ToolPermissionLevel;
+  label: string;
+  description: string;
+  dotClass: string;
+  activeClass: string;
+}> = [
+  {
+    level: "auto-run",
+    label: "Auto-run",
+    description: "Execute without asking",
+    dotClass: "bg-emerald-500",
+    activeClass: "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  },
+  {
+    level: "requires-approval",
+    label: "Approval",
+    description: "Ask before running",
+    dotClass: "bg-amber-500",
+    activeClass: "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  },
+  {
+    level: "denied",
+    label: "Denied",
+    description: "Block completely",
+    dotClass: "bg-red-500",
+    activeClass: "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+  },
+];
+
+const ToolPermissionControl = (props: {
+  toolPath: string;
+  policies: ReadonlyArray<LocalScopePolicy>;
+  onSetPermission: (request: ToolPermissionChangeRequest) => void | Promise<void>;
+  pending?: boolean;
+}) => {
+  const { level, matchedPolicy } = resolveToolPermission(
+    props.toolPath,
+    props.policies,
+  );
+
+  return (
+    <div className="rounded-lg border border-border bg-card/60 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
+          Permission
+        </span>
+        {matchedPolicy && (
+          <span className="font-mono text-[10px] text-muted-foreground/40">
+            {matchedPolicy.resourcePattern}
+          </span>
+        )}
+      </div>
+      <div className="flex gap-1.5">
+        {permissionLevels.map((option) => {
+          const isActive = level === option.level;
+
+          return (
+            <Button
+              key={option.level}
+              type="button"
+              variant="outline"
+              disabled={props.pending}
+              onClick={() => {
+                if (!isActive) {
+                  void props.onSetPermission({
+                    toolPath: props.toolPath,
+                    level: option.level,
+                  });
+                }
+              }}
+              className={cn(
+                "flex h-auto flex-1 flex-col items-center gap-1 rounded-lg px-2 py-2 text-center transition-all",
+                isActive
+                  ? option.activeClass
+                  : "border-border/60 bg-background/50 text-muted-foreground hover:bg-accent/40",
+              )}
+            >
+              <div className="flex items-center gap-1.5">
+                <span
+                  className={cn(
+                    "size-1.5 rounded-full",
+                    isActive ? option.dotClass : "bg-muted-foreground/30",
+                  )}
+                />
+                <span className="text-[11px] font-semibold">{option.label}</span>
+              </div>
+              <span className="text-[9px] opacity-60">{option.description}</span>
+            </Button>
+          );
+        })}
+      </div>
+    </div>
   );
 };
 
@@ -475,6 +598,12 @@ export const SourceToolDetailPanel = (props: SourceToolDetailPanelProps) => {
               {props.detail.summary.method && (
                 <MethodBadge method={props.detail.summary.method} />
               )}
+              {props.policies && (
+                <ToolPermissionBadge
+                  toolPath={props.detail.summary.path}
+                  policies={props.policies}
+                />
+              )}
               {props.renderHeaderMeta?.(props.detail)}
             </div>
           </div>
@@ -483,6 +612,14 @@ export const SourceToolDetailPanel = (props: SourceToolDetailPanelProps) => {
 
       <div className="flex-1 overflow-y-auto">
         <div className="space-y-4 px-5 py-4">
+          {props.onSetPermission && props.policies && (
+            <ToolPermissionControl
+              toolPath={props.detail.summary.path}
+              policies={props.policies}
+              onSetPermission={props.onSetPermission}
+              pending={props.permissionPending}
+            />
+          )}
           {props.detail.summary.description && (
             <Markdown>{props.detail.summary.description}</Markdown>
           )}
@@ -606,8 +743,16 @@ export const SourceToolModelWorkbench = (
     return () => document.removeEventListener("keydown", handler);
   }, [search]);
 
+  const policies = props.policies;
+  const onSetPermission = props.onSetPermission;
+  const permissionPending = props.permissionPending;
   const renderDetail = props.renderDetail ?? ((detail: SourceInspectionToolDetail) => (
-    <SourceToolDetailPanel detail={detail} />
+    <SourceToolDetailPanel
+      detail={detail}
+      policies={policies}
+      onSetPermission={onSetPermission}
+      permissionPending={permissionPending}
+    />
   ));
 
   return (
@@ -655,6 +800,7 @@ export const SourceToolModelWorkbench = (
                 search={search}
                 isFiltered={terms.length > 0}
                 sourceId={props.sourceId}
+                policies={props.policies}
               />
             </div>
           )}

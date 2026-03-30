@@ -20,7 +20,6 @@ import {
   Input,
   Label,
   Select,
-  SourceToolDetailPanel,
   SourceToolExplorer,
   parseSourceToolExplorerSearch,
   type SourceToolExplorerSearch,
@@ -861,13 +860,8 @@ function OpenApiSourceDetailPageReady(props: {
           )}
         </>
       )}
-      renderDetail={(detail) => (
-        <SourceToolDetailPanel
-          detail={detail}
-          renderHeaderMeta={renderOpenApiToolHeaderMeta}
-          renderSchemaExtras={renderOpenApiToolSchemaExtras}
-        />
-      )}
+      renderHeaderMeta={renderOpenApiToolHeaderMeta}
+      renderSchemaExtras={renderOpenApiToolSchemaExtras}
     />
   );
 }

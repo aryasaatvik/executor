@@ -53,8 +53,13 @@ export class DistributionHarness extends Context.Tag(
       readonly body: string;
       readonly contentType: string | null;
     }, Error, never>;
+    readonly isReachable: () => Effect.Effect<boolean, Error, never>;
+    readonly stopServer: () => Effect.Effect<void, Error, never>;
   }
 >() {}
+
+const SERVER_WAIT_TIMEOUT_MS = 5_000;
+const SERVER_POLL_INTERVAL_MS = 100;
 
 const runCommand = (input: {
   readonly command: string;
@@ -174,6 +179,36 @@ const packPackage = (packageDir: string, outputDir: string) =>
     }),
   );
 
+const waitForReachability = (input: {
+  baseUrl: string;
+  expected: boolean;
+}): Effect.Effect<void, Error, never> =>
+  Effect.gen(function* () {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < SERVER_WAIT_TIMEOUT_MS) {
+      const reachable = yield* Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(new URL("/", input.baseUrl));
+          return response.ok;
+        },
+        catch: toError,
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+
+      if (reachable === input.expected) {
+        return;
+      }
+
+      yield* Effect.sleep(`${SERVER_POLL_INTERVAL_MS} millis`);
+    }
+
+    return yield* Effect.fail(
+      new Error(
+        `Timed out waiting for executor server to become ${input.expected ? "reachable" : "unreachable"} at ${input.baseUrl}`,
+      ),
+    );
+  });
+
 export const LocalDistributionHarnessLive = Layer.scoped(
   DistributionHarness,
   Effect.gen(function* () {
@@ -264,6 +299,58 @@ export const LocalDistributionHarnessLive = Layer.scoped(
         catch: (cause) => cause instanceof Error ? cause : new Error(String(cause)),
       });
 
+    const isReachable = () =>
+      Effect.tryPromise({
+        try: async () => {
+          const response = await fetch(new URL("/", baseUrl));
+          return response.ok;
+        },
+        catch: toError,
+      }).pipe(Effect.catchAll(() => Effect.succeed(false)));
+
+    const stopServer = () =>
+      Effect.gen(function* () {
+        const pidFile = join(executorHome, "run", "server.pid");
+        const exists = yield* fs.exists(pidFile).pipe(Effect.mapError(toError));
+        if (!exists) {
+          return;
+        }
+
+        const contents = yield* fs.readFileString(pidFile).pipe(
+          Effect.mapError(toError),
+        );
+        const parsed = JSON.parse(contents) as { pid?: number };
+        const pid = parsed.pid;
+
+        if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+          yield* Effect.try({
+            try: () => process.kill(pid, "SIGTERM"),
+            catch: toError,
+          }).pipe(Effect.catchAll(() => Effect.void));
+
+          const stopped = yield* waitForReachability({
+            baseUrl,
+            expected: false,
+          }).pipe(
+            Effect.as(true),
+            Effect.catchAll(() => Effect.succeed(false)),
+          );
+          if (stopped) {
+            return;
+          }
+
+          yield* Effect.try({
+            try: () => process.kill(pid, "SIGKILL"),
+            catch: toError,
+          }).pipe(Effect.catchAll(() => Effect.void));
+        }
+
+        yield* waitForReachability({
+          baseUrl,
+          expected: false,
+        });
+      });
+
     const writeProjectConfig = (contents: string) =>
       Effect.forEach(
         [stagedWorkspaceRoot, installedWorkspaceRoot],
@@ -291,6 +378,8 @@ export const LocalDistributionHarnessLive = Layer.scoped(
       run,
       runInstalled,
       fetchText,
+      isReachable,
+      stopServer,
     });
   }).pipe(Effect.provide(NodeFileSystem.layer)),
 );

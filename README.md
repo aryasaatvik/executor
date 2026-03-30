@@ -8,6 +8,8 @@ https://github.com/user-attachments/assets/11225f83-e848-42ba-99b2-a993bcc88dad
 
 It gives an agent a TypeScript runtime, a discoverable tool catalog, and a single local place to connect external systems such as MCP servers, OpenAPI APIs, and GraphQL APIs. Instead of pasting large MCP manifests into every chat or giving an agent broad shell access, you run code inside `executor` and let it call typed `tools.*` functions.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/RhysSullivan/executor)
+
 ## Community
 
 Join the Discord community: https://discord.gg/eF29HBHwM6

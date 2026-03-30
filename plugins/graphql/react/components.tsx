@@ -22,7 +22,6 @@ import {
   Input,
   Label,
   Select,
-  SourceToolDetailPanel,
   SourceToolExplorer,
   Textarea,
   parseSourceToolExplorerSearch,
@@ -715,12 +714,7 @@ function GraphqlDetailExplorer(props: {
           )}
         </>
       )}
-      renderDetail={(detail) => (
-        <SourceToolDetailPanel
-          detail={detail}
-          renderHeaderMeta={renderGraphqlToolHeaderMeta}
-        />
-      )}
+      renderHeaderMeta={renderGraphqlToolHeaderMeta}
     />
   );
 }

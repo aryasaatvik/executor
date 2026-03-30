@@ -102,7 +102,14 @@ export {
   SourceToolModelWorkbench,
   type SourceToolDetailPanelProps,
   type SourceToolDiscoveryResult,
+  type ToolPermissionChangeRequest,
 } from "./components/source-tool-workbench";
+export {
+  ToolPermissionBadge,
+  ToolPermissionDot,
+  resolveToolPermission,
+  type ToolPermissionLevel,
+} from "./components/tool-permission-badge";
 
 // ── UI primitives (shadcn/ui) ────────────────────────────────────────────
 export { Alert, alertVariants, AlertTitle, AlertDescription, AlertAction } from "./components/ui/alert";
@@ -116,3 +123,4 @@ export { Separator } from "./components/ui/separator";
 export { Textarea } from "./components/ui/textarea";
 export { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 export { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandShortcut, CommandSeparator } from "./components/ui/command";
+export { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogOverlay, DialogPopup, DialogPortal, DialogTitle, DialogTrigger } from "./components/ui/dialog";

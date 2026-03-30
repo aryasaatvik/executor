@@ -106,17 +106,6 @@ export function SecretsPage() {
           <div className="flex gap-2">
             <Button
               size="sm"
-              variant="outline"
-              onClick={() => {
-                setShowCreateStore(true);
-              }}
-              disabled={creatableStorePlugins.length === 0}
-            >
-              <IconPlus className="size-3.5" />
-              Add store
-            </Button>
-            <Button
-              size="sm"
               onClick={() => {
                 setShowCreateSecret(true);
                 setEditingId(null);
@@ -150,7 +139,7 @@ export function SecretsPage() {
               items.length === 0 ? (
                 <SectionEmptyState
                   title="No secret stores yet"
-                  description="Add a store to connect an external backend like 1Password."
+                  description="External secret stores are currently unavailable in this app."
                 />
               ) : (
                 <div className="grid gap-3 md:grid-cols-2">

@@ -913,8 +913,8 @@ function GoogleDiscoveryBatchConnectPanel(props: {
               onClick={() => toggleTemplate(template.id)}
               className={
                 selected
-                  ? "h-auto rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-left"
-                  : "h-auto rounded-lg border border-border px-4 py-3 text-left hover:bg-accent/40"
+                  ? "h-auto whitespace-normal rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-left"
+                  : "h-auto whitespace-normal rounded-lg border border-border px-4 py-3 text-left hover:bg-accent/40"
               }
             >
               <div className="flex items-start gap-3">

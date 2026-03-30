@@ -1,5 +1,23 @@
 # executor
 
+## 1.3.0-beta.3
+
+### Patch Changes
+
+- Improve MCP source setup by auto-detecting OAuth requirements, showing a loading state during discovery, and allowing creation without signing in.
+
+## 1.3.0-beta.2
+
+### Patch Changes
+
+- Fix the packaged beta so the bundled 1Password SDK can load its wasm asset after install.
+
+## 1.3.0-beta.1
+
+### Patch Changes
+
+- Fix the beta distribution packaging flow so the prerelease publish passes again.
+
 ## 1.3.0-beta.0
 
 ### Minor Changes

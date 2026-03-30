@@ -228,6 +228,7 @@ export function AppShell() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const isHome = matchRoute({ to: "/" });
   const isSecrets = matchRoute({ to: "/secrets" });
+  const isPolicies = matchRoute({ to: "/policies" });
   const { latestVersion, updateAvailable, channel } = useLatestVersion(VITE_APP_VERSION);
   const mainPluginNavItems = registeredFrontendPluginNavRoutes.filter(
     ({ route }) => (route.nav?.section ?? "main") === "main",
@@ -258,6 +259,7 @@ export function AppShell() {
         <SidebarContent
           isHome={!!isHome}
           isSecrets={!!isSecrets}
+          isPolicies={!!isPolicies}
           latestVersion={latestVersion}
           updateAvailable={updateAvailable}
           channel={channel}
@@ -300,6 +302,7 @@ export function AppShell() {
             <SidebarContent
               isHome={!!isHome}
               isSecrets={!!isSecrets}
+              isPolicies={!!isPolicies}
               latestVersion={latestVersion}
               updateAvailable={updateAvailable}
               channel={channel}
@@ -346,6 +349,7 @@ export function AppShell() {
 function SidebarContent(props: {
   isHome: boolean;
   isSecrets: boolean;
+  isPolicies: boolean;
   latestVersion: string | null;
   updateAvailable: boolean;
   channel: UpdateChannel;
@@ -382,6 +386,12 @@ function SidebarContent(props: {
           to="/secrets"
           label="Secrets"
           active={props.isSecrets}
+          onNavigate={props.onNavigate}
+        />
+        <NavItem
+          to="/policies"
+          label="Policies"
+          active={props.isPolicies}
           onNavigate={props.onNavigate}
         />
         {props.mainPluginNavItems.map(({ plugin, route, to }) => (

@@ -25,6 +25,7 @@ import {
   executionsReactivityKey,
   instanceConfigReactivityKey,
   localInstallationReactivityKey,
+  policiesReactivityKey,
   secretsReactivityKey,
   sourceDiscoveryReactivityKey,
   searchProviderStatusReactivityKey,
@@ -79,6 +80,15 @@ export const executionAtom = (
     },
     reactivityKeys: executionReactivityKey(workspaceId, executionId),
     timeToLive: "15 seconds",
+  });
+
+export const policiesAtom = (workspaceId: Source["scopeId"]) =>
+  getExecutorApiHttpClient().query("policies", "list", {
+    path: {
+      workspaceId,
+    },
+    reactivityKeys: policiesReactivityKey(workspaceId),
+    timeToLive: "30 seconds",
   });
 
 export const sourcesAtom = (workspaceId: Source["scopeId"]) =>

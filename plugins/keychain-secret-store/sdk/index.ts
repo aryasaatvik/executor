@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import {
-  Entry,
-} from "@napi-rs/keyring";
 
 import * as Effect from "effect/Effect";
 
@@ -51,12 +48,13 @@ const keychainDisplayName = () =>
       ? "Windows Credential Manager"
       : "Desktop Keyring";
 
-const createKeyringEntry = (input: {
-  providerHandle: string;
-  keychainServiceName: string;
-}) =>
-  Effect.try({
-    try: () => {
+let keyringEntryConstructorPromise: Promise<
+  (typeof import("@napi-rs/keyring"))["Entry"]
+> | null = null;
+
+const loadKeyringEntryConstructor = () =>
+  Effect.tryPromise({
+    try: async () => {
       if (!isSupportedPlatform()) {
         throw runtimeEffectError(
           "plugin-keychain-secret-store",
@@ -64,10 +62,29 @@ const createKeyringEntry = (input: {
         );
       }
 
-      return new Entry(input.keychainServiceName, input.providerHandle);
+      keyringEntryConstructorPromise ??= import("@napi-rs/keyring").then(
+        ({ Entry }) => Entry,
+      );
+
+      return await keyringEntryConstructorPromise;
     },
-    catch: toError,
+    catch: (cause) =>
+      runtimeEffectError(
+        "plugin-keychain-secret-store",
+        `system-keyring: failed loading native keyring support: ${toError(cause).message}`,
+      ),
   });
+
+const createKeyringEntry = (input: {
+  providerHandle: string;
+  keychainServiceName: string;
+}) =>
+  Effect.flatMap(loadKeyringEntryConstructor(), (Entry) =>
+    Effect.try({
+      try: () => new Entry(input.keychainServiceName, input.providerHandle),
+      catch: toError,
+    })
+  );
 
 const readKeychainSecretValue = (input: {
   providerHandle: string;

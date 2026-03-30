@@ -120,6 +120,9 @@ const inspectionToolListItemFromTool = (
 ): SourceInspectionToolListItem => ({
   path: tool.path,
   method: executableDetails(tool).method,
+  ...(tool.descriptor.interaction
+    ? { interaction: tool.descriptor.interaction }
+    : {}),
   ...(tool.descriptor.contract?.inputTypePreview
     ? { inputTypePreview: tool.descriptor.contract.inputTypePreview }
     : {}),

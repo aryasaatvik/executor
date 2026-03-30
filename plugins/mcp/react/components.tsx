@@ -1,4 +1,4 @@
-import { startTransition, useMemo, useState, type ReactNode } from "react";
+import { startTransition, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Source } from "@executor/react";
 import {
   Result,
@@ -14,6 +14,7 @@ import {
   Badge,
   Button,
   IconPencil,
+  IconSpinner,
   Input,
   Label,
   Select,
@@ -32,6 +33,7 @@ import {
 import {
   type McpConnectInput,
   type McpConnectionAuth,
+  type McpDiscoverResult,
   type McpOAuthPopupResult,
   type McpStartOAuthInput,
 } from "@executor/plugin-mcp-shared";
@@ -47,6 +49,10 @@ import {
   parseJsonStringArray,
   parseJsonStringMap,
 } from "./json";
+import {
+  buildMcpRemoteConfigKey,
+  mcpDiscoveryRequiresOAuth,
+} from "./oauth-detection";
 
 const OAUTH_STORAGE_PREFIX = "executor:mcp-oauth:";
 const OAUTH_TIMEOUT_MS = 2 * 60_000;
@@ -261,6 +267,10 @@ function McpSourceForm(props: {
 }) {
   const installation = useLocalInstallation();
   const client = getMcpHttpClient();
+  const discoverSource = useAtomSet(
+    client.mutation("mcp", "discoverSource"),
+    { mode: "promise" },
+  );
   const startOAuth = useAtomSet(
     client.mutation("mcp", "startOAuth"),
     { mode: "promise" },
@@ -284,11 +294,58 @@ function McpSourceForm(props: {
   const [oauthStatus, setOauthStatus] = useState<"idle" | "pending" | "connected">(
     props.initialValue.auth.kind === "oauth2" ? "connected" : "idle",
   );
+  const [detectedOauthRequired, setDetectedOauthRequired] = useState(
+    props.initialValue.auth.kind === "oauth2",
+  );
+  const [lastDiscoveryKey, setLastDiscoveryKey] = useState<string | null>(
+    props.initialValue.auth.kind === "oauth2"
+      ? buildMcpRemoteConfigKey({
+          transport: transportFields.transport,
+          endpoint: props.initialValue.endpoint ?? "",
+          queryParams: props.initialValue.queryParams,
+        })
+      : null,
+  );
+  const [oauthConnectionKey, setOauthConnectionKey] = useState<string | null>(
+    props.initialValue.auth.kind === "oauth2"
+      ? buildMcpRemoteConfigKey({
+          transport: transportFields.transport,
+          endpoint: props.initialValue.endpoint ?? "",
+          queryParams: props.initialValue.queryParams,
+        })
+      : null,
+  );
   const [error, setError] = useState<string | null>(null);
 
   const isStdio = transportFields.transport === "stdio";
+  const remoteQueryParamsText =
+    transportFields.transport === "stdio"
+      ? ""
+      : transportFields.queryParamsText;
+  const parsedRemoteQueryParams = (() => {
+    if (isStdio) {
+      return null;
+    }
 
-  const runOauth = async () => {
+    try {
+      return parseJsonStringMap("Query params", remoteQueryParamsText);
+    } catch {
+      return null;
+    }
+  })();
+  const remoteConfigKey = (() => {
+    try {
+      return buildMcpRemoteConfigKey({
+        transport: transportFields.transport,
+        endpoint,
+        queryParams: parsedRemoteQueryParams,
+      });
+    } catch {
+      return null;
+    }
+  })();
+
+  const runOauth = async (): Promise<Extract<McpConnectionAuth, { kind: "oauth2" }>> => {
     if (installation.status !== "ready") {
       throw new Error("Workspace is still loading.");
     }
@@ -333,9 +390,93 @@ function McpSourceForm(props: {
 
     setOauthAuth(result.auth);
     setOauthStatus("connected");
+    setOauthConnectionKey(remoteConfigKey);
+    return result.auth;
   };
 
-  const buildInput = (): McpConnectInput => ({
+  const runDiscovery = async (input: {
+    mode: "auto" | "manual";
+  }): Promise<McpDiscoverResult> => {
+    if (installation.status !== "ready") {
+      throw new Error("Workspace is still loading.");
+    }
+    if (isStdio || remoteConfigKey === null) {
+      setDetectedOauthRequired(false);
+      setLastDiscoveryKey(null);
+      return null;
+    }
+
+    const payload = {
+      endpoint: endpoint.trim(),
+      queryParams:
+        parseJsonStringMap("Query params", remoteQueryParamsText),
+    };
+
+    try {
+      const discovered = await discoverSource({
+        path: {
+          workspaceId: installation.data.scopeId,
+        },
+        payload,
+      });
+      const oauthRequired = mcpDiscoveryRequiresOAuth(discovered);
+      setDetectedOauthRequired(oauthRequired);
+      setLastDiscoveryKey(remoteConfigKey);
+      if (oauthRequired) {
+        setAuthKind((current) => current === "oauth2" ? current : "oauth2");
+      }
+      return discovered;
+    } catch (cause) {
+      setDetectedOauthRequired(false);
+      setLastDiscoveryKey(remoteConfigKey);
+      if (input.mode === "manual") {
+        throw cause;
+      }
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    if (isStdio || remoteConfigKey === null) {
+      setDetectedOauthRequired(false);
+      setLastDiscoveryKey(null);
+      return;
+    }
+
+    if (remoteConfigKey === lastDiscoveryKey) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void runDiscovery({ mode: "auto" });
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    endpoint,
+    installation.status,
+    isStdio,
+    lastDiscoveryKey,
+    remoteConfigKey,
+    remoteQueryParamsText,
+  ]);
+
+  useEffect(() => {
+    if (oauthConnectionKey === null || remoteConfigKey === oauthConnectionKey) {
+      return;
+    }
+
+    setOauthAuth(null);
+    setOauthStatus("idle");
+    setOauthConnectionKey(null);
+  }, [oauthConnectionKey, remoteConfigKey]);
+
+  const buildInput = (
+    connectedOauthAuth: Extract<McpConnectionAuth, { kind: "oauth2" }> | null = oauthAuth,
+    authOverride?: McpConnectionAuth,
+  ): McpConnectInput => ({
     name: name.trim(),
     endpoint: isStdio ? null : (endpoint.trim() || null),
     transport:
@@ -357,12 +498,36 @@ function McpSourceForm(props: {
       : null,
     cwd: isStdio ? transportFields.cwd.trim() || null : null,
     auth:
-      authKind === "oauth2"
-        ? oauthAuth ?? (() => {
+      authOverride
+      ?? (authKind === "oauth2"
+        ? connectedOauthAuth ?? (() => {
             throw new Error("Complete MCP OAuth before saving.");
           })()
-        : { kind: "none" },
+        : { kind: "none" }),
   });
+
+  const hasConnectedOauth =
+    oauthConnectionKey !== null
+    && oauthConnectionKey === remoteConfigKey
+    && oauthAuth !== null;
+  const isDerivingSource = !isStdio && remoteConfigKey !== null && remoteConfigKey !== lastDiscoveryKey;
+  const shouldCreateWithoutSigningIn = detectedOauthRequired && !hasConnectedOauth;
+  const submitButtonLabel =
+    isDerivingSource
+      ? "Checking source..."
+      : props.mode === "create" && shouldCreateWithoutSigningIn
+        ? "Create source without signing in"
+        : submitMutation.status === "pending"
+          ? props.mode === "create"
+            ? "Creating..."
+            : "Saving..."
+          : props.mode === "create"
+            ? "Create Source"
+            : "Save Changes";
+  const submitButtonClassName =
+    props.mode === "create" && shouldCreateWithoutSigningIn
+      ? "border-amber-500/30 bg-amber-500/12 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300"
+      : undefined;
 
   return (
     <div className="space-y-8">
@@ -388,6 +553,7 @@ function McpSourceForm(props: {
                 setAuthKind("none");
                 setOauthAuth(null);
                 setOauthStatus("idle");
+                setOauthConnectionKey(null);
               }
             }}
           >
@@ -507,6 +673,7 @@ function McpSourceForm(props: {
                 if (nextKind !== "oauth2") {
                   setOauthAuth(null);
                   setOauthStatus("idle");
+                  setOauthConnectionKey(null);
                 }
               }}
             >
@@ -522,7 +689,9 @@ function McpSourceForm(props: {
               <div>
                 <div className="text-sm font-medium text-foreground">OAuth</div>
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Authenticate with the MCP server's built-in OAuth flow.
+                  {detectedOauthRequired
+                    ? "This MCP server requires OAuth before it can be connected."
+                    : "Authenticate with the MCP server's built-in OAuth flow."}
                 </div>
               </div>
               <Button
@@ -560,21 +729,28 @@ function McpSourceForm(props: {
           <Button
             onClick={() => {
               setError(null);
-              void submitMutation
-                .mutateAsync(buildInput())
-                .catch((cause: unknown) =>
-                  setError(cause instanceof Error ? cause.message : String(cause))
-                );
+              void (async () => {
+                try {
+                  if (isDerivingSource) {
+                    return;
+                  }
+
+                  await submitMutation.mutateAsync(
+                    buildInput(
+                      hasConnectedOauth ? oauthAuth : null,
+                      shouldCreateWithoutSigningIn ? { kind: "none" } : undefined,
+                    ),
+                  );
+                } catch (cause: unknown) {
+                  setError(cause instanceof Error ? cause.message : String(cause));
+                }
+              })();
             }}
-            disabled={submitMutation.status === "pending"}
+            disabled={submitMutation.status === "pending" || isDerivingSource}
+            className={submitButtonClassName}
           >
-            {submitMutation.status === "pending"
-              ? props.mode === "create"
-                ? "Creating..."
-                : "Saving..."
-              : props.mode === "create"
-                ? "Create Source"
-                : "Save Changes"}
+            {isDerivingSource && <IconSpinner className="size-3.5" />}
+            {submitButtonLabel}
           </Button>
         </div>
       </div>

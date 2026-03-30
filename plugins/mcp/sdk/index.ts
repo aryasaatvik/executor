@@ -390,7 +390,7 @@ const mcpCatalogOperationFromManifestEntry = (input: {
     ?? input.entry.title
     ?? input.entry.toolName,
   description: input.entry.description ?? null,
-  effect: input.entry.annotations?.readOnlyHint === true ? "read" : "write",
+  effect: 'read',
   inputSchema: input.entry.inputSchema,
   outputSchema: input.entry.outputSchema,
   providerData: {
@@ -513,10 +513,10 @@ const createPersistedMcpAuthProvider = (input: {
         );
         const refreshToken = currentAuth.refreshTokenRef
           ? await Effect.runPromise(
-              resolveSecretMaterial({
-                ref: currentAuth.refreshTokenRef,
-              }),
-            )
+            resolveSecretMaterial({
+              ref: currentAuth.refreshTokenRef,
+            }),
+          )
           : undefined;
 
         return {
@@ -604,13 +604,13 @@ const createPersistedMcpAuthProvider = (input: {
         currentAuth.authorizationServerUrl === null
           ? undefined
           : {
-              resourceMetadataUrl: currentAuth.resourceMetadataUrl ?? undefined,
-              authorizationServerUrl: currentAuth.authorizationServerUrl,
-              resourceMetadata:
-                currentAuth.resourceMetadata as OAuthDiscoveryState["resourceMetadata"],
-              authorizationServerMetadata:
-                currentAuth.authorizationServerMetadata as OAuthDiscoveryState["authorizationServerMetadata"],
-            },
+            resourceMetadataUrl: currentAuth.resourceMetadataUrl ?? undefined,
+            authorizationServerUrl: currentAuth.authorizationServerUrl,
+            resourceMetadata:
+              currentAuth.resourceMetadata as OAuthDiscoveryState["resourceMetadata"],
+            authorizationServerMetadata:
+              currentAuth.authorizationServerMetadata as OAuthDiscoveryState["authorizationServerMetadata"],
+          },
     } satisfies OAuthClientProvider;
   });
 
@@ -876,25 +876,25 @@ export const mcpSdkPlugin = (
           const executionContext: ToolExecutionContext | undefined =
             input.onElicitation
               ? {
-                  path: input.descriptor.path as ToolPath,
+                path: input.descriptor.path as ToolPath,
+                sourceKey: input.source.id,
+                metadata: {
                   sourceKey: input.source.id,
-                  metadata: {
-                    sourceKey: input.source.id,
-                    interaction: input.descriptor.interaction,
-                    contract: {
-                      ...(input.descriptor.contract?.inputSchema !== undefined
-                        ? { inputSchema: input.descriptor.contract.inputSchema }
-                        : {}),
-                      ...(input.descriptor.contract?.outputSchema !== undefined
-                        ? { outputSchema: input.descriptor.contract.outputSchema }
-                        : {}),
-                    },
-                    pluginKind: input.descriptor.pluginKind,
-                    pluginData: input.descriptor.pluginData,
+                  interaction: input.descriptor.interaction,
+                  contract: {
+                    ...(input.descriptor.contract?.inputSchema !== undefined
+                      ? { inputSchema: input.descriptor.contract.inputSchema }
+                      : {}),
+                    ...(input.descriptor.contract?.outputSchema !== undefined
+                      ? { outputSchema: input.descriptor.contract.outputSchema }
+                      : {}),
                   },
-                  invocation: input.context,
-                  onElicitation: input.onElicitation,
-                }
+                  pluginKind: input.descriptor.pluginKind,
+                  pluginData: input.descriptor.pluginData,
+                },
+                invocation: input.context,
+                onElicitation: input.onElicitation,
+              }
               : undefined;
           const result = yield* Effect.tryPromise({
             try: async () =>
@@ -922,7 +922,12 @@ export const mcpSdkPlugin = (
       outputSchema: McpDiscoverResultSchema,
       execute: ({ args }) =>
         Effect.gen(function* () {
-          const normalizedUrl = normalizeSourceDiscoveryUrl(args.endpoint);
+          const normalizedUrl = normalizeSourceDiscoveryUrl(
+            resolveMcpEndpoint({
+              endpoint: args.endpoint.trim(),
+              queryParams: args.queryParams,
+            }),
+          );
           const discovered = yield* detectMcpSource({
             normalizedUrl,
             headers: probeHeadersFromAuth(args.probeAuth ?? null),
@@ -1043,10 +1048,10 @@ export const mcpSdkPlugin = (
           });
           const refreshTokenRef = exchanged.tokens.refresh_token
             ? yield* storeSecretMaterial({
-                purpose: "oauth_refresh_token",
-                value: exchanged.tokens.refresh_token,
-                name: "MCP Refresh Token",
-              })
+              purpose: "oauth_refresh_token",
+              value: exchanged.tokens.refresh_token,
+              name: "MCP Refresh Token",
+            })
             : null;
 
           if (options.oauthSessions.remove) {
@@ -1088,7 +1093,12 @@ export const mcpSdkPlugin = (
       discoverSource: (input) =>
         provideRuntime(
           Effect.gen(function* () {
-            const normalizedUrl = normalizeSourceDiscoveryUrl(input.endpoint);
+            const normalizedUrl = normalizeSourceDiscoveryUrl(
+              resolveMcpEndpoint({
+                endpoint: input.endpoint.trim(),
+                queryParams: input.queryParams,
+              }),
+            );
             const discovered = yield* detectMcpSource({
               normalizedUrl,
               headers: probeHeadersFromAuth(input.probeAuth ?? null),
@@ -1109,110 +1119,110 @@ export const mcpSdkPlugin = (
       startOAuth: (input) =>
         provideRuntime(
           Effect.gen(function* () {
-        const endpoint = resolveMcpEndpoint({
-          endpoint: input.endpoint.trim(),
-          queryParams: input.queryParams,
-        });
-        const sessionId = `mcp_oauth_${crypto.randomUUID()}`;
-        const started = yield* startMcpOAuthAuthorization({
-          endpoint,
-          redirectUrl: input.redirectUrl,
-          state: sessionId,
-        });
+            const endpoint = resolveMcpEndpoint({
+              endpoint: input.endpoint.trim(),
+              queryParams: input.queryParams,
+            });
+            const sessionId = `mcp_oauth_${crypto.randomUUID()}`;
+            const started = yield* startMcpOAuthAuthorization({
+              endpoint,
+              redirectUrl: input.redirectUrl,
+              state: sessionId,
+            });
 
-        yield* options.oauthSessions.put({
-          sessionId,
-          value: decodeSession({
-            endpoint,
-            redirectUrl: input.redirectUrl,
-            codeVerifier: started.codeVerifier,
-            resourceMetadataUrl: started.resourceMetadataUrl,
-            authorizationServerUrl: started.authorizationServerUrl,
-            resourceMetadata: started.resourceMetadata,
-            authorizationServerMetadata: started.authorizationServerMetadata,
-            clientInformation: started.clientInformation,
-          }),
-        });
+            yield* options.oauthSessions.put({
+              sessionId,
+              value: decodeSession({
+                endpoint,
+                redirectUrl: input.redirectUrl,
+                codeVerifier: started.codeVerifier,
+                resourceMetadataUrl: started.resourceMetadataUrl,
+                authorizationServerUrl: started.authorizationServerUrl,
+                resourceMetadata: started.resourceMetadata,
+                authorizationServerMetadata: started.authorizationServerMetadata,
+                clientInformation: started.clientInformation,
+              }),
+            });
 
-        return {
-          sessionId,
-          authorizationUrl: started.authorizationUrl,
-        };
+            return {
+              sessionId,
+              authorizationUrl: started.authorizationUrl,
+            };
           }),
         ),
       completeOAuth: (input) =>
         provideRuntime(
           Effect.gen(function* () {
-        if (input.error) {
-          return yield* runtimeEffectError(
-            "plugins/mcp/sdk",
-            input.errorDescription || input.error || "MCP OAuth failed",
-          );
-        }
-        if (!input.code) {
-          return yield* runtimeEffectError(
-            "plugins/mcp/sdk",
-            "Missing MCP OAuth code.",
-          );
-        }
+            if (input.error) {
+              return yield* runtimeEffectError(
+                "plugins/mcp/sdk",
+                input.errorDescription || input.error || "MCP OAuth failed",
+              );
+            }
+            if (!input.code) {
+              return yield* runtimeEffectError(
+                "plugins/mcp/sdk",
+                "Missing MCP OAuth code.",
+              );
+            }
 
-        const session = yield* options.oauthSessions.get(input.state);
-        if (session === null) {
-          return yield* runtimeEffectError(
-            "plugins/mcp/sdk",
-            `MCP OAuth session not found: ${input.state}`,
-          );
-        }
+            const session = yield* options.oauthSessions.get(input.state);
+            if (session === null) {
+              return yield* runtimeEffectError(
+                "plugins/mcp/sdk",
+                `MCP OAuth session not found: ${input.state}`,
+              );
+            }
 
-        const exchanged = yield* exchangeMcpOAuthAuthorizationCode({
-          session,
-          code: input.code,
-        });
-        const storeSecretMaterial = yield* SecretMaterialStorerService;
-        const accessTokenRef = yield* storeSecretMaterial({
-          purpose: "oauth_access_token",
-          value: exchanged.tokens.access_token,
-          name: "MCP Access Token",
-        });
-        const refreshTokenRef = exchanged.tokens.refresh_token
-          ? yield* storeSecretMaterial({
-              purpose: "oauth_refresh_token",
-              value: exchanged.tokens.refresh_token,
-              name: "MCP Refresh Token",
-            })
-          : null;
+            const exchanged = yield* exchangeMcpOAuthAuthorizationCode({
+              session,
+              code: input.code,
+            });
+            const storeSecretMaterial = yield* SecretMaterialStorerService;
+            const accessTokenRef = yield* storeSecretMaterial({
+              purpose: "oauth_access_token",
+              value: exchanged.tokens.access_token,
+              name: "MCP Access Token",
+            });
+            const refreshTokenRef = exchanged.tokens.refresh_token
+              ? yield* storeSecretMaterial({
+                purpose: "oauth_refresh_token",
+                value: exchanged.tokens.refresh_token,
+                name: "MCP Refresh Token",
+              })
+              : null;
 
-        if (options.oauthSessions.remove) {
-          yield* options.oauthSessions.remove(input.state);
-        }
+            if (options.oauthSessions.remove) {
+              yield* options.oauthSessions.remove(input.state);
+            }
 
-        return {
-          type: "executor:oauth-result",
-          ok: true,
-          sessionId: input.state,
-          auth: {
-            kind: "oauth2",
-            redirectUri: session.redirectUrl,
-            accessTokenRef,
-            refreshTokenRef,
-            tokenType: exchanged.tokens.token_type ?? "Bearer",
-            expiresAt: expiresAtFromTokens(exchanged.tokens),
-            scope: exchanged.tokens.scope ?? null,
-            resourceMetadataUrl:
-              exchanged.resourceMetadataUrl ?? session.resourceMetadataUrl,
-            authorizationServerUrl:
-              exchanged.authorizationServerUrl ?? session.authorizationServerUrl,
-            resourceMetadata:
-              exchanged.resourceMetadata ?? session.resourceMetadata,
-            authorizationServerMetadata:
-              exchanged.authorizationServerMetadata
-              ?? session.authorizationServerMetadata,
-            clientInformation:
-              exchanged.clientInformation ?? session.clientInformation,
-          },
-        };
+            return {
+              type: "executor:oauth-result",
+              ok: true,
+              sessionId: input.state,
+              auth: {
+                kind: "oauth2",
+                redirectUri: session.redirectUrl,
+                accessTokenRef,
+                refreshTokenRef,
+                tokenType: exchanged.tokens.token_type ?? "Bearer",
+                expiresAt: expiresAtFromTokens(exchanged.tokens),
+                scope: exchanged.tokens.scope ?? null,
+                resourceMetadataUrl:
+                  exchanged.resourceMetadataUrl ?? session.resourceMetadataUrl,
+                authorizationServerUrl:
+                  exchanged.authorizationServerUrl ?? session.authorizationServerUrl,
+                resourceMetadata:
+                  exchanged.resourceMetadata ?? session.resourceMetadata,
+                authorizationServerMetadata:
+                  exchanged.authorizationServerMetadata
+                  ?? session.authorizationServerMetadata,
+                clientInformation:
+                  exchanged.clientInformation ?? session.clientInformation,
+              },
+            };
           }),
-      ),
+        ),
     };
   },
 });
