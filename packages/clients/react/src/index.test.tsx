@@ -55,7 +55,7 @@ globalThis.cancelAnimationFrame = (handle: number) => {
   clearTimeout(handle);
 };
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = false;
 
 type RunningServer = {
   baseUrl: string;
@@ -81,6 +81,10 @@ type SourceHarnessState = {
 
 const closeScope = (scope: Scope.CloseableScope) =>
   Scope.close(scope, Exit.void).pipe(Effect.orDie);
+
+const flushDom = async () => {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 const startControlPlaneServer = async (): Promise<RunningServer> => {
   const workspaceRoot = await Effect.runPromise(
@@ -218,22 +222,20 @@ async function renderExecutorHarness<T>(useValue: () => T): Promise<HookHarness<
     return null;
   };
 
-  await React.act(async () => {
-    root.render(
-      <ExecutorReactProvider>
-        <Probe />
-      </ExecutorReactProvider>,
-    );
-  });
+  root.render(
+    <ExecutorReactProvider>
+      <Probe />
+    </ExecutorReactProvider>,
+  );
+  await flushDom();
 
   return {
     get current() {
       return snapshot.current;
     },
     unmount: async () => {
-      await React.act(async () => {
-        root.unmount();
-      });
+      root.unmount();
+      await flushDom();
       container.remove();
     },
   };
@@ -266,9 +268,7 @@ async function waitForValue<T>(
       return value;
     }
 
-    await React.act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
   throw new Error("Timed out waiting for test state");
@@ -369,8 +369,8 @@ describe("executor-react source hooks", () => {
             && value.sources.data.some((item) => item.id === source.id),
         );
 
-        const removed = await React.act(async () =>
-          harness.current!.removeSource.mutateAsync(source.id));
+        const removed = await harness.current!.removeSource.mutateAsync(source.id);
+        await flushDom();
         expect(removed.removed).toBe(true);
 
         const invalidated = await waitForValue(

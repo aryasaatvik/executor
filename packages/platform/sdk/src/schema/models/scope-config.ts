@@ -42,9 +42,15 @@ export const ExecutorScopeWorkspaceConfigSchema = Schema.Struct({
   name: Schema.optional(Schema.String),
 });
 
+export const ExecutorScopeSearchConfigSchema = Schema.Struct({
+  provider: Schema.optional(Schema.String),
+  config: Schema.optional(Schema.Unknown),
+});
+
 export const ExecutorScopeConfigSchema = Schema.Struct({
   runtime: Schema.optional(ExecutorRuntimeConfigSchema),
   workspace: Schema.optional(ExecutorScopeWorkspaceConfigSchema),
+  search: Schema.optional(ExecutorScopeSearchConfigSchema),
   sources: Schema.optional(
     Schema.Record({
       key: Schema.String,
@@ -62,4 +68,5 @@ export const ExecutorScopeConfigSchema = Schema.Struct({
 export type ExecutorScopeConfigPolicy =
   typeof ExecutorScopeConfigPolicySchema.Type;
 export type ExecutorRuntimeConfig = typeof ExecutorRuntimeConfigSchema.Type;
+export type ExecutorScopeSearchConfig = typeof ExecutorScopeSearchConfigSchema.Type;
 export type ExecutorScopeConfig = typeof ExecutorScopeConfigSchema.Type;
