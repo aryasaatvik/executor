@@ -45,6 +45,7 @@
     "@executor/plugin-local-tools-sdk": "workspace:*",
     "@executor/plugin-mcp-sdk": "workspace:*",
     "@executor/plugin-openapi-sdk": "workspace:*",
+    "@executor/plugin-search-sqlite-sdk": "workspace:*",
     "@executor/platform-api": "workspace:*",
     "@executor/platform-sdk": "workspace:*",
     "@executor/platform-sdk-file": "workspace:*",

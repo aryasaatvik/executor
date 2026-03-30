@@ -33,6 +33,7 @@
     "@executor/plugin-onepassword-http": "workspace:*",
     "@executor/plugin-onepassword-sdk": "workspace:*",
     "@executor/plugin-onepassword-shared": "workspace:*",
+    "@executor/plugin-search-sqlite-sdk": "workspace:*",
     "@executor/platform-api": "workspace:*",
     "@executor/platform-sdk": "workspace:*",
     "@executor/platform-sdk-file": "workspace:*",

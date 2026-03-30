@@ -9,14 +9,20 @@ import { Readable } from "node:stream";
 import { FileSystem, HttpApiBuilder, HttpServer } from "@effect/platform";
 import { NodeFileSystem } from "@effect/platform-node";
 import { googleDiscoveryHttpPlugin } from "@executor/plugin-google-discovery-http";
-import { googleDiscoverySdkPlugin } from "@executor/plugin-google-discovery-sdk";
+import {
+  googleDiscoverySdkPlugin,
+} from "@executor/plugin-google-discovery-sdk";
 import { graphqlHttpPlugin } from "@executor/plugin-graphql-http";
-import { graphqlSdkPlugin } from "@executor/plugin-graphql-sdk";
+import {
+  graphqlSdkPlugin,
+} from "@executor/plugin-graphql-sdk";
 import { keychainSecretStoreSdkPlugin } from "@executor/plugin-keychain-secret-store-sdk";
 import { localSecretStoreSdkPlugin } from "@executor/plugin-local-secret-store-sdk";
 import { localToolsSdkPlugin } from "@executor/plugin-local-tools-sdk";
 import { mcpHttpPlugin } from "@executor/plugin-mcp-http";
-import { mcpSdkPlugin } from "@executor/plugin-mcp-sdk";
+import {
+  mcpSdkPlugin,
+} from "@executor/plugin-mcp-sdk";
 import { openApiHttpPlugin } from "@executor/plugin-openapi-http";
 import {
   openApiSdkPlugin,
@@ -25,6 +31,9 @@ import { onePasswordHttpPlugin } from "@executor/plugin-onepassword-http";
 import {
   onePasswordSdkPlugin,
 } from "@executor/plugin-onepassword-sdk";
+import {
+  sqliteSearchSdkPlugin,
+} from "@executor/plugin-search-sqlite-sdk";
 import {
   createExecutorApiLayer,
 } from "@executor/platform-api/http";
@@ -60,13 +69,7 @@ import {
   tracingSearchUrl,
 } from "./tracing";
 import { platformServerEffectError } from "./effect-errors";
-import { createFileGoogleDiscoveryOAuthSessionStorage } from "./google-discovery-oauth-session-storage";
-import { createFileGoogleDiscoverySourceStorage } from "./google-discovery-source-storage";
-import { createFileGraphqlSourceStorage } from "./graphql-source-storage";
-import { createFileMcpOAuthSessionStorage } from "./mcp-oauth-session-storage";
-import { createFileMcpSourceStorage } from "./mcp-source-storage";
-import { createFileOpenApiSourceStorage } from "./openapi-source-storage";
-import { createFileOnePasswordStoreStorage } from "./onepassword-store-storage";
+import { createServerPluginStorage } from "./plugin-storage";
 
 export { createFileGoogleDiscoveryOAuthSessionStorage } from "./google-discovery-oauth-session-storage";
 export { createFileGoogleDiscoverySourceStorage } from "./google-discovery-source-storage";
@@ -157,8 +160,18 @@ const createExecutorRuntime = (
   localDataDir: string,
   getLocalServerBaseUrl: () => string | undefined,
   options: StartLocalExecutorServerOptions,
-) =>
-  createExecutorEffect({
+)=> {
+  const {
+    graphqlStorage,
+    googleDiscoveryStorage,
+    googleDiscoveryOAuthSessions,
+    mcpStorage,
+    mcpOAuthSessions,
+    openApiStorage,
+    onePasswordStorage,
+  } = createServerPluginStorage(localDataDir);
+
+  return createExecutorEffect({
     backend: createLocalExecutorBackend({
       cwd: options.workspaceRoot ?? process.cwd(),
       workspaceRoot: options.workspaceRoot,
@@ -169,36 +182,23 @@ const createExecutorRuntime = (
       keychainSecretStoreSdkPlugin,
       localToolsSdkPlugin(),
       graphqlSdkPlugin({
-        storage: createFileGraphqlSourceStorage({
-          rootDir: resolve(localDataDir, "plugins", "graphql", "sources"),
-        }),
+        storage: graphqlStorage,
       }),
       googleDiscoverySdkPlugin({
-        storage: createFileGoogleDiscoverySourceStorage({
-          rootDir: resolve(localDataDir, "plugins", "google-discovery", "sources"),
-        }),
-        oauthSessions: createFileGoogleDiscoveryOAuthSessionStorage({
-          rootDir: resolve(localDataDir, "plugins", "google-discovery", "oauth-sessions"),
-        }),
+        storage: googleDiscoveryStorage,
+        oauthSessions: googleDiscoveryOAuthSessions,
       }),
       mcpSdkPlugin({
-        storage: createFileMcpSourceStorage({
-          rootDir: resolve(localDataDir, "plugins", "mcp", "sources"),
-        }),
-        oauthSessions: createFileMcpOAuthSessionStorage({
-          rootDir: resolve(localDataDir, "plugins", "mcp", "oauth-sessions"),
-        }),
+        storage: mcpStorage,
+        oauthSessions: mcpOAuthSessions,
       }),
       openApiSdkPlugin({
-        storage: createFileOpenApiSourceStorage({
-          rootDir: resolve(localDataDir, "plugins", "openapi", "sources"),
-        }),
+        storage: openApiStorage,
       }),
       onePasswordSdkPlugin({
-        storage: createFileOnePasswordStoreStorage({
-          rootDir: resolve(localDataDir, "plugins", "onepassword", "stores"),
-        }),
+        storage: onePasswordStorage,
       }),
+      sqliteSearchSdkPlugin(),
     ] as const,
     executionResolver: options.executionResolver,
     resolveSecretMaterial: options.resolveSecretMaterial,
@@ -208,6 +208,7 @@ const createExecutorRuntime = (
       cause instanceof Error ? cause : new Error(String(cause)),
     ),
   );
+};
 
 const createExecutorApiWebHandler = (
   executor: Executor,

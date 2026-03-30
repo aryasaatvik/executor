@@ -36,6 +36,9 @@ import {
   openApiSdkPlugin,
 } from "@executor/plugin-openapi-sdk";
 import {
+  sqliteSearchSdkPlugin,
+} from "@executor/plugin-search-sqlite-sdk";
+import {
   getExecutorInternalToolHelpLines,
   RuntimeExecutionResolverService,
 } from "@executor/platform-sdk/runtime";
@@ -354,6 +357,7 @@ const loadRunWorkflowText = (): Effect.Effect<string, Error, never> =>
             rootDir: `${CLI_LOCAL_DATA_DIR}/plugins/openapi/sources`,
           }),
         }),
+        sqliteSearchSdkPlugin(),
       ] as const,
     }).pipe(Effect.mapError(toError)),
     (executor) =>

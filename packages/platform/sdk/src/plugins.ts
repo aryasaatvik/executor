@@ -34,6 +34,9 @@ import {
   SecretMaterialUpdaterService,
 } from "./runtime/scope/secret-material-providers";
 import { ScopeConfigStore } from "./runtime/scope/storage";
+import type {
+  ExecutorSearchProviderDefinition,
+} from "./runtime/search/types";
 
 export type PluginCleanup = {
   close: () => void | Promise<void>;
@@ -56,6 +59,7 @@ export type ExecutorSdkPluginStartContext<
 type ExecutorSdkPluginInternals = {
   sources?: readonly ExecutorSourceContribution<any>[];
   secretStores?: readonly ExecutorSecretStoreContribution<any>[];
+  searchProviders?: readonly ExecutorSearchProviderDefinition<any>[];
   managementTools?: readonly ExecutorManagementToolContribution<any, any>[];
 };
 
@@ -1083,6 +1087,7 @@ export type ExecutorSdkPluginRegistry = {
   plugins: readonly ExecutorSdkPlugin<any, any>[];
   sources: readonly ExecutorSourceContribution<any>[];
   secretStores: readonly ExecutorSecretStoreContribution<any>[];
+  searchProviders: readonly ExecutorSearchProviderDefinition<any>[];
   managementTools: readonly ExecutorManagementToolContribution<any, any>[];
   getSourceContribution: (kind: string) => ExecutorSourceContribution<any>;
   getSourceContributionForSource: (
@@ -1092,6 +1097,7 @@ export type ExecutorSdkPluginRegistry = {
   getSecretStoreContributionForStore: (
     store: Pick<SecretStore, "kind">,
   ) => ExecutorSecretStoreContribution<any>;
+  getSearchProvider: (providerKey: string) => ExecutorSearchProviderDefinition<any>;
   getManagementTool: (
     path: string,
   ) => ExecutorManagementToolContribution<any, any>;
@@ -1517,6 +1523,29 @@ export const defineExecutorSecretStorePlugin = <
       },
     }))(input.extendExecutor, input.start);
 
+export const defineExecutorSearchPlugin = <
+  const TKey extends string,
+  TConfig,
+  TExtension extends object = {},
+>(
+  input: {
+    key: TKey;
+    search: ExecutorSearchProviderDefinition<TConfig>;
+    extendExecutor?: (input: ExecutorSdkPluginContext) => TExtension;
+    start?: (
+      input: ExecutorSdkPluginStartContext<TExtension>,
+    ) => Effect.Effect<PluginCleanup | void, Error, any>;
+  },
+): ExecutorSdkPlugin<TKey, TExtension> =>
+  defineExecutorSdkPlugin({
+    key: input.key,
+    extendExecutor: input.extendExecutor,
+    start: input.start,
+    [executorSdkPluginInternalsSymbol]: {
+      searchProviders: [input.search],
+    },
+  });
+
 export type ExecutorSdkPluginExtensions<
   TPlugins extends readonly ExecutorSdkPlugin<any, any>[],
 > = {
@@ -1532,6 +1561,7 @@ export const registerExecutorSdkPlugins = (
   const pluginKeys = new Set<string>();
   const sources = new Map<string, ExecutorSourceContribution<any>>();
   const secretStores = new Map<string, ExecutorSecretStoreContribution<any>>();
+  const searchProviders = new Map<string, ExecutorSearchProviderDefinition<any>>();
   const managementTools = new Map<
     string,
     ExecutorManagementToolContribution<any, any>
@@ -1564,6 +1594,16 @@ export const registerExecutorSdkPlugins = (
       }
 
       secretStores.set(secretStore.kind, secretStore);
+    }
+
+    for (const searchProvider of internals?.searchProviders ?? []) {
+      if (searchProviders.has(searchProvider.providerKey)) {
+        throw new Error(
+          `Duplicate search provider registration: ${searchProvider.providerKey}`,
+        );
+      }
+
+      searchProviders.set(searchProvider.providerKey, searchProvider);
     }
 
     for (const tool of internals?.managementTools ?? []) {
@@ -1609,15 +1649,26 @@ export const registerExecutorSdkPlugins = (
     return tool;
   };
 
+  const getSearchProvider = (providerKey: string) => {
+    const provider = searchProviders.get(providerKey);
+    if (!provider) {
+      throw new Error(`Unsupported search provider: ${providerKey}`);
+    }
+
+    return provider;
+  };
+
   return {
     plugins,
     sources: [...sources.values()],
     secretStores: [...secretStores.values()],
+    searchProviders: [...searchProviders.values()],
     managementTools: [...managementTools.values()],
     getSourceContribution,
     getSourceContributionForSource,
     getSecretStoreContribution,
     getSecretStoreContributionForStore,
+    getSearchProvider,
     getManagementTool,
   } satisfies ExecutorSdkPluginRegistry;
 };
