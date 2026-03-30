@@ -32,6 +32,9 @@ import {
 import {
   RuntimeSourceStoreService,
 } from "../runtime/sources/source-store";
+import {
+  RuntimeSearchManagerService,
+} from "../runtime/search/manager";
 
 const sourceInspectOps = {
   bundle: operationErrors("sources.inspect.bundle"),
@@ -348,69 +351,6 @@ const resolveSourceInspectionTool = (input: {
     };
   });
 
-const scoreTool = (input: {
-  queryTokens: ReadonlyArray<string>;
-  tool: LoadedSourceCatalogTool;
-}): SourceInspectionDiscoverResultItem | null => {
-  let score = 0;
-  const reasons: Array<string> = [];
-  const summary = persistedToolSummaryFromTool(input.tool);
-  const pathTokens = tokenize(summary.path);
-  const titleTokens = tokenize(summary.title ?? "");
-  const descriptionTokens = tokenize(summary.description ?? "");
-  const tagTokens = summary.tags.flatMap(tokenize);
-  const methodPathTokens = tokenize(
-    `${summary.method ?? ""} ${summary.pathTemplate ?? ""}`,
-  );
-
-  for (const token of input.queryTokens) {
-    if (pathTokens.includes(token)) {
-      score += 12;
-      reasons.push(`path matches ${token} (+12)`);
-      continue;
-    }
-    if (tagTokens.includes(token)) {
-      score += 10;
-      reasons.push(`tag matches ${token} (+10)`);
-      continue;
-    }
-    if (titleTokens.includes(token)) {
-      score += 8;
-      reasons.push(`title matches ${token} (+8)`);
-      continue;
-    }
-    if (methodPathTokens.includes(token)) {
-      score += 6;
-      reasons.push(`method/path matches ${token} (+6)`);
-      continue;
-    }
-    if (
-      descriptionTokens.includes(token) ||
-      input.tool.searchText.includes(token)
-    ) {
-      score += 2;
-      reasons.push(`description/text matches ${token} (+2)`);
-    }
-  }
-
-  if (score <= 0) {
-    return null;
-  }
-
-  return {
-    path: input.tool.path,
-    score,
-    ...(summary.description ? { description: summary.description } : {}),
-    ...(summary.inputTypePreview
-      ? { inputTypePreview: summary.inputTypePreview }
-      : {}),
-    ...(summary.outputTypePreview
-      ? { outputTypePreview: summary.outputTypePreview }
-      : {}),
-    reasons,
-  };
-};
-
 const mapInspectionError = (
   operation:
     | typeof sourceInspectOps.bundle
@@ -498,35 +438,22 @@ export const discoverSourceInspectionTools = (input: {
   payload: SourceInspectionDiscoverPayload;
 }) =>
   Effect.gen(function* () {
-    const inspection = yield* resolveSourceInspection({
-      scopeId: input.scopeId,
-      sourceId: input.sourceId,
-      includeSchemas: false,
-      includeTypePreviews: false,
-    });
+    const searchManager = yield* RuntimeSearchManagerService;
     const queryTokens = tokenize(input.payload.query);
-    const results = inspection.tools
-      .map((tool) =>
-        scoreTool({
-          queryTokens,
-          tool,
-        }),
-      )
-      .filter(
-        (value): value is SourceInspectionDiscoverResultItem => value !== null,
-      )
-      .sort(
-        (left, right) =>
-          right.score - left.score || left.path.localeCompare(right.path),
-      )
-      .slice(0, input.payload.limit ?? 12);
+    const result = yield* searchManager.discoverSource({
+      sourceId: input.sourceId,
+      query: input.payload.query,
+      limit: input.payload.limit ?? 12,
+      includeSchemas: false,
+    });
 
     return {
       query: input.payload.query,
       queryTokens,
-      bestPath: results[0]?.path ?? null,
-      total: results.length,
-      results,
+      provider: result.provider,
+      bestPath: result.bestPath,
+      total: result.total,
+      results: result.results as readonly SourceInspectionDiscoverResultItem[],
     } satisfies SourceInspectionDiscoverResult;
   }).pipe(
     Effect.mapError((cause) =>

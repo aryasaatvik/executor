@@ -3,6 +3,11 @@ import {
 } from "effect";
 
 import {
+  SearchProviderInfoSchema,
+  SearchResultItemSchema,
+} from "./search";
+
+import {
   SourceSchema,
 } from "./source";
 
@@ -101,18 +106,12 @@ export const SourceInspectionDiscoverPayloadSchema = Schema.Struct({
   limit: Schema.optional(Schema.Number),
 });
 
-export const SourceInspectionDiscoverResultItemSchema = Schema.Struct({
-  path: Schema.String,
-  score: Schema.Number,
-  description: Schema.optional(Schema.String),
-  inputTypePreview: Schema.optional(Schema.String),
-  outputTypePreview: Schema.optional(Schema.String),
-  reasons: Schema.Array(Schema.String),
-});
+export const SourceInspectionDiscoverResultItemSchema = SearchResultItemSchema;
 
 export const SourceInspectionDiscoverResultSchema = Schema.Struct({
   query: Schema.String,
   queryTokens: Schema.Array(Schema.String),
+  provider: SearchProviderInfoSchema,
   bestPath: Schema.NullOr(Schema.String),
   total: Schema.Number,
   results: Schema.Array(SourceInspectionDiscoverResultItemSchema),
