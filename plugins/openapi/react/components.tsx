@@ -30,6 +30,10 @@ import {
 import {
   openApiHttpApiExtension,
 } from "@executor/plugin-openapi-http";
+import {
+  getFaviconUrlForRemoteUrl,
+  getSourceFaviconUrl,
+} from "@executor/plugin-openapi-shared";
 import type {
   OpenApiConnectInput,
   OpenApiPreviewRequest,
@@ -37,17 +41,19 @@ import type {
   OpenApiPreviewResponse,
   OpenApiSourceConfigPayload,
 } from "@executor/plugin-openapi-shared";
-import { startTransition, useEffect, useState, type ReactNode } from "react";
+import { startTransition, useEffect, useEffectEvent, useState, type ReactNode } from "react";
 
 type RouteToolSearch = SourceToolExplorerSearch;
 
 const defaultOpenApiInput = (): OpenApiConnectInput => ({
   name: "My OpenAPI Source",
+  iconUrl: undefined,
   specUrl: "https://example.com/openapi.json",
   baseUrl: null,
   auth: {
     kind: "none",
   },
+  useSpecFetchCredentials: false,
 });
 
 const DEFAULT_BEARER_HEADER_NAME = "Authorization";
@@ -190,9 +196,11 @@ const inputFromConfig = (
   config: OpenApiSourceConfigPayload,
 ): OpenApiConnectInput => ({
   name: config.name,
+  iconUrl: config.iconUrl,
   specUrl: config.specUrl,
   baseUrl: config.baseUrl,
   auth: config.auth,
+  useSpecFetchCredentials: config.useSpecFetchCredentials === true,
 });
 
 const secretValue = (input: OpenApiConnectInput["auth"]): string =>
@@ -253,6 +261,7 @@ function OpenApiSourceForm(props: {
     { mode: "promise" },
   );
   const [name, setName] = useState(props.initialValue.name);
+  const [iconUrl, setIconUrl] = useState(props.initialValue.iconUrl ?? "");
   const [specUrl, setSpecUrl] = useState(props.initialValue.specUrl);
   const [baseUrl, setBaseUrl] = useState(props.initialValue.baseUrl ?? "");
   const [authKind, setAuthKind] = useState<OpenApiConnectInput["auth"]["kind"]>(
@@ -266,6 +275,9 @@ function OpenApiSourceForm(props: {
   );
   const [authPrefix, setAuthPrefix] = useState(
     bearerPrefixValue(props.initialValue.auth),
+  );
+  const [useSpecFetchCredentials, setUseSpecFetchCredentials] = useState(
+    props.initialValue.useSpecFetchCredentials === true,
   );
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<OpenApiPreviewResponse | null>(null);
@@ -282,8 +294,9 @@ function OpenApiSourceForm(props: {
     })
   );
   const submitMutation = useExecutorMutation<OpenApiConnectInput, void>(props.onSubmit);
+  const resolvedIconUrl = iconUrl.trim() || getFaviconUrlForRemoteUrl(baseUrl || specUrl) || getSourceFaviconUrl(name);
 
-  const runPreview = async (input: {
+  const runPreview = useEffectEvent(async (input: {
     mode: "auto" | "manual";
   }) => {
     const trimmedSpecUrl = specUrl.trim();
@@ -326,7 +339,7 @@ function OpenApiSourceForm(props: {
       }
       setPreview(null);
     }
-  };
+  });
 
   useEffect(() => {
     const trimmedSpecUrl = specUrl.trim();
@@ -375,9 +388,11 @@ function OpenApiSourceForm(props: {
       );
       await submitMutation.mutateAsync({
         name: trimmedName,
+        ...(iconUrl.trim() ? { iconUrl: iconUrl.trim() } : {}),
         specUrl: trimmedSpecUrl,
         baseUrl: trimmedBaseUrl || null,
         auth,
+        useSpecFetchCredentials,
       });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed saving source.");
@@ -398,6 +413,22 @@ function OpenApiSourceForm(props: {
               }}
               placeholder="GitHub REST"
             />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>Icon URL</Label>
+            <Input
+              value={iconUrl}
+              onChange={(event) => setIconUrl(event.target.value)}
+              placeholder="https://cdn.example.com/icon.png"
+              className="font-mono text-xs"
+            />
+            {resolvedIconUrl && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <img src={resolvedIconUrl} alt="" className="size-4 rounded-sm object-contain" />
+                <span>{iconUrl.trim() ? "Using override" : "Auto preview"}</span>
+              </div>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -470,6 +501,24 @@ function OpenApiSourceForm(props: {
                   />
                 </div>
               </div>
+
+              <label className="flex items-start gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  checked={useSpecFetchCredentials}
+                  onChange={(event) => setUseSpecFetchCredentials(event.target.checked)}
+                  className="mt-0.5 rounded border-border"
+                />
+                <div className="space-y-1">
+                  <div className="font-medium text-foreground">
+                    Use credentials for spec fetch
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Send this bearer token when downloading the OpenAPI document and any
+                    referenced files. Leave it off for public specs hosted elsewhere.
+                  </div>
+                </div>
+              </label>
             </div>
           )}
         </div>

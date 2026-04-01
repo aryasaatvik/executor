@@ -246,14 +246,16 @@ const buildWorkflowText = (
         ]
       : []),
     "Workflow:",
-    '1) const matches = await tools.discover({ query: "<intent>", limit: 12 });',
-    "2) const details = await tools.describe.tool({ path, includeSchemas: true });",
-    "3) Call selected tools.<path>(input).",
-    "4) Use source plugins to inspect or add API sources.",
+    '1) const { results, bestPath } = await tools.discover({ query: "<intent>", limit: 12 });',
+    '2) const path = bestPath ?? results[0]?.path; if (!path) return "No matching tools found.";',
+    "3) const details = await tools.describe.tool({ path, includeSchemas: true });",
+    "4) Call selected tools.<path>(input).",
+    "5) Use source plugins to inspect or add API sources.",
     ...(pluginRegistry
       ? getExecutorInternalToolHelpLines(pluginRegistry)
       : ["Use executor.* tools to inspect or manage API sources."]),
-    "5) If execution pauses for interaction, resume it with `executor resume --execution-id ...`.",
+    "6) If execution pauses for interaction, resume it with `executor resume --execution-id ...`.",
+    "The tools object is a lazy proxy, so Object.keys(tools) is not a useful way to discover capabilities.",
     "Do not use fetch; use tools.* only.",
   ].join("\n");
 
@@ -457,8 +459,8 @@ const printCallHelp = (workflow: string) =>
       "",
       "EXAMPLES",
       "",
-      '  executor call \'const matches = await tools.discover({ query: "github issues", limit: 5 }); return matches;\'',
-      '  executor call \'const matches = await tools.discover({ query: "repo details", limit: 1 }); const path = matches.bestPath; return await tools.describe.tool({ path, includeSchemas: true });\'',
+      '  executor call \'const { results } = await tools.discover({ query: "github issues", limit: 5 }); return results.map((match) => match.path);\'',
+      '  executor call \'const { results, bestPath } = await tools.discover({ query: "repo details", limit: 1 }); const path = bestPath ?? results[0]?.path; return path ? await tools.describe.tool({ path, includeSchemas: true }) : null;\'',
       "  cat script.ts | executor call --stdin",
       "  executor call --file script.ts",
       "  executor call --no-open --file script.ts",

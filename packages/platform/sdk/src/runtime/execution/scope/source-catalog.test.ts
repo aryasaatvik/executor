@@ -53,7 +53,6 @@ const makeLoadedCatalog = (input: {
 const noopScopeConfigStore = {
   load: () => Effect.die("unexpected config load"),
   writeProject: () => Effect.void,
-  resolveRelativePath: (path: string) => Effect.succeed(path),
 } as any;
 
 const noopScopeStateStore = {

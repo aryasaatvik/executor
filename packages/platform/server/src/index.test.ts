@@ -1159,7 +1159,9 @@ describe("local-executor-server", () => {
       expect(listed.tools.map((tool) => tool.name)).toEqual(["execute"]);
       expect(listed.tools[0]?.description).toContain("Workflow:");
       expect(listed.tools[0]?.description).toContain("tools.discover");
+      expect(listed.tools[0]?.description).toContain("bestPath ?? results[0]?.path");
       expect(listed.tools[0]?.description).toContain("Use source plugins");
+      expect(listed.tools[0]?.description).toContain("Object.keys(tools)");
 
       const executed = yield* Effect.promise(
         () =>
@@ -1206,6 +1208,8 @@ describe("local-executor-server", () => {
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual(["execute", "resume"]);
       expect(listed.tools.find((tool) => tool.name === "execute")?.description).toContain("Workflow:");
       expect(listed.tools.find((tool) => tool.name === "execute")?.description).toContain("tools.discover");
+      expect(listed.tools.find((tool) => tool.name === "execute")?.description).toContain("bestPath ?? results[0]?.path");
+      expect(listed.tools.find((tool) => tool.name === "execute")?.description).toContain("Object.keys(tools)");
 
       const executed = yield* Effect.promise(
         () =>

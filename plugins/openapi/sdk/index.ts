@@ -19,10 +19,10 @@ import {
 } from "@executor/platform-sdk/plugins";
 import {
   createPluginScopeConfigEntrySchema,
-  provideExecutorRuntime,
   pluginScopeConfigSourceFromConfig,
-  runtimeEffectError,
   SecretMaterialResolverService,
+  provideExecutorRuntime,
+  runtimeEffectError,
 } from "@executor/platform-sdk/runtime";
 import {
   OpenApiConnectionAuthSchema,
@@ -57,8 +57,8 @@ import {
   withSerializedQueryEntries,
 } from "./http-serialization";
 import {
-  OpenApiToolProviderDataSchema,
-  type OpenApiToolProviderData,
+  OpenApiExecutableBindingSchema,
+  type OpenApiExecutableBinding,
 } from "./types";
 
 const OpenApiSourceIdInputSchema = Schema.Struct({
@@ -112,9 +112,11 @@ export type OpenApiSdkPluginOptions = {
 const OpenApiExecutorAddInputSchema = Schema.Struct({
   kind: Schema.Literal("openapi"),
   name: Schema.String,
+  iconUrl: Schema.optional(Schema.String),
   specUrl: Schema.String,
   baseUrl: Schema.NullOr(Schema.String),
   auth: OpenApiConnectionAuthSchema,
+  useSpecFetchCredentials: Schema.optional(Schema.Boolean),
 });
 
 type OpenApiExecutorAddInput = typeof OpenApiExecutorAddInputSchema.Type;
@@ -147,12 +149,14 @@ const normalizeStoredSourceData = (
 ): OpenApiStoredSourceData => ({
   ...stored,
   auth: normalizeOpenApiAuth(stored.auth as Record<string, unknown>),
+  useSpecFetchCredentials: stored.useSpecFetchCredentials === true,
 });
 
 const OpenApiLocalSourceConfigSchema = Schema.Struct({
   specUrl: Schema.String,
   baseUrl: Schema.NullOr(Schema.String),
   auth: OpenApiConnectionAuthSchema,
+  useSpecFetchCredentials: Schema.optional(Schema.Boolean),
   defaultHeaders: Schema.NullOr(Schema.Record({ key: Schema.String, value: Schema.String })),
 });
 
@@ -176,6 +180,8 @@ const createStoredSourceData = (
           prefix: input.auth.prefix ?? null,
         }
       : input.auth,
+  useSpecFetchCredentials:
+    input.auth.kind === "bearer" && input.useSpecFetchCredentials === true,
   defaultHeaders: null,
   etag: null,
   lastSyncAt: null,
@@ -189,6 +195,8 @@ const configFromStoredSourceData = (
   specUrl: stored.specUrl,
   baseUrl: stored.baseUrl,
   auth: stored.auth,
+  useSpecFetchCredentials:
+    stored.auth.kind === "bearer" && stored.useSpecFetchCredentials === true,
 });
 
 const openApiStoredSourceDataFromLocalConfig = (input: {
@@ -206,7 +214,9 @@ const openApiStoredSourceDataFromLocalConfig = (input: {
   throw new Error("Unsupported OpenAPI local source config.");
 };
 
-const decodeProviderData = Schema.decodeUnknownSync(OpenApiToolProviderDataSchema);
+const decodeExecutableBinding = Schema.decodeUnknownSync(
+  OpenApiExecutableBindingSchema,
+);
 
 const asRecord = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -214,7 +224,8 @@ const asRecord = (value: unknown): Record<string, unknown> =>
     : {};
 
 type OpenApiToolArgs = Record<string, unknown>;
-type OpenApiToolParameter = OpenApiToolProviderData["invocation"]["parameters"][number];
+type OpenApiToolParameter =
+  OpenApiExecutableBinding["invocation"]["parameters"][number];
 
 const parameterContainerKeys: Record<
   OpenApiToolParameter["location"],
@@ -257,7 +268,7 @@ const readParameterValue = (
 const replacePathTemplate = (
   pathTemplate: string,
   args: OpenApiToolArgs,
-  payload: OpenApiToolProviderData["invocation"],
+  payload: OpenApiExecutableBinding["invocation"],
 ): string => {
   let resolvedPath = pathTemplate;
 
@@ -297,7 +308,7 @@ const replacePathTemplate = (
 
 const resolveOpenApiBaseUrl = (input: {
   stored: OpenApiStoredSourceData;
-  providerData: OpenApiToolProviderData;
+  providerData: OpenApiExecutableBinding;
 }): string => {
   if (input.stored.baseUrl && input.stored.baseUrl.trim().length > 0) {
     return new URL(input.stored.baseUrl).toString();
@@ -348,9 +359,11 @@ const openApiConnectInputFromAddInput = (
   input: OpenApiExecutorAddInput,
 ): OpenApiConnectInput => ({
   name: input.name,
+  ...(input.iconUrl ? { iconUrl: input.iconUrl } : {}),
   specUrl: input.specUrl,
   baseUrl: input.baseUrl,
   auth: input.auth,
+  useSpecFetchCredentials: input.useSpecFetchCredentials,
 });
 
 const decodeResponseBody = async (response: Response): Promise<unknown> => {
@@ -395,6 +408,11 @@ const resolveBearerPrefix = (
   auth: Extract<OpenApiStoredSourceData["auth"], { kind: "bearer" }>,
 ): string => auth.prefix ?? "Bearer ";
 
+const shouldUseSpecFetchCredentials = (
+  stored: OpenApiStoredSourceData,
+): boolean =>
+  stored.auth.kind === "bearer" && stored.useSpecFetchCredentials === true;
+
 const openApiDocumentHeaders = (input: {
   stored: OpenApiStoredSourceData;
   bearerToken: string | null;
@@ -406,6 +424,7 @@ const openApiDocumentHeaders = (input: {
     headers.set(key, value);
   }
   if (
+    shouldUseSpecFetchCredentials(input.stored) &&
     input.bearerToken &&
     input.bearerToken.length > 0 &&
     input.stored.auth.kind === "bearer"
@@ -507,6 +526,7 @@ export const openApiSdkPlugin = (
       helpText: [
         "Provide the OpenAPI document URL and optional base URL override.",
         "Use `auth.kind = \"bearer\"` with a stored secret ref when required.",
+        "Set `useSpecFetchCredentials = true` only when the spec itself requires auth.",
       ],
       toConnectInput: openApiConnectInputFromAddInput,
     },
@@ -522,6 +542,7 @@ export const openApiSdkPlugin = (
             specUrl: input.specUrl,
             title: input.name,
           }),
+          ...(input.iconUrl?.trim() ? { iconUrl: input.iconUrl.trim() } : {}),
         },
         stored: createStoredSourceData(input),
       }),
@@ -533,6 +554,7 @@ export const openApiSdkPlugin = (
             specUrl: config.specUrl,
             title: config.name,
           }),
+          iconUrl: config.iconUrl?.trim() || undefined,
         },
         stored: createStoredSourceData(config),
       }),
@@ -547,6 +569,8 @@ export const openApiSdkPlugin = (
             specUrl: stored.specUrl,
             baseUrl: stored.baseUrl,
             auth: stored.auth,
+            useSpecFetchCredentials:
+              stored.auth.kind === "bearer" && stored.useSpecFetchCredentials === true,
             defaultHeaders: stored.defaultHeaders,
           },
         }),
@@ -641,9 +665,9 @@ export const openApiSdkPlugin = (
           }
 
           const normalizedStored = normalizeStoredSourceData(input.stored);
-          const providerData = decodeProviderData(
+          const providerData = decodeExecutableBinding(
             input.executable.binding,
-          ) as OpenApiToolProviderData;
+          ) as OpenApiExecutableBinding;
           const args = asRecord(input.args);
           const resolvedPath = replacePathTemplate(
             providerData.invocation.pathTemplate,
@@ -739,7 +763,7 @@ export const openApiSdkPlugin = (
           const response = yield* Effect.tryPromise({
             try: () =>
               fetch(finalUrl.toString(), {
-                method: providerData.method.toUpperCase(),
+                method: providerData.invocation.method.toUpperCase(),
                 headers: requestHeaders,
                 ...(body !== undefined
                   ? {

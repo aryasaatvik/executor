@@ -620,6 +620,7 @@ const persistSourceScopeConfig = <
         const scopeConfigStore = yield* ScopeConfigStore;
         const loadedConfig = yield* scopeConfigStore.load();
         const projectConfig = cloneJson(loadedConfig.projectConfig ?? {});
+
         const sources = {
           ...projectConfig.sources,
           [input.source.id]: scopeConfig.toConfigSource({
@@ -735,10 +736,14 @@ const createExecutorSourcePluginApi = <
         );
       }
 
-      return definition.source.toConfig({
-        source,
-        stored,
-      });
+      const scopeConfigStore = yield* ScopeConfigStore;
+      const loadedConfig = yield* scopeConfigStore.load();
+      const iconUrl = loadedConfig.config?.sources?.[source.id]?.iconUrl;
+
+      return {
+        ...definition.source.toConfig({ source, stored }),
+        ...(iconUrl ? { iconUrl } : {}),
+      };
     }),
   createSource: (input) =>
     Effect.gen(function* () {

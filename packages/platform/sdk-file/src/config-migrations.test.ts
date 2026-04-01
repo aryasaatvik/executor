@@ -102,6 +102,7 @@ describe("config-migrations", () => {
         auth: {
           kind: "none",
         },
+        useSpecFetchCredentials: false,
         defaultHeaders: {
           "x-test": "1",
         },

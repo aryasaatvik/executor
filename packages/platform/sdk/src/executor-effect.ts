@@ -111,7 +111,6 @@ export type ExecutorEffect = {
   installation: LocalInstallation;
   scopeId: ScopeId;
   actorScopeId: ScopeId;
-  resolutionScopeIds: ReadonlyArray<ScopeId>;
   close: () => Promise<void>;
   local: {
     installation: () => ProvidedEffect<ReturnType<typeof getLocalInstallation>>;
@@ -239,7 +238,6 @@ const fromRuntime = (runtime: ExecutorRuntime): ExecutorEffect => {
     installation,
     scopeId,
     actorScopeId,
-    resolutionScopeIds: installation.resolutionScopeIds,
     close: () => runtime.close(),
     local: {
       installation: () => provide(getLocalInstallation()),

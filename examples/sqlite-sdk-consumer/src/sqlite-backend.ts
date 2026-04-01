@@ -23,7 +23,7 @@ import type {
   Execution,
   ExecutionInteraction,
   ExecutionStep,
-  LocalExecutorConfig,
+  ExecutorScopeConfig,
   LocalInstallation,
   SecretMaterial,
   SecretRef,
@@ -35,6 +35,9 @@ import {
   SourceCatalogIdSchema,
   SourceCatalogRevisionIdSchema,
 } from "@executor/platform-sdk/schema";
+import type {
+  SecretMaterialStoredDataRecord,
+} from "@executor/platform-sdk/runtime";
 import {
   contentHash,
   snapshotFromSourceCatalogSyncResult,
@@ -42,8 +45,6 @@ import {
 
 export type CreateSqliteExecutorBackendOptions = {
   databasePath?: string;
-  scopeName?: string;
-  scopeRoot?: string | null;
   scopeId?: string;
   actorScopeId?: string;
 };
@@ -76,7 +77,6 @@ const installations = sqliteTable("installations", {
   key: text("key").primaryKey(),
   scopeId: text("scope_id").notNull(),
   actorScopeId: text("actor_scope_id").notNull(),
-  resolutionScopeIdsJson: text("resolution_scope_ids_json").notNull(),
 });
 
 const scopeConfigs = sqliteTable("scope_configs", {
@@ -185,7 +185,6 @@ const createInstallation = (
   return {
     scopeId,
     actorScopeId,
-    resolutionScopeIds: [scopeId, actorScopeId],
   };
 };
 
@@ -201,8 +200,7 @@ const openSqliteStore = (databasePath: string) => {
       CREATE TABLE IF NOT EXISTS installations (
         key TEXT PRIMARY KEY NOT NULL,
         scope_id TEXT NOT NULL,
-        actor_scope_id TEXT NOT NULL,
-        resolution_scope_ids_json TEXT NOT NULL
+        actor_scope_id TEXT NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS scope_configs (
@@ -382,7 +380,7 @@ const createStorageDomains = (
             }
           : null;
       },
-      upsert: (record: { secretId: SecretMaterial["id"]; data: unknown }) => {
+      upsert: (record: SecretMaterialStoredDataRecord) => {
         store.db.insert(secretMaterialStoredData).values({
           secretId: record.secretId,
           json: JSON.stringify(record.data),
@@ -558,9 +556,6 @@ export const createSqliteExecutorBackend = (
           ? {
               scopeId: row.scopeId as LocalInstallation["scopeId"],
               actorScopeId: row.actorScopeId as LocalInstallation["actorScopeId"],
-              resolutionScopeIds: parseJson<LocalInstallation["resolutionScopeIds"]>(
-                row.resolutionScopeIdsJson,
-              ),
             }
           : createInstallation(options);
       })();
@@ -568,8 +563,6 @@ export const createSqliteExecutorBackend = (
 
       return {
         scope: {
-          scopeName: options.scopeName ?? "SQLite SDK Example",
-          scopeRoot: options.scopeRoot ?? null,
           metadata: {
             kind: "sqlite",
             databasePath,
@@ -584,13 +577,11 @@ export const createSqliteExecutorBackend = (
               key: "active",
               scopeId: installation.scopeId,
               actorScopeId: installation.actorScopeId,
-              resolutionScopeIdsJson: JSON.stringify(installation.resolutionScopeIds),
             }).onConflictDoUpdate({
               target: installations.key,
               set: {
                 scopeId: installation.scopeId,
                 actorScopeId: installation.actorScopeId,
-                resolutionScopeIdsJson: JSON.stringify(installation.resolutionScopeIds),
               },
             }).run();
             return installation;
@@ -601,7 +592,7 @@ export const createSqliteExecutorBackend = (
             load: () => {
               const row = store.db.select().from(scopeConfigs).where(eq(scopeConfigs.key, "project")).get();
               const projectConfig = row
-                ? parseJson<LocalExecutorConfig>(row.projectConfigJson)
+                ? parseJson<ExecutorScopeConfig>(row.projectConfigJson)
                 : {};
               return {
                 config: projectConfig,
@@ -618,7 +609,6 @@ export const createSqliteExecutorBackend = (
                 set: { projectConfigJson: JSON.stringify(config) },
               }).run();
             },
-            resolveRelativePath: ({ path, scopeRoot }) => resolvePath(scopeRoot, path),
           },
           state: {
             load: () => {

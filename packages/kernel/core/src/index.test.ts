@@ -282,6 +282,67 @@ describe("codemode-core", () => {
     }),
   );
 
+  it.effect("enforces standard JSON Schema string formats", () =>
+    Effect.gen(function* () {
+      const tools = {
+        "events.create": {
+          inputSchema: standardSchemaFromJsonSchema({
+            type: "object",
+            required: ["dateFrom", "issueId", "email", "documentationUrl"],
+            properties: {
+              dateFrom: { type: "string", format: "date-time" },
+              issueId: { type: "string", format: "uuid" },
+              email: { type: "string", format: "email" },
+              documentationUrl: { type: "string", format: "uri" },
+            },
+            additionalProperties: false,
+          }),
+          execute: (input: unknown) => input,
+        },
+      } satisfies ToolMap;
+
+      const invoker = makeToolInvokerFromTools({ tools });
+
+      const success = yield* invoker.invoke({
+        path: "events.create",
+        args: {
+          dateFrom: "2026-03-30T12:00:00Z",
+          issueId: "2c981f4a-7318-47a3-a3d3-8c145ee8ca1f",
+          email: "rhys@example.com",
+          documentationUrl: "https://example.com/docs",
+        },
+      });
+
+      expect(success).toEqual({
+        dateFrom: "2026-03-30T12:00:00Z",
+        issueId: "2c981f4a-7318-47a3-a3d3-8c145ee8ca1f",
+        email: "rhys@example.com",
+        documentationUrl: "https://example.com/docs",
+      });
+
+      const failure = yield* Effect.either(
+        invoker.invoke({
+          path: "events.create",
+          args: {
+            dateFrom: "not-a-date",
+            issueId: "not-a-uuid",
+            email: "not-an-email",
+            documentationUrl: "not-a-uri",
+          },
+        }),
+      );
+
+      assertTrue(Either.isLeft(failure));
+      assertInstanceOf(failure.left, Error);
+      expect(failure.left.message).toContain('dateFrom: format: must match format "date-time"');
+      expect(failure.left.message).toContain('issueId: format: must match format "uuid"');
+      expect(failure.left.message).toContain('email: format: must match format "email"');
+      expect(failure.left.message).toContain(
+        'documentationUrl: format: must match format "uri"',
+      );
+    }),
+  );
+
   it.effect("hydrates dynamic discover results via tool catalog", () =>
     Effect.gen(function* () {
       const descriptors: Record<string, ToolDescriptor> = {
@@ -384,6 +445,17 @@ describe("codemode-core", () => {
       expect(discovered.bestPath).toBe("source.issues.create");
       expect(discovered.results[0]?.path).toBe("source.issues.create");
       expect(discovered.results[0]?.interaction).toBe("required");
+
+      const executeDescription = yield* dynamic.executeDescription;
+      expect(executeDescription).toContain(
+        'const { results, bestPath } = await tools.discover({ query: "<intent>", limit: 12 });',
+      );
+      expect(executeDescription).toContain(
+        'const path = bestPath ?? results[0]?.path; if (!path) return "No matching tools found.";',
+      );
+      expect(executeDescription).toContain(
+        "Object.keys(tools) is not a useful way to discover capabilities.",
+      );
     }),
   );
 

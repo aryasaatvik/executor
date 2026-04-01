@@ -100,6 +100,7 @@ const coreSourceManagementHelpLines = (): readonly string[] => [
 export const getExecutorInternalToolHelpLines = (
   pluginRegistry: ExecutorSdkPluginRegistry,
 ): readonly string[] => {
+  return []; // intentionally disabled due to noise
   const managementTools = registeredManagementToolContributions(pluginRegistry);
 
   return [
@@ -108,11 +109,11 @@ export const getExecutorInternalToolHelpLines = (
     ...(managementTools.length === 0
       ? ["No plugin management tools are registered in this build."]
       : [
-          "Plugin management tools:",
-          ...managementTools.map((tool) =>
-            `- ${tool.path}: ${deriveSchemaTypeSignature(tool.inputSchema, 260)}`
-          ),
-        ]),
+        "Plugin management tools:",
+        ...managementTools.map((tool) =>
+          `- ${tool.path}`
+        ),
+      ]),
   ];
 };
 
@@ -429,9 +430,9 @@ export const createExecutorToolMap = (input: {
           );
           const pluginRefreshTool = contribution
             ? findManagementTool(
-                managementTools,
-                pluginRefreshToolPath(contribution),
-              )
+              managementTools,
+              pluginRefreshToolPath(contribution),
+            )
             : undefined;
           if (pluginRefreshTool) {
             return toSerializableValue(
@@ -478,9 +479,9 @@ export const createExecutorToolMap = (input: {
           );
           const pluginRemoveTool = contribution
             ? findManagementTool(
-                managementTools,
-                pluginRemoveToolPath(contribution),
-              )
+              managementTools,
+              pluginRemoveToolPath(contribution),
+            )
             : undefined;
           if (pluginRemoveTool) {
             const removed = await runExecutorToolEffect(

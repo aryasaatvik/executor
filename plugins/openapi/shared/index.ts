@@ -7,6 +7,8 @@ import {
   StringMapSchema,
 } from "@executor/platform-sdk/schema";
 
+export { getFaviconUrlForRemoteUrl, getSourceFaviconUrl } from "@executor/source-core";
+
 export const OpenApiConnectionAuthSchema = Schema.Union(
   Schema.Struct({
     kind: Schema.Literal("none"),
@@ -21,9 +23,11 @@ export const OpenApiConnectionAuthSchema = Schema.Union(
 
 export const OpenApiConnectInputSchema = Schema.Struct({
   name: Schema.String,
+  iconUrl: Schema.optional(Schema.String),
   specUrl: Schema.String,
   baseUrl: Schema.NullOr(Schema.String),
   auth: OpenApiConnectionAuthSchema,
+  useSpecFetchCredentials: Schema.optional(Schema.Boolean),
 });
 
 export const OpenApiSourceConfigPayloadSchema = OpenApiConnectInputSchema;
@@ -44,6 +48,7 @@ export const OpenApiStoredSourceDataSchema = Schema.Struct({
   specUrl: Schema.String,
   baseUrl: Schema.NullOr(Schema.String),
   auth: OpenApiConnectionAuthSchema,
+  useSpecFetchCredentials: Schema.optional(Schema.Boolean),
   defaultHeaders: Schema.NullOr(StringMapSchema),
   etag: Schema.NullOr(Schema.String),
   lastSyncAt: Schema.NullOr(Schema.Number),

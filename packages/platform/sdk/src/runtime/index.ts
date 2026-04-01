@@ -196,7 +196,6 @@ export type BoundScopeConfigStore = {
   writeProject: (
     config: ExecutorScopeConfig,
   ) => Effect.Effect<void, Error, never>;
-  resolveRelativePath: ScopeConfigStoreShape["resolveRelativePath"];
 };
 
 export type BoundScopeStateStore = {
@@ -311,7 +310,6 @@ const toScopeConfigStoreShape = (
 ): ScopeConfigStoreShape => ({
   load: input.load,
   writeProject: ({ config }) => input.writeProject(config),
-  resolveRelativePath: input.resolveRelativePath,
 });
 
 const toScopeStateStoreShape = (
@@ -501,8 +499,6 @@ export const createExecutorRuntimeFromServices = (input: {
       ...input.services.scope,
       scopeId: localInstallation.scopeId,
       actorScopeId: input.services.scope.actorScopeId ?? localInstallation.actorScopeId,
-      resolutionScopeIds:
-        input.services.scope.resolutionScopeIds ?? localInstallation.resolutionScopeIds,
     };
     const effectiveLocalConfig = yield* synchronizeLocalScopeState({
       loadedConfig: loadedLocalConfig,

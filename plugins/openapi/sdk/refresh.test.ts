@@ -33,6 +33,9 @@ import {
   registerExecutorSdkPlugins,
 } from "../../../packages/platform/sdk/src/plugins";
 import {
+  SecretMaterialResolverService,
+} from "../../../packages/platform/sdk/src/runtime";
+import {
   ScopeIdSchema,
   SourceIdSchema,
 } from "../../../packages/platform/sdk/src/schema/ids";
@@ -140,6 +143,58 @@ const startConditionalSpecServer = async (input: {
   };
 };
 
+const createStaticSpecHandler = (input: {
+  contentText: string;
+  requests: Array<string | null>;
+}) => (request: IncomingMessage, response: ServerResponse) => {
+  if (request.url !== "/openapi.json") {
+    response.writeHead(404);
+    response.end("Not Found");
+    return;
+  }
+
+  input.requests.push(headerValue(request.headers.authorization));
+  response.writeHead(200, {
+    "content-type": "application/json; charset=utf-8",
+  });
+  response.end(input.contentText);
+};
+
+const startStaticSpecServer = async (input: {
+  contentText: string;
+  requests: Array<string | null>;
+}) => {
+  const server = createServer(createStaticSpecHandler(input));
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("Failed to determine static spec server address.");
+  }
+
+  return {
+    baseUrl: `http://127.0.0.1:${(address as AddressInfo).port}`,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }),
+  };
+};
+
 const testSource: Source = {
   id: SourceIdSchema.make("vercel-api"),
   scopeId: ScopeIdSchema.make("ws_local_0704354896a696c6"),
@@ -208,6 +263,142 @@ describe("openapi refresh", () => {
         expect(stored.lastSyncAt).toBeGreaterThan(0);
       } finally {
         await conditionalServer.close();
+      }
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("does not send bearer auth when spec fetch credentials are disabled", async () => {
+    const upstream = await startOpenApiTestServer({
+      apiLayer: demoApiLayer,
+    });
+
+    try {
+      const upstreamSpecResponse = await fetch(upstream.specUrl);
+      const contentText = await upstreamSpecResponse.text();
+      const requests: Array<string | null> = [];
+      const specServer = await startStaticSpecServer({
+        contentText,
+        requests,
+      });
+
+      try {
+        let stored: OpenApiStoredSourceData = {
+          specUrl: `${specServer.baseUrl}/openapi.json`,
+          baseUrl: null,
+          auth: {
+            kind: "bearer",
+            tokenSecretRef: {
+              secretId: "sec_demo" as never,
+            },
+            headerName: null,
+            prefix: null,
+          },
+          useSpecFetchCredentials: false,
+          defaultHeaders: null,
+          etag: null,
+          lastSyncAt: 0,
+        };
+
+        const plugin = openApiSdkPlugin({
+          storage: {
+            get: () => Effect.succeed(stored),
+            put: ({ value }) =>
+              Effect.sync(() => {
+                stored = value;
+              }),
+          },
+        });
+        const runtime = registerExecutorSdkPlugins([plugin]).getSourceContribution(
+          "openapi",
+        );
+
+        expect(runtime).toBeDefined();
+
+        const result = await Effect.runPromise(
+          (runtime!.syncCatalog({
+            source: testSource,
+          }) as Effect.Effect<any, Error, SecretMaterialResolverService>).pipe(
+            Effect.provideService(
+              SecretMaterialResolverService,
+              () => Effect.succeed("token-from-secret-store"),
+            ),
+          ),
+        );
+
+        expect(result.sourceHash).toBeTruthy();
+        expect(requests).toEqual([null]);
+      } finally {
+        await specServer.close();
+      }
+    } finally {
+      await upstream.close();
+    }
+  });
+
+  it("sends bearer auth when spec fetch credentials are enabled", async () => {
+    const upstream = await startOpenApiTestServer({
+      apiLayer: demoApiLayer,
+    });
+
+    try {
+      const upstreamSpecResponse = await fetch(upstream.specUrl);
+      const contentText = await upstreamSpecResponse.text();
+      const requests: Array<string | null> = [];
+      const specServer = await startStaticSpecServer({
+        contentText,
+        requests,
+      });
+
+      try {
+        let stored: OpenApiStoredSourceData = {
+          specUrl: `${specServer.baseUrl}/openapi.json`,
+          baseUrl: null,
+          auth: {
+            kind: "bearer",
+            tokenSecretRef: {
+              secretId: "sec_demo" as never,
+            },
+            headerName: null,
+            prefix: null,
+          },
+          useSpecFetchCredentials: true,
+          defaultHeaders: null,
+          etag: null,
+          lastSyncAt: 0,
+        };
+
+        const plugin = openApiSdkPlugin({
+          storage: {
+            get: () => Effect.succeed(stored),
+            put: ({ value }) =>
+              Effect.sync(() => {
+                stored = value;
+              }),
+          },
+        });
+        const runtime = registerExecutorSdkPlugins([plugin]).getSourceContribution(
+          "openapi",
+        );
+
+        expect(runtime).toBeDefined();
+
+        const result = await Effect.runPromise(
+          (runtime!.syncCatalog({
+            source: testSource,
+          }) as Effect.Effect<any, Error, SecretMaterialResolverService>).pipe(
+            Effect.provideService(
+              SecretMaterialResolverService,
+              () => Effect.succeed("token-from-secret-store"),
+            ),
+          ),
+        );
+
+        expect(result.sourceHash).toBeTruthy();
+        expect(requests).toEqual(["Bearer token-from-secret-store"]);
+      } finally {
+        await specServer.close();
       }
     } finally {
       await upstream.close();

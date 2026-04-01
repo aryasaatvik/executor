@@ -1,5 +1,6 @@
 import type { ErrorObject } from "ajv";
 import Ajv2020 from "ajv/dist/2020";
+import addFormats from "ajv-formats";
 
 import type { StandardSchema } from "./types";
 import { unknownInputSchema } from "./types";
@@ -10,6 +11,8 @@ const ajv = new Ajv2020({
   validateSchema: false,
   allowUnionTypes: true,
 });
+
+addFormats(ajv);
 
 const decodePointerSegment = (segment: string): PropertyKey => {
   const decoded = segment.replaceAll("~1", "/").replaceAll("~0", "~");

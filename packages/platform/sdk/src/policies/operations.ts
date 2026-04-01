@@ -47,10 +47,7 @@ const policyOps = {
 
 const cloneJson = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
-const scopePolicyStableKey = (input: {
-  scopeId: ScopeId;
-  scopeRoot?: string | null;
-}): string => input.scopeRoot?.trim() || input.scopeId;
+const scopePolicyStableKey = (scopeId: ScopeId): string => scopeId;
 
 const localPolicyIdForKey = (input: {
   scopeStableKey: string;
@@ -97,10 +94,7 @@ export const loadRuntimeLocalScopePolicies = (scopeId: ScopeId) =>
       ([key, policyConfig]) =>
         toLocalScopePolicy({
           scopeId,
-          scopeStableKey: scopePolicyStableKey({
-            scopeId,
-            scopeRoot: runtimeLocalScope.scope.scopeRoot,
-          }),
+          scopeStableKey: scopePolicyStableKey(scopeId),
           key,
           policyConfig,
           state: scopeState.policies[key],
@@ -175,7 +169,7 @@ export const createPolicy = (input: {
   payload: CreatePolicyPayload;
 }) =>
   Effect.gen(function* () {
-    const runtimeLocalScope = yield* loadScopePolicyContext(
+    yield* loadScopePolicyContext(
       policyOps.create,
       input.scopeId,
     );
@@ -227,10 +221,7 @@ export const createPolicy = (input: {
           id:
             existingState?.id ??
             localPolicyIdForKey({
-              scopeStableKey: scopePolicyStableKey({
-                scopeId: input.scopeId,
-                scopeRoot: runtimeLocalScope.scope.scopeRoot,
-              }),
+              scopeStableKey: scopePolicyStableKey(input.scopeId),
               key,
             }),
           createdAt: existingState?.createdAt ?? now,
@@ -252,10 +243,7 @@ export const createPolicy = (input: {
 
     return toLocalScopePolicy({
       scopeId: input.scopeId,
-      scopeStableKey: scopePolicyStableKey({
-        scopeId: input.scopeId,
-        scopeRoot: runtimeLocalScope.scope.scopeRoot,
-      }),
+      scopeStableKey: scopePolicyStableKey(input.scopeId),
       key,
       policyConfig: policies[key]!,
       state: scopeState.policies[key],
@@ -297,7 +285,7 @@ export const updatePolicy = (input: {
   payload: UpdatePolicyPayload;
 }) =>
   Effect.gen(function* () {
-    const runtimeLocalScope = yield* loadScopePolicyContext(
+    yield* loadScopePolicyContext(
       policyOps.update,
       input.scopeId,
     );
@@ -379,10 +367,7 @@ export const updatePolicy = (input: {
 
     return toLocalScopePolicy({
       scopeId: input.scopeId,
-      scopeStableKey: scopePolicyStableKey({
-        scopeId: input.scopeId,
-        scopeRoot: runtimeLocalScope.scope.scopeRoot,
-      }),
+      scopeStableKey: scopePolicyStableKey(input.scopeId),
       key: existing.key,
       policyConfig: policies[existing.key]!,
       state: scopeState.policies[existing.key],

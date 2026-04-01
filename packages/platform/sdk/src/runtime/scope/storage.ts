@@ -35,7 +35,6 @@ export type ScopeConfigStoreShape = {
   writeProject: (input: {
     config: ExecutorScopeConfig;
   }) => import("effect/Effect").Effect<void, Error, never>;
-  resolveRelativePath: (input: { path: string; scopeRoot: string }) => string;
 };
 
 export class ScopeConfigStore extends Context.Tag(

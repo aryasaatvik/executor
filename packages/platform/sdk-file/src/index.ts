@@ -33,7 +33,6 @@ import {
   type LoadedExecutorScopeConfig,
   type ResolvedLocalWorkspaceContext,
   loadExecutorScopeConfig,
-  resolveConfigRelativePath,
   resolveLocalWorkspaceContext,
   writeProjectExecutorScopeConfig,
 } from "./config";
@@ -120,7 +119,6 @@ const createBoundWorkspaceConfigStore = (
 ): {
   load: () => Effect.Effect<LoadedExecutorScopeConfig, Error, never>;
   writeProject: (config: ExecutorScopeConfig) => Effect.Effect<void, Error, never>;
-  resolveRelativePath: typeof resolveConfigRelativePath;
 } => ({
   load: () =>
     bindFileSystem(fileSystem, loadExecutorScopeConfig(context)).pipe(
@@ -131,7 +129,6 @@ const createBoundWorkspaceConfigStore = (
       fileSystem,
       writeProjectExecutorScopeConfig({ context, config }),
     ).pipe(Effect.mapError(toError)),
-  resolveRelativePath: resolveConfigRelativePath,
 });
 
 const createBoundWorkspaceStateStore = (
@@ -213,8 +210,6 @@ const createBoundSourceTypeDeclarationsRefresher = (
 const toExecutorScopeContext = (
   context: ResolvedLocalWorkspaceContext,
 ): ExecutorScopeDescriptor => ({
-  scopeName: context.workspaceName,
-  scopeRoot: context.workspaceRoot,
   metadata: {
     kind: "file",
     configDirectory: context.configDirectory,

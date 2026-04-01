@@ -470,10 +470,12 @@ export function buildDynamicExecuteDescription(input: {
       "Available namespaces:",
       ...namespaces.map((namespace) => `- ${namespace.displayName ?? namespace.namespace}`),
       "Workflow:",
-      '1) const matches = await tools.discover({ query: "<intent>", limit: 12 });',
-      "2) const details = await tools.describe.tool({ path, includeSchemas: true });",
-      "3) Read details.contract?.inputSchema/details.contract?.outputSchema when you need the projected shape.",
-      "4) Call selected tools.<path>(input).",
+      '1) const { results, bestPath } = await tools.discover({ query: "<intent>", limit: 12 });',
+      '2) const path = bestPath ?? results[0]?.path; if (!path) return "No matching tools found.";',
+      "3) const details = await tools.describe.tool({ path, includeSchemas: true });",
+      "4) Read details.contract?.inputSchema/details.contract?.outputSchema when you need the projected shape.",
+      "5) Call selected tools.<path>(input).",
+      "The tools object is a lazy proxy, so Object.keys(tools) is not a useful way to discover capabilities.",
       "Do not use fetch; use tools.* only.",
     ].join("\n");
   });

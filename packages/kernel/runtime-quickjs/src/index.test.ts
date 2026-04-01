@@ -23,6 +23,27 @@ const messageInputSchema = Schema.standardSchemaV1(
   }),
 );
 
+const discoverInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    query: Schema.String,
+    limit: Schema.optional(Schema.Number),
+  }),
+);
+
+const describeToolInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    path: Schema.String,
+    includeSchemas: Schema.optional(Schema.Boolean),
+  }),
+);
+
+const repoInputSchema = Schema.standardSchemaV1(
+  Schema.Struct({
+    owner: Schema.String,
+    repo: Schema.String,
+  }),
+);
+
 const tools = {
   "math.add": {
     description: "Add two numbers",
@@ -194,6 +215,99 @@ describe("runtime-quickjs", () => {
       );
 
       expect(output.result).toEqual({ sum: 113 });
+      expect(output.error).toBeUndefined();
+    }),
+  );
+
+  it.effect("does not expose internal executor bridge globals to user code", () =>
+    Effect.gen(function* () {
+      const executor = makeQuickJsExecutor();
+      const toolInvoker = makeToolInvokerFromTools({ tools });
+
+      const output = yield* executor.execute(
+        [
+          "return {",
+          "  hasInvokeTool: typeof globalThis.__executor_invokeTool !== 'undefined',",
+          "  hasLogBridge: typeof globalThis.__executor_log !== 'undefined',",
+          "  globalKeys: Object.keys(globalThis).sort(),",
+          "};",
+        ].join("\n"),
+        toolInvoker,
+      );
+
+      expect(output.result).toEqual({
+        hasInvokeTool: false,
+        hasLogBridge: false,
+        globalKeys: [],
+      });
+      expect(output.error).toBeUndefined();
+    }),
+  );
+
+  it.effect("supports the documented discovery workflow shape", () =>
+    Effect.gen(function* () {
+      const executor = makeQuickJsExecutor();
+      const toolInvoker = makeToolInvokerFromTools({
+        tools: {
+          discover: {
+            inputSchema: discoverInputSchema,
+            execute: () => ({
+              bestPath: "github.issues.list",
+              results: [
+                {
+                  path: "github.issues.list",
+                  score: 0.99,
+                },
+              ],
+              total: 1,
+            }),
+          },
+          "describe.tool": {
+            inputSchema: describeToolInputSchema,
+            execute: ({ path }: { path: string; includeSchemas?: boolean }) => ({
+              path,
+              contract: {
+                inputTypePreview: "{ owner: string; repo: string }",
+              },
+            }),
+          },
+          "github.issues.list": {
+            inputSchema: repoInputSchema,
+            execute: ({ owner, repo }: { owner: string; repo: string }) => ({
+              owner,
+              repo,
+              issues: [{ id: "issue_1" }],
+            }),
+          },
+        },
+      });
+
+      const output = yield* executor.execute(
+        [
+          'const { results, bestPath } = await tools.discover({ query: "github issues", limit: 5 });',
+          "const path = bestPath ?? results[0]?.path;",
+          'if (!path) throw new Error("No matching tools found.");',
+          "const detail = await tools.describe.tool({ path, includeSchemas: true });",
+          'const issues = await tools.github.issues.list({ owner: "openai", repo: "codex" });',
+          "return { path, detail, issues };",
+        ].join("\n"),
+        toolInvoker,
+      );
+
+      expect(output.result).toEqual({
+        path: "github.issues.list",
+        detail: {
+          path: "github.issues.list",
+          contract: {
+            inputTypePreview: "{ owner: string; repo: string }",
+          },
+        },
+        issues: {
+          owner: "openai",
+          repo: "codex",
+          issues: [{ id: "issue_1" }],
+        },
+      });
       expect(output.error).toBeUndefined();
     }),
   );

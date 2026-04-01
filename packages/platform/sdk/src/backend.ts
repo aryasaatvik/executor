@@ -125,7 +125,6 @@ const toScopeConfigBackend = (
 ): BoundScopeConfigStore => ({
   load: () => toEffect(input.load()),
   writeProject: (config) => toEffect(input.writeProject(config)),
-  resolveRelativePath: input.resolveRelativePath,
 });
 
 const toScopeStateBackend = (

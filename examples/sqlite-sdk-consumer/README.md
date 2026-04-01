@@ -36,7 +36,6 @@ import { createSqliteExecutorBackend } from "@executor/sqlite-sdk-consumer-examp
 const executor = await createExecutor({
   backend: createSqliteExecutorBackend({
     databasePath: "./executor.sqlite",
-    scopeName: "Acme",
   }),
 });
 ```

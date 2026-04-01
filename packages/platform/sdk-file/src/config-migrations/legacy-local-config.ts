@@ -293,6 +293,7 @@ const normalizeSourceRecord = (input: {
               sourceId: input.sourceId,
               value: connection?.auth,
             }),
+            useSpecFetchCredentials: false,
             defaultHeaders: asStringRecord(binding?.defaultHeaders),
           },
         },

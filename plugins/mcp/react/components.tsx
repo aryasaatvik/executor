@@ -31,6 +31,8 @@ import {
   mcpHttpApiExtension,
 } from "@executor/plugin-mcp-http";
 import {
+  getFaviconUrlForRemoteUrl,
+  getSourceFaviconUrl,
   type McpConnectInput,
   type McpConnectionAuth,
   type McpDiscoverResult,
@@ -64,6 +66,7 @@ const getMcpHttpClient = defineExecutorPluginHttpApiClient<"McpReactHttpClient">
 
 const defaultMcpInput = (): McpConnectInput => ({
   name: "My MCP Source",
+  iconUrl: undefined,
   endpoint: "https://example.com/mcp",
   transport: "auto",
   queryParams: null,
@@ -277,6 +280,7 @@ function McpSourceForm(props: {
   );
   const submitMutation = useExecutorMutation<McpConnectInput, void>(props.onSubmit);
   const [name, setName] = useState(props.initialValue.name);
+  const [iconUrl, setIconUrl] = useState(props.initialValue.iconUrl ?? "");
   const [endpoint, setEndpoint] = useState(props.initialValue.endpoint ?? "");
   const [transportFields, setTransportFields] = useState<McpTransportFields>(
     transportFieldsFromInput(props.initialValue),
@@ -298,13 +302,11 @@ function McpSourceForm(props: {
     props.initialValue.auth.kind === "oauth2",
   );
   const [lastDiscoveryKey, setLastDiscoveryKey] = useState<string | null>(
-    props.initialValue.auth.kind === "oauth2"
-      ? buildMcpRemoteConfigKey({
-          transport: transportFields.transport,
-          endpoint: props.initialValue.endpoint ?? "",
-          queryParams: props.initialValue.queryParams,
-        })
-      : null,
+    buildMcpRemoteConfigKey({
+      transport: transportFields.transport,
+      endpoint: props.initialValue.endpoint ?? "",
+      queryParams: props.initialValue.queryParams,
+    }),
   );
   const [oauthConnectionKey, setOauthConnectionKey] = useState<string | null>(
     props.initialValue.auth.kind === "oauth2"
@@ -318,6 +320,9 @@ function McpSourceForm(props: {
   const [error, setError] = useState<string | null>(null);
 
   const isStdio = transportFields.transport === "stdio";
+  const resolvedIconUrl = iconUrl.trim()
+    || (!isStdio ? getFaviconUrlForRemoteUrl(endpoint) : null)
+    || getSourceFaviconUrl(name);
   const remoteQueryParamsText =
     transportFields.transport === "stdio"
       ? ""
@@ -367,7 +372,7 @@ function McpSourceForm(props: {
       ).toString(),
     };
 
-    let started;
+    let started: Awaited<ReturnType<typeof startOAuth>>;
     try {
       started = await startOAuth({
         path: {
@@ -478,6 +483,7 @@ function McpSourceForm(props: {
     authOverride?: McpConnectionAuth,
   ): McpConnectInput => ({
     name: name.trim(),
+    ...(iconUrl.trim() ? { iconUrl: iconUrl.trim() } : {}),
     endpoint: isStdio ? null : (endpoint.trim() || null),
     transport:
       transportFields.transport === ""
@@ -538,6 +544,22 @@ function McpSourceForm(props: {
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
+        </div>
+
+        <div className="grid gap-2">
+          <Label>Icon URL</Label>
+          <Input
+            value={iconUrl}
+            onChange={(event) => setIconUrl(event.target.value)}
+            placeholder="https://cdn.example.com/icon.png"
+            className="font-mono text-xs"
+          />
+          {resolvedIconUrl && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <img src={resolvedIconUrl} alt="" className="size-4 rounded-sm object-contain" />
+              <span>{iconUrl.trim() ? "Using override" : "Auto preview"}</span>
+            </div>
+          )}
         </div>
 
         <div className="grid gap-2">
