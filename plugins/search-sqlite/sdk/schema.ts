@@ -68,6 +68,7 @@ export const searchSources = sqliteTable(
     vector_error: text("vector_error"),
     vector_backend: text("vector_backend"),
     embedder_key: text("embedder_key"),
+    embedder_signature: text("embedder_signature"),
     embedded_at: integer("embedded_at"),
     updated_at: integer("updated_at").notNull(),
   },

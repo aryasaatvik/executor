@@ -13,7 +13,9 @@
     "typecheck": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@ai-sdk/google": "^3.0.34",
     "@executor/platform-sdk": "workspace:*",
+    "ai": "^6.0.116",
     "drizzle-orm": "^0.44.5",
     "effect": "catalog:",
     "sqlite-vec": "^0.1.7-alpha.2"

@@ -15,6 +15,7 @@ import {
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import * as Effect from "effect/Effect";
 
 import type {
   SearchResult,
@@ -24,7 +25,6 @@ import {
   buildSearchResult,
   type ExecutorSearchProvider,
   type SearchDocument,
-  type SearchDocumentLike as RuntimeSearchDocumentLike,
   type SearchProviderStatus,
   type SearchProviderSyncPayload,
   type SearchSourceRequest,
@@ -32,10 +32,14 @@ import {
 } from "@executor/platform-sdk/runtime";
 
 import {
-  createHashEmbedder,
   createScoreFusionReranker,
   createSqliteVecBackend,
 } from "./semantic";
+import {
+  createSearchEmbedderLayer,
+  SearchEmbedderService,
+  type SearchEmbedder as SqliteSearchEmbedder,
+} from "./embedder";
 import {
   SEARCH_DOCUMENTS_TABLE,
   SEARCH_FTS_TABLE,
@@ -46,13 +50,13 @@ import {
   type InsertSearchDocumentRow,
   type InsertSearchSourceStateRow,
   type SearchDocumentRow,
-  type SearchSourceStateRow,
 } from "./schema";
 import {
   SQLITE_SEARCH_BACKEND,
   SQLITE_SEARCH_DEFAULT_DB_NAME,
   SQLITE_SEARCH_HYBRID_BACKEND,
   SQLITE_SEARCH_PROVIDER_KEY,
+  resolveSqliteSearchEmbedderMetadata,
   type CreateSqliteSearchProviderInput,
 } from "./shared";
 
@@ -299,9 +303,8 @@ export const createSqliteSearchProvider = (
   input: CreateSqliteSearchProviderInput,
 ): ExecutorSearchProvider => {
   const mode = input.config.mode ?? "fts";
-  const embedder = createHashEmbedder({
-    dimensions: input.config.embedder?.dimensions,
-  });
+  const configuredEmbedder = resolveSqliteSearchEmbedderMetadata(input.config.embedder);
+  const embedderLayer = createSearchEmbedderLayer(input.config.embedder);
   const reranker = createScoreFusionReranker();
   const ranking = {
     ftsWeight: input.config.ranking?.ftsWeight ?? 1,
@@ -318,6 +321,8 @@ export const createSqliteSearchProvider = (
     databasePath: input.config.databasePath,
   });
   let database: SearchDatabaseBundle | null = null;
+  let embedderPromise: Promise<SqliteSearchEmbedder> | null = null;
+  let hybridInitError: string | null = null;
 
   const ensureDatabase = () => {
     if (database !== null) {
@@ -332,15 +337,40 @@ export const createSqliteSearchProvider = (
     ? createSqliteVecBackend({
         db: () => ensureDatabase().sqlite,
         tableName: SEARCH_VECTORS_TABLE,
-        dimensions: embedder.dimensions,
+        dimensions: configuredEmbedder.dimensions,
         extensionPath: input.config.vector?.extensionPath,
       })
     : null;
   const currentVectorBackendKey = vectorBackend?.key ?? null;
-  const currentEmbedderKey = mode === "hybrid" ? embedder.key : null;
+  const currentEmbedderKey = mode === "hybrid" ? configuredEmbedder.key : null;
+  const currentEmbedderSignature = mode === "hybrid"
+    ? configuredEmbedder.signature
+    : null;
 
   const queryAll = <TRow>(statement: string, params: readonly unknown[] = []) =>
     ensureDatabase().sqlite.prepare(statement).all(...(params as any[])) as TRow[];
+
+  const ensureEmbedder = async () => {
+    if (mode !== "hybrid") {
+      throw new Error("hybrid embedder requested while sqlite provider is in fts mode");
+    }
+
+    if (embedderPromise !== null) {
+      return embedderPromise;
+    }
+
+    embedderPromise = Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* SearchEmbedderService;
+      }).pipe(Effect.provide(embedderLayer)),
+    ).catch((cause) => {
+      embedderPromise = null;
+      hybridInitError = toError(cause).message;
+      throw cause;
+    });
+
+    return embedderPromise;
+  };
 
   const activeProviderInfo = () =>
     providerInfo(
@@ -375,6 +405,7 @@ export const createSqliteSearchProvider = (
     if (mode !== "hybrid" || vectorBackend === null) {
       return;
     }
+    await ensureEmbedder();
     await vectorBackend.init();
   };
 
@@ -383,8 +414,8 @@ export const createSqliteSearchProvider = (
     OR COALESCE(vector_document_count, -1) != document_count
     OR vector_backend IS NULL
     OR vector_backend != ?
-    OR embedder_key IS NULL
-    OR embedder_key != ?
+    OR embedder_signature IS NULL
+    OR embedder_signature != ?
   `;
 
   const fetchStaleHybridSourceIds = (): string[] => {
@@ -403,7 +434,7 @@ export const createSqliteSearchProvider = (
         WHERE ${staleHybridSourceWhere}
         ORDER BY source_id ASC
       `,
-      [currentVectorBackendKey, currentEmbedderKey],
+      [currentVectorBackendKey, currentEmbedderSignature],
     ).map((row) => row.source_id);
   };
 
@@ -418,7 +449,8 @@ export const createSqliteSearchProvider = (
         vector_document_count: nextState.vectorDocumentCount,
         vector_error: nextState.vectorError,
         vector_backend: currentVectorBackendKey,
-        embedder_key: embedder.key,
+        embedder_key: currentEmbedderKey,
+        embedder_signature: currentEmbedderSignature,
         embedded_at: nextState.vectorError === null ? Date.now() : null,
       })
       .where(eq(searchSources.source_id, nextState.sourceId))
@@ -441,7 +473,7 @@ export const createSqliteSearchProvider = (
     });
   };
 
-  const syncVectorsForSource = (vectorSync: {
+  const syncVectorsForSource = async (vectorSync: {
     sourceId: string;
     removedIds: readonly string[];
     documents: readonly SearchDocument[];
@@ -449,6 +481,8 @@ export const createSqliteSearchProvider = (
     if (mode !== "hybrid") {
       return;
     }
+
+    const embedder = await ensureEmbedder();
 
     if (vectorBackend === null || vectorBackend.isAvailable() !== true) {
       updateSourceVectorState({
@@ -464,10 +498,17 @@ export const createSqliteSearchProvider = (
         vectorBackend.removeByIds(vectorSync.removedIds);
       }
 
-      vectorBackend.upsert(
+      const embeddings = await embedder.embedMany(
         vectorSync.documents.map((document) => ({
+          kind: "document" as const,
+          document,
+        })),
+      );
+
+      vectorBackend.upsert(
+        vectorSync.documents.map((document, index) => ({
           id: document.path,
-          embedding: embedder.embedDocument(document as RuntimeSearchDocumentLike),
+          embedding: embeddings[index] ?? new Float32Array(embedder.dimensions),
         })),
       );
 
@@ -529,11 +570,12 @@ export const createSqliteSearchProvider = (
     vector_error: null,
     vector_backend: currentVectorBackendKey,
     embedder_key: currentEmbedderKey,
+    embedder_signature: currentEmbedderSignature,
     embedded_at: mode === "hybrid" ? null : Date.now(),
     updated_at: Date.now(),
   });
 
-  const upsertDocuments = (payload: SearchProviderSyncPayload) => {
+  const upsertDocuments = async (payload: SearchProviderSyncPayload) => {
     const existing = fetchSourceState(payload.source.id);
     const existingIds = fetchSourceDocumentIds(payload.source.id);
     const documentIds = payload.documents.map((document) => document.path);
@@ -547,7 +589,7 @@ export const createSqliteSearchProvider = (
         || existing.vector_error !== null
         || existing.vector_document_count !== payload.documents.length
         || existing.vector_backend !== currentVectorBackendKey
-        || existing.embedder_key !== embedder.key
+        || existing.embedder_signature !== currentEmbedderSignature
       );
 
     if (!needsDocumentRewrite && !needsVectorReindex) {
@@ -584,7 +626,7 @@ export const createSqliteSearchProvider = (
     }
 
     if (needsVectorReindex || needsDocumentRewrite) {
-      syncVectorsForSource({
+      await syncVectorsForSource({
         sourceId: payload.source.id,
         removedIds: existingIds.filter((id) => !documentIds.includes(id)),
         documents: payload.documents,
@@ -648,10 +690,12 @@ export const createSqliteSearchProvider = (
       .filter((row): row is SearchDocumentRow => row !== undefined);
   };
 
-  const rebuildVectors = (sourceIds?: readonly string[]) => {
+  const rebuildVectors = async (sourceIds?: readonly string[]) => {
     if (mode !== "hybrid" || vectorBackend === null) {
       return;
     }
+
+    const embedder = await ensureEmbedder();
 
     if (vectorBackend.isAvailable() !== true) {
       for (const state of ensureDatabase().db.select().from(searchSources).all()) {
@@ -677,14 +721,25 @@ export const createSqliteSearchProvider = (
       rows: fetchSourceDocs(state.source_id),
     }));
 
-    const records = documentsBySource.flatMap((entry) =>
-      entry.rows.map((row) => ({
-        id: row.path,
-        embedding: embedder.embedDocument(documentFromRow(row) as RuntimeSearchDocumentLike),
-      })),
-    );
-
     try {
+      const records = (
+        await Promise.all(
+          documentsBySource.map(async (entry) => {
+            const embeddings = await embedder.embedMany(
+              entry.rows.map((row) => ({
+                kind: "document" as const,
+                document: documentFromRow(row),
+              })),
+            );
+
+            return entry.rows.map((row, index) => ({
+              id: row.path,
+              embedding: embeddings[index] ?? new Float32Array(embedder.dimensions),
+            }));
+          }),
+        )
+      ).flat();
+
       if (sourceIds && sourceIds.length > 0) {
         vectorBackend.removeByIds(
           documentsBySource.flatMap((entry) => entry.rows.map((row) => row.path)),
@@ -714,13 +769,13 @@ export const createSqliteSearchProvider = (
     }
   };
 
-  const searchRows = (searchInput: {
+  const searchRows = async (searchInput: {
     query: string;
     includeSchemas: boolean;
     limit: number;
     namespace?: string;
     sourceId?: string;
-  }): SearchResult => {
+  }): Promise<SearchResult> => {
     const ftsQuery = buildFtsQuery(searchInput.query);
     if (mode === "fts" && ftsQuery === null) {
       return buildSearchResult({
@@ -816,8 +871,15 @@ export const createSqliteSearchProvider = (
       candidate.ftsRawRank = row.rank;
     }
 
-    if (vectorBackend?.isAvailable() === true) {
-      const queryEmbedding = embedder.embedQuery(searchInput.query);
+    if (
+      vectorBackend?.isAvailable() === true
+      && searchInput.query.trim().length > 0
+    ) {
+      const embedder = await ensureEmbedder();
+      const queryEmbedding = await embedder.embed({
+        kind: "query",
+        query: searchInput.query,
+      });
       const vectorMatches = vectorBackend.search({
         embedding: queryEmbedding,
         limit: candidateLimit,
@@ -924,7 +986,7 @@ export const createSqliteSearchProvider = (
                   vectorScore: candidate.vectorScore,
                   vectorDistance: candidate.vectorDistance,
                   vectorBackend: vectorBackend?.key ?? null,
-                  embedder: embedder.key,
+                  embedder: currentEmbedderSignature,
                 }
               : {}),
           },
@@ -939,7 +1001,16 @@ export const createSqliteSearchProvider = (
     });
   };
 
-  const status = (): SearchProviderStatus => {
+  const status = async (): Promise<SearchProviderStatus> => {
+    if (mode === "hybrid" && hybridInitError === null && vectorBackend !== null) {
+      try {
+        await ensureHybridVectorBackend();
+        hybridInitError = null;
+      } catch (cause) {
+        hybridInitError = toError(cause).message;
+      }
+    }
+
     const sourceCount = queryAll<{ count: number }>(
       `SELECT COUNT(*) AS count FROM ${SEARCH_SOURCES_TABLE}`,
     )[0]?.count ?? 0;
@@ -955,17 +1026,22 @@ export const createSqliteSearchProvider = (
               FROM ${SEARCH_SOURCES_TABLE}
               WHERE ${staleHybridSourceWhere}
             `,
-            [currentVectorBackendKey, currentEmbedderKey],
+            [currentVectorBackendKey, currentEmbedderSignature],
           )[0]?.count ?? 0
       : 0;
-    const healthy = mode === "fts" || vectorBackend?.isAvailable() === true;
+    const healthy =
+      mode === "fts"
+      || (hybridInitError === null && vectorBackend?.isAvailable() === true);
     const detailParts = [`db=${databasePath}`];
 
     if (mode === "hybrid") {
-      detailParts.push(`embedder=${embedder.key}`);
+      detailParts.push(`embedder=${currentEmbedderSignature}`);
       detailParts.push(
         `vector=${vectorBackend?.isAvailable() === true ? vectorBackend.key : "degraded"}`,
       );
+      if (hybridInitError) {
+        detailParts.push(`embedder_detail=${hybridInitError}`);
+      }
       if (vectorBackend?.detail()) {
         detailParts.push(`vector_detail=${vectorBackend.detail()}`);
       }
@@ -990,7 +1066,7 @@ export const createSqliteSearchProvider = (
       if (mode === "hybrid" && vectorBackend?.isAvailable() === true) {
         const staleSourceIds = fetchStaleHybridSourceIds();
         if (staleSourceIds.length > 0) {
-          rebuildVectors(staleSourceIds);
+          await rebuildVectors(staleSourceIds);
         }
       }
     },
@@ -1006,8 +1082,9 @@ export const createSqliteSearchProvider = (
         limit: request.limit,
         sourceId: request.sourceId,
       }),
-    syncSourceCatalog: (payload: SearchProviderSyncPayload) => {
-      upsertDocuments(payload);
+    syncSourceCatalog: async (payload: SearchProviderSyncPayload) => {
+      await ensureHybridVectorBackend();
+      await upsertDocuments(payload);
     },
     removeSource: ({ sourceId }) => {
       deleteSourceRows(sourceId);
@@ -1019,10 +1096,10 @@ export const createSqliteSearchProvider = (
       if (mode === "hybrid" && vectorBackend?.isAvailable() === true) {
         const staleSourceIds = fetchStaleHybridSourceIds();
         if (staleSourceIds.length > 0) {
-          rebuildVectors(staleSourceIds);
+          await rebuildVectors(staleSourceIds);
         }
       }
-      return status();
+      return await status();
     },
     rebuild: async () => {
       ensureDatabase().sqlite
@@ -1030,9 +1107,9 @@ export const createSqliteSearchProvider = (
         .run("rebuild");
       await ensureHybridVectorBackend();
       if (mode === "hybrid") {
-        rebuildVectors();
+        await rebuildVectors();
       }
-      return status();
+      return await status();
     },
   };
 };
