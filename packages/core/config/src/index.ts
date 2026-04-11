@@ -12,6 +12,19 @@ export {
 } from "./schema";
 
 export { loadConfig, ConfigParseError } from "./load";
+export {
+  getExecutorPaths,
+  resolveExecutorPaths,
+  copyLegacyFileIfMissing,
+  type ExecutorPlatform,
+  type ExecutorPathEnv,
+  type ExecutorPathInputs,
+  type ExecutorPaths,
+  type GetExecutorPathsOptions,
+  type LegacyFileCopyResult,
+  type LegacyFileCopyFileSystem,
+  type CopyLegacyFileIfMissingOptions,
+} from "./platform-paths";
 
 export {
   addSourceToConfig,

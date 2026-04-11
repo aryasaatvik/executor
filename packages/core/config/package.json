@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./platform-paths": "./src/platform-paths.ts"
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
