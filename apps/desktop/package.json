@@ -11,7 +11,7 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "node scripts/dev.js",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsgo --noEmit && tsup",
     "bundle-cli": "node scripts/bundle-cli.js",
     "dist": "npm run build && npm run bundle-cli && electron-builder",
     "dist:mac": "npm run build && npm run bundle-cli && electron-builder --mac",
@@ -20,11 +20,14 @@
     "typecheck": "tsgo --noEmit",
     "typecheck:slow": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@executor/config": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "electron": "35.7.5",
     "electron-builder": "^26.0.12",
+    "tsup": "catalog:",
     "typescript": "catalog:"
   },
   "build": {
