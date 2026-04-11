@@ -3,9 +3,9 @@ import { SqliteClient } from "@effect/sql-sqlite-bun";
 import * as SqlClient from "@effect/sql/SqlClient";
 import { NodeFileSystem } from "@effect/platform-node";
 import * as fs from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { copyLegacyFileIfMissing, getExecutorPaths } from "@executor/config/platform-paths";
 import { createExecutor, scopeKv } from "@executor/sdk";
 import { makeSqliteKv, makeKvConfig, makeScopedKv, migrate } from "@executor/storage-file";
 import {
@@ -36,9 +36,14 @@ import { onepasswordPlugin } from "@executor/plugin-onepassword";
 // ---------------------------------------------------------------------------
 
 const resolveDbPath = (): string => {
-  const dataDir = process.env.EXECUTOR_DATA_DIR ?? join(homedir(), ".executor");
-  fs.mkdirSync(dataDir, { recursive: true });
-  return `${dataDir}/data.db`;
+  const paths = getExecutorPaths();
+  copyLegacyFileIfMissing({
+    legacyPath: paths.legacyRuntimeDbPath,
+    targetPath: paths.runtimeDbPath,
+    enabled: process.env.EXECUTOR_DATA_DIR === undefined,
+  });
+  fs.mkdirSync(paths.dataDir, { recursive: true });
+  return paths.runtimeDbPath;
 };
 
 // ---------------------------------------------------------------------------
