@@ -20,6 +20,7 @@ import {
   appendFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
+import { copyLegacyFileIfMissing, getExecutorPaths } from "@executor/config/platform-paths";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,14 +29,15 @@ import { homedir } from "node:os";
 const DEFAULT_PORT = 14788;
 const DEV_SERVER_URL = process.env.EXECUTOR_DEV_URL || "http://executor-local.localhost:1355";
 const SERVER_STARTUP_TIMEOUT_MS = 30_000;
-const SETTINGS_DIR = join(homedir(), ".executor");
-const SETTINGS_PATH = join(SETTINGS_DIR, "desktop-settings.json");
+const executorPaths = getExecutorPaths();
+const SETTINGS_DIR = executorPaths.desktopSettingsDir;
+const SETTINGS_PATH = executorPaths.desktopSettingsPath;
 
-const CLI_BIN_DIR = join(SETTINGS_DIR, "bin");
-const CLI_BIN_PATH = join(CLI_BIN_DIR, process.platform === "win32" ? "executor.exe" : "executor");
+const CLI_BIN_DIR = executorPaths.legacyCliBinDir;
+const CLI_BIN_PATH = executorPaths.legacyCliBinPath;
 
 // ---------------------------------------------------------------------------
-// CLI install — copy sidecar to ~/.executor/bin and patch shell PATH
+// CLI install — copy sidecar to legacy ~/.executor/bin and patch shell PATH
 // ---------------------------------------------------------------------------
 
 const getInstalledCliVersion = (): string | null => {
@@ -137,6 +139,10 @@ interface Settings {
 
 const loadSettings = (): Settings => {
   try {
+    copyLegacyFileIfMissing({
+      legacyPath: executorPaths.legacyDesktopSettingsPath,
+      targetPath: SETTINGS_PATH,
+    });
     if (existsSync(SETTINGS_PATH)) {
       return JSON.parse(readFileSync(SETTINGS_PATH, "utf-8"));
     }
