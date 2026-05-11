@@ -583,6 +583,7 @@
       },
       "devDependencies": {
         "@effect/atom-react": "catalog:",
+        "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
         "@executor-js/react": "workspace:*",
         "@types/node": "catalog:",
@@ -828,6 +829,7 @@
         "vaul": "^1.1.2",
       },
       "devDependencies": {
+        "@effect/vitest": "catalog:",
         "@types/node": "catalog:",
         "@types/react": "catalog:",
         "hast-util-to-jsx-runtime": "^2.3.6",

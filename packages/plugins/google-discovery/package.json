@@ -54,6 +54,7 @@
   },
   "devDependencies": {
     "@effect/atom-react": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@executor-js/react": "workspace:*",
     "@types/node": "catalog:",
