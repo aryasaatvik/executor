@@ -1427,22 +1427,24 @@ describe("tenant isolation (SDK)", () => {
     }),
   );
 
-  it.effect("secrets.list surfaces provider-enumerated entries; status still gates on routed rows", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [providerOnlySecretPlugin()] as const }),
-      );
+  it.effect(
+    "secrets.list surfaces provider-enumerated entries; status still gates on routed rows",
+    () =>
+      Effect.gen(function* () {
+        const executor = yield* createExecutor(
+          makeTestConfig({ plugins: [providerOnlySecretPlugin()] as const }),
+        );
 
-      const refs = yield* executor.secrets.list();
-      const status = yield* executor.secrets.status("provider-token");
-      const value = yield* executor.secrets.get("provider-token");
+        const refs = yield* executor.secrets.list();
+        const status = yield* executor.secrets.status("provider-token");
+        const value = yield* executor.secrets.get("provider-token");
 
-      const entry = refs.find((ref) => ref.id === "provider-token");
-      expect(entry?.provider).toBe("provider-only");
-      expect(entry?.name).toBe("Provider token");
-      expect(status).toBe("missing");
-      expect(value).toBe("provider-value");
-    }),
+        const entry = refs.find((ref) => ref.id === "provider-token");
+        expect(entry?.provider).toBe("provider-only");
+        expect(entry?.name).toBe("Provider token");
+        expect(status).toBe("missing");
+        expect(value).toBe("provider-value");
+      }),
   );
 
   it.effect("secrets.get short-circuits provider fallback in registration order", () =>
