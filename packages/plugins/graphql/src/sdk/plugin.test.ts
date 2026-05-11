@@ -434,9 +434,9 @@ describe("graphqlPlugin", () => {
       expect(Predicate.isTagged(declined, "ElicitationDeclinedError")).toBe(true);
 
       const requests = yield* server.requests;
-      expect(
-        requests.some((request) => request.payload.variables?.name === "sample-value"),
-      ).toBe(false);
+      expect(requests.some((request) => request.payload.variables?.name === "sample-value")).toBe(
+        false,
+      );
     }),
   );
 
