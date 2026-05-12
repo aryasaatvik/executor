@@ -68,6 +68,7 @@ type GoogleAuthKind = "none" | "oauth2";
 
 function SecretBackedField(props: {
   label: string;
+  help?: string;
   suggestedSecretId: string;
   secretId: string | null;
   onSelect: (secretId: string | null) => void;
@@ -76,10 +77,14 @@ function SecretBackedField(props: {
   targetScope: ScopeId;
   clearable?: boolean;
 }) {
-  const { label, secretId, onSelect, secretList, placeholder, clearable = true } = props;
+  const { label, help, secretId, onSelect, secretList, placeholder, clearable = true } = props;
 
   return (
     <div className="space-y-2">
+      <div className="space-y-1">
+        <FieldLabel className="text-[11px]">{label}</FieldLabel>
+        {help && <p className="text-xs text-muted-foreground">{help}</p>}
+      </div>
       <div className="flex items-center gap-2">
         <div className="flex-1 min-w-0">
           <CreatableSecretPicker
@@ -506,22 +511,24 @@ export default function AddGoogleDiscoverySource(props: {
         {authKind === "oauth2" && (
           <div className="space-y-3 rounded-xl border border-border bg-card px-4 py-4">
             <SecretBackedField
-              label="OAuth Client ID"
+              label="Client ID secret"
+              help="Select or create the Google OAuth client ID secret."
               suggestedSecretId="google-oauth-client-id"
               secretId={clientIdSecretId}
               onSelect={setClientIdSecretId}
               secretList={secretList}
-              placeholder="Pick or create a secret"
+              placeholder="Select client ID secret"
               targetScope={userScopeId}
               clearable={false}
             />
             <SecretBackedField
-              label="OAuth Client Secret"
+              label="Client secret"
+              help="Optional for public clients with PKCE."
               suggestedSecretId="google-oauth-client-secret"
               secretId={clientSecretSecretId}
               onSelect={setClientSecretSecretId}
               secretList={secretList}
-              placeholder="Optional for confidential clients"
+              placeholder="Select client secret"
               targetScope={userScopeId}
             />
             <Collapsible open={showScopes} onOpenChange={setShowScopes} className="space-y-2">
