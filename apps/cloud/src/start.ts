@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { createMiddleware, createStart } from "@tanstack/react-start";
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 import { handleApiRequest } from "./api";
 import { mcpFetch } from "./mcp";
 import { handleSentryTunnelRequest } from "./sentry-tunnel";
@@ -129,7 +129,7 @@ const apiRequestMiddleware = createMiddleware({ type: "request" }).server(
     if (pathname === "/api" || pathname.startsWith("/api/")) {
       const url = new URL(request.url);
       url.pathname = url.pathname.replace(/^\/api/, "");
-      return handleApiRequest(new Request(url, request));
+      return handleApiRequest(new Request(url, request), Context.empty());
     }
     return next();
   },

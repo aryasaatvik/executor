@@ -345,6 +345,7 @@ function SidebarContent(props: {
 }) {
   const isHome = props.pathname === "/";
   const isSecrets = props.pathname === "/secrets";
+  const isRuns = props.pathname === "/runs";
   const isConnections = props.pathname === "/connections";
   const isPolicies = props.pathname === "/policies";
 
@@ -374,6 +375,7 @@ function SidebarContent(props: {
           active={isPolicies}
           onNavigate={props.onNavigate}
         />
+        <NavItem to="/runs" label="Runs" active={isRuns} onNavigate={props.onNavigate} />
 
         <PluginNav pathname={props.pathname} onNavigate={props.onNavigate} />
 

@@ -138,6 +138,18 @@ const wrapPromiseExecutor = (pe: PromiseExecutor): EffectExecutor => ({
     remove: (input) => fromPromise(() => pe.policies.remove(input)),
     resolve: (id) => fromPromise(() => pe.policies.resolve(id)),
   },
+  executions: {
+    create: (input) => fromPromise(() => pe.executions.create(input)),
+    update: (id, patch) => fromPromise(() => pe.executions.update(id, patch)),
+    get: (id) => fromPromise(() => pe.executions.get(id)),
+    list: (scopeId, options) => fromPromise(() => pe.executions.list(scopeId, options)),
+    recordInteraction: (input) => fromPromise(() => pe.executions.recordInteraction(input)),
+    resolveInteraction: (id, patch) => fromPromise(() => pe.executions.resolveInteraction(id, patch)),
+    recordToolCall: (input) => fromPromise(() => pe.executions.recordToolCall(input)),
+    finishToolCall: (id, patch) => fromPromise(() => pe.executions.finishToolCall(id, patch)),
+    listToolCalls: (id) => fromPromise(() => pe.executions.listToolCalls(id)),
+    sweep: (olderThanMs) => fromPromise(() => pe.executions.sweep(olderThanMs)),
+  },
   close: () => fromPromise(() => pe.close()),
 });
 

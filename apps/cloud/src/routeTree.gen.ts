@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as ToolsRouteImport } from './routes/tools'
 import { Route as SetupMcpRouteImport } from './routes/setup-mcp'
 import { Route as SecretsRouteImport } from './routes/secrets'
+import { Route as RunsRouteImport } from './routes/runs'
 import { Route as PoliciesRouteImport } from './routes/policies'
 import { Route as OrgRouteImport } from './routes/org'
 import { Route as CreateOrgRouteImport } from './routes/create-org'
@@ -36,6 +37,11 @@ const SetupMcpRoute = SetupMcpRouteImport.update({
 const SecretsRoute = SecretsRouteImport.update({
   id: '/secrets',
   path: '/secrets',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RunsRoute = RunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PoliciesRoute = PoliciesRouteImport.update({
@@ -97,6 +103,7 @@ export interface FileRoutesByFullPath {
   '/create-org': typeof CreateOrgRoute
   '/org': typeof OrgRoute
   '/policies': typeof PoliciesRoute
+  '/runs': typeof RunsRoute
   '/secrets': typeof SecretsRoute
   '/setup-mcp': typeof SetupMcpRoute
   '/tools': typeof ToolsRoute
@@ -112,6 +119,7 @@ export interface FileRoutesByTo {
   '/create-org': typeof CreateOrgRoute
   '/org': typeof OrgRoute
   '/policies': typeof PoliciesRoute
+  '/runs': typeof RunsRoute
   '/secrets': typeof SecretsRoute
   '/setup-mcp': typeof SetupMcpRoute
   '/tools': typeof ToolsRoute
@@ -128,6 +136,7 @@ export interface FileRoutesById {
   '/create-org': typeof CreateOrgRoute
   '/org': typeof OrgRoute
   '/policies': typeof PoliciesRoute
+  '/runs': typeof RunsRoute
   '/secrets': typeof SecretsRoute
   '/setup-mcp': typeof SetupMcpRoute
   '/tools': typeof ToolsRoute
@@ -145,6 +154,7 @@ export interface FileRouteTypes {
     | '/create-org'
     | '/org'
     | '/policies'
+    | '/runs'
     | '/secrets'
     | '/setup-mcp'
     | '/tools'
@@ -160,6 +170,7 @@ export interface FileRouteTypes {
     | '/create-org'
     | '/org'
     | '/policies'
+    | '/runs'
     | '/secrets'
     | '/setup-mcp'
     | '/tools'
@@ -175,6 +186,7 @@ export interface FileRouteTypes {
     | '/create-org'
     | '/org'
     | '/policies'
+    | '/runs'
     | '/secrets'
     | '/setup-mcp'
     | '/tools'
@@ -191,6 +203,7 @@ export interface RootRouteChildren {
   CreateOrgRoute: typeof CreateOrgRoute
   OrgRoute: typeof OrgRoute
   PoliciesRoute: typeof PoliciesRoute
+  RunsRoute: typeof RunsRoute
   SecretsRoute: typeof SecretsRoute
   SetupMcpRoute: typeof SetupMcpRoute
   ToolsRoute: typeof ToolsRoute
@@ -220,6 +233,13 @@ declare module '@tanstack/react-router' {
       path: '/secrets'
       fullPath: '/secrets'
       preLoaderRoute: typeof SecretsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/runs': {
+      id: '/runs'
+      path: '/runs'
+      fullPath: '/runs'
+      preLoaderRoute: typeof RunsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/policies': {
@@ -303,6 +323,7 @@ const rootRouteChildren: RootRouteChildren = {
   CreateOrgRoute: CreateOrgRoute,
   OrgRoute: OrgRoute,
   PoliciesRoute: PoliciesRoute,
+  RunsRoute: RunsRoute,
   SecretsRoute: SecretsRoute,
   SetupMcpRoute: SetupMcpRoute,
   ToolsRoute: ToolsRoute,

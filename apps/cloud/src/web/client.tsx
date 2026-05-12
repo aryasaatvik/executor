@@ -1,5 +1,6 @@
 import * as AtomHttpApi from "effect/unstable/reactivity/AtomHttpApi";
 import { FetchHttpClient } from "effect/unstable/http";
+import * as Layer from "effect/Layer";
 import { addGroup } from "@executor-js/api";
 import { getBaseUrl } from "@executor-js/react/api/base-url";
 import { CloudAuthApi } from "../auth/api";
@@ -12,7 +13,7 @@ import { OrgApi } from "../org/api";
 const CloudApi = addGroup(CloudAuthApi).add(OrgApi);
 const CloudApiClient = AtomHttpApi.Service<"CloudApiClient">()("CloudApiClient", {
   api: CloudApi,
-  httpClient: FetchHttpClient.layer,
+  httpClient: FetchHttpClient.layer as Layer.Layer<unknown>,
   baseUrl: getBaseUrl(),
 });
 

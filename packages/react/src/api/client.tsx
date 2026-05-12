@@ -4,6 +4,7 @@ import * as HttpClientError from "effect/unstable/http/HttpClientError";
 import { ExecutorApi } from "@executor-js/api";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -31,7 +32,7 @@ const reportApiClientInfrastructureCause = (cause: Cause.Cause<unknown>) =>
 
 const ExecutorApiClient = AtomHttpApi.Service<"ExecutorApiClient">()("ExecutorApiClient", {
   api: ExecutorApi,
-  httpClient: FetchHttpClient.layer,
+  httpClient: FetchHttpClient.layer as Layer.Layer<unknown>,
   transformClient: HttpClient.mapRequest((request) =>
     HttpClientRequest.prependUrl(request, getBaseUrl()),
   ),

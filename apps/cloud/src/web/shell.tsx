@@ -418,6 +418,7 @@ function SupportButton() {
 function SidebarContent(props: { pathname: string; onNavigate?: () => void; showBrand?: boolean }) {
   const isHome = props.pathname === "/";
   const isSecrets = props.pathname === "/secrets";
+  const isRuns = props.pathname === "/runs";
   const isConnections = props.pathname === "/connections";
   const isPolicies = props.pathname === "/policies";
   const isBilling = props.pathname === "/billing" || props.pathname.startsWith("/billing/");
@@ -446,6 +447,7 @@ function SidebarContent(props: { pathname: string; onNavigate?: () => void; show
           active={isPolicies}
           onNavigate={props.onNavigate}
         />
+        <NavItem to="/runs" label="Runs" active={isRuns} onNavigate={props.onNavigate} />
         <NavItem to="/org" label="Organization" active={isOrg} onNavigate={props.onNavigate} />
         <NavItem to="/billing" label="Billing" active={isBilling} onNavigate={props.onNavigate} />
 

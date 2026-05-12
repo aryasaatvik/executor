@@ -45,7 +45,7 @@ const webHandlerFor = (executor: Executor) =>
 const handlerContextFor = (executor: Executor) =>
   Context.make(ExecutorService, executor).pipe(
     Context.add(ExecutionEngineService, {} as ExecutionEngineService["Service"]),
-  );
+  ) as Context.Context<unknown>;
 
 const scope = (id: ScopeId, name: string) => Scope.make({ id, name, createdAt: new Date() });
 

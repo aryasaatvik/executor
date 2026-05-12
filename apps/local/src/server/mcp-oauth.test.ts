@@ -31,7 +31,7 @@ import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 
 import { HttpApi, HttpApiBuilder, HttpApiClient } from "effect/unstable/httpapi";
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 
 import { addGroup, observabilityMiddleware } from "@executor-js/api";
 import { CoreHandlers, ExecutionEngineService, ExecutorService } from "@executor-js/api/server";
@@ -293,6 +293,7 @@ const startHarness = async (tmpDir: string): Promise<Harness> => {
     fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
       webHandler(
         input instanceof Request ? input : new Request(input, init),
+        Context.empty(),
       )) as typeof globalThis.fetch,
     scopeId,
     dispose: async () => {

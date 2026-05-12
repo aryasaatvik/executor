@@ -186,8 +186,8 @@ describe("makeApiLive (prod handler factory) request scoping", () => {
     // 403 (no session cookie) but not before `requestScopedMiddleware`
     // has built the per-request layer. We don't care about the response —
     // only that the layer was built once per request.
-    await handler(new Request("http://test.local/scope"));
-    await handler(new Request("http://test.local/scope"));
+    await handler(new Request("http://test.local/scope"), Context.empty());
+    await handler(new Request("http://test.local/scope"), Context.empty());
 
     expect(counts.acquires).toBe(2);
     expect(counts.releases).toBe(2);

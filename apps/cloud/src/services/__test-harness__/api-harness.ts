@@ -14,7 +14,7 @@
 // Each test picks its own org id (usually a random UUID) so rows don't
 // collide across tests.
 
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { HttpApiBuilder, HttpApiClient, HttpApiSwagger } from "effect/unstable/httpapi";
 import { FetchHttpClient, HttpRouter, HttpServer, HttpServerRequest } from "effect/unstable/http";
 
@@ -171,7 +171,7 @@ export const fetchForOrg = (orgId: string): typeof globalThis.fetch =>
     const req = new Request(base, {
       headers: { ...Object.fromEntries(base.headers), [TEST_ORG_HEADER]: orgId },
     });
-    return handler(req);
+    return handler(req, Context.empty());
   }) as typeof globalThis.fetch;
 
 export const fetchForUser = (userId: string, orgId: string): typeof globalThis.fetch =>
@@ -184,7 +184,7 @@ export const fetchForUser = (userId: string, orgId: string): typeof globalThis.f
         [TEST_USER_HEADER]: userId,
       },
     });
-    return handler(req);
+    return handler(req, Context.empty());
   }) as typeof globalThis.fetch;
 
 export const clientLayerForOrg = (orgId: string) =>

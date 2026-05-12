@@ -78,6 +78,13 @@
       "when": 1778192434063,
       "tag": "0010_add_credential_binding_secret_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1778572209116,
+      "tag": "0011_salty_giant_man",
+      "breakpoints": true
     }
   ]
 }

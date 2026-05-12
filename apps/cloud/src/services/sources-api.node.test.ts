@@ -432,6 +432,7 @@ describe("sources api (HTTP)", () => {
 
       const execution = yield* asOrg(org, (client) =>
         client.executions.execute({
+          headers: {},
           payload: {
             code: [
               `const result = await tools.${namespace}.echo.echoMessage({ message: "hello", suffix: "world" });`,
@@ -540,6 +541,7 @@ describe("sources api (HTTP)", () => {
 
       const execution = yield* asOrg(org, (client) =>
         client.executions.execute({
+          headers: {},
           payload: {
             code: [
               `const result = await tools.${namespace}.query.hello({ name: "Ada" });`,
@@ -609,6 +611,7 @@ describe("sources api (HTTP)", () => {
 
       const execution = yield* asOrg(org, (client) =>
         client.executions.execute({
+          headers: {},
           payload: {
             code: [
               `const result = await tools.${namespace}.simple_echo({});`,
