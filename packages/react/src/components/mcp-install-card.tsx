@@ -28,15 +28,67 @@ export const shellQuoteWord = (value: string): string => {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 };
 
+interface DesktopBridge {
+  readonly getSettings: () => Promise<{
+    readonly port: number;
+    readonly requireAuth: boolean;
+    readonly password: string;
+  }>;
+}
+
+const readDesktopBridge = (): DesktopBridge | null => {
+  if (typeof window === "undefined") return null;
+  const candidate = (window as Window & { readonly executor?: DesktopBridge }).executor;
+  if (!candidate || typeof candidate.getSettings !== "function") return null;
+  return candidate;
+};
+
+const buildHttpEndpoint = (input: {
+  readonly origin: string | null;
+  readonly desktop: {
+    readonly port: number;
+  } | null;
+}): string => {
+  if (input.desktop) {
+    return `http://127.0.0.1:${input.desktop.port}/mcp`;
+  }
+  return input.origin ? `${input.origin}/mcp` : "<this-server>/mcp";
+};
+
+const buildBasicAuthHeader = (password: string): string => {
+  // Renderer-only — every browser/Electron renderer has btoa. SSR doesn't
+  // render this card, so we don't need a Node fallback here.
+  if (typeof globalThis.btoa !== "function") {
+    return `Authorization: Basic executor:${password}`;
+  }
+  return `Authorization: Basic ${globalThis.btoa(`executor:${password}`)}`;
+};
+
 export const buildMcpInstallCommand = (input: {
   readonly mode: TransportMode;
   readonly isDev: boolean;
   readonly origin: string | null;
   readonly scopeDir?: string;
+  readonly desktop?: {
+    readonly port: number;
+    readonly requireAuth: boolean;
+    readonly password: string;
+  } | null;
 }): string => {
   if (input.mode === "http") {
-    const endpoint = input.origin ? `${input.origin}/mcp` : "<this-server>/mcp";
-    return `npx add-mcp ${shellQuoteWord(endpoint)} --transport http --name executor`;
+    const endpoint = buildHttpEndpoint({
+      origin: input.origin,
+      desktop: input.desktop ? { port: input.desktop.port } : null,
+    });
+    const headerFlags: string[] = [];
+    if (input.desktop?.requireAuth && input.desktop.password) {
+      headerFlags.push(`--header ${shellQuoteWord(buildBasicAuthHeader(input.desktop.password))}`);
+    }
+    const parts = [
+      `npx add-mcp ${shellQuoteWord(endpoint)} --transport http --name executor`,
+      ...headerFlags,
+    ];
+    return parts.join(" ");
   }
 
   const innerArgs = input.isDev ? ["bun", "run", "dev:cli", "mcp"] : ["executor", "mcp"];
@@ -47,13 +99,26 @@ export const buildMcpInstallCommand = (input: {
 };
 
 export function McpInstallCard(props: { className?: string }) {
-  const showStdio = isLocal;
+  // Desktop hosts ship Electron without putting an `executor` binary on
+  // PATH, and the bundled sidecar is locked to the running app. Force the
+  // HTTP path there — it routes through the running sidecar with the
+  // Basic auth header injected by the renderer.
+  const showStdio = isLocal && readDesktopBridge() === null;
   const [mode, setMode] = useState<TransportMode>(showStdio ? "stdio" : "http");
   const [origin, setOrigin] = useState<string | null>(null);
+  const [desktop, setDesktop] = useState<{
+    readonly port: number;
+    readonly requireAuth: boolean;
+    readonly password: string;
+  } | null>(null);
   const scopeInfo = useScopeInfo();
 
   useEffect(() => {
     setOrigin(window.location.origin);
+    const bridge = readDesktopBridge();
+    if (bridge) {
+      void bridge.getSettings().then(setDesktop, () => setDesktop(null));
+    }
   }, []);
 
   const command = buildMcpInstallCommand({
@@ -61,6 +126,7 @@ export function McpInstallCard(props: { className?: string }) {
     isDev,
     origin,
     scopeDir: scopeInfo.dir,
+    desktop,
   });
 
   const subtitle =

@@ -6,7 +6,25 @@ import * as Exit from "effect/Exit";
 
 import { cancelOAuth, startOAuth } from "../api/atoms";
 import { messageFromExit, messageFromUnknown, useReportHandledError } from "../api/error-reporting";
-import { openOAuthPopup, reserveOAuthPopup, type OAuthPopupResult } from "../api/oauth-popup";
+import {
+  openOAuthPopup,
+  openOAuthSystemBrowser,
+  reserveOAuthPopup,
+  type OAuthPopupResult,
+} from "../api/oauth-popup";
+
+type DesktopBridge = {
+  readonly openExternal: (url: string) => Promise<void>;
+};
+
+const getDesktopBridge = (): DesktopBridge | null => {
+  if (typeof window === "undefined") return null;
+  const candidate = (window as { readonly executor?: Partial<DesktopBridge> }).executor;
+  return candidate && typeof candidate.openExternal === "function"
+    ? // oxlint-disable-next-line executor/no-double-cast -- boundary: narrowed by the typeof guard above
+      (candidate as DesktopBridge)
+    : null;
+};
 import { Button } from "../components/button";
 import {
   OAUTH_POPUP_MESSAGE_TYPE,
@@ -145,8 +163,12 @@ export function useOAuthPopupFlow<
       cancel();
       setBusy(true);
       setError(null);
-      const reservedPopup = reserveOAuthPopup({ popupName });
-      if (!reservedPopup) {
+      const desktopBridge = getDesktopBridge();
+      // Desktop hosts open the auth URL in the user's real browser, so
+      // we skip the in-page popup reservation entirely and rely on the
+      // /api/oauth/await/:sessionId polling channel for the result.
+      const reservedPopup = desktopBridge ? null : reserveOAuthPopup({ popupName });
+      if (!desktopBridge && !reservedPopup) {
         const message = popupBlockedMessage ?? "Sign-in popup was blocked by the browser";
         setBusy(false);
         setError(message);
@@ -171,7 +193,7 @@ export function useOAuthPopupFlow<
           message,
           metadata: input.reportMetadata,
         });
-        reservedPopup.popup.close();
+        reservedPopup?.popup.close();
         setBusy(false);
         setError(message);
         input.onError?.(message);
@@ -181,7 +203,7 @@ export function useOAuthPopupFlow<
       if (response.authorizationUrl === null) {
         const message =
           noAuthorizationUrlMessage ?? "OAuth start did not produce an authorization URL";
-        reservedPopup.popup.close();
+        reservedPopup?.popup.close();
         setBusy(false);
         setError(message);
         input.onError?.(message);
@@ -193,66 +215,78 @@ export function useOAuthPopupFlow<
         tokenScope: input.tokenScope,
       };
       input.onAuthorizationStarted?.(response);
-      cleanupRef.current = openOAuthPopup<TPayload>({
-        url: response.authorizationUrl,
-        popupName,
-        channelName: OAUTH_POPUP_MESSAGE_TYPE,
-        expectedSessionId: response.sessionId,
-        reservedPopup,
-        closedPollMs: detectPopupClosed ? undefined : null,
-        onResult: async (result: OAuthPopupResult<TPayload>) => {
-          cleanupRef.current = null;
-          sessionRef.current = null;
+      const handleResult = async (result: OAuthPopupResult<TPayload>) => {
+        cleanupRef.current = null;
+        sessionRef.current = null;
 
-          if (!result.ok) {
-            setBusy(false);
-            setError(result.error);
-            input.onError?.(result.error);
-            return;
-          }
-
-          const persistenceError = await Promise.resolve(input.onSuccess(result)).then(
-            () => null,
-            (cause: unknown) => cause,
-          );
-          if (persistenceError !== null) {
-            const message = messageFromUnknown(persistenceError, "Failed to save connection");
-            reportHandledError(persistenceError, {
-              surface: "oauth",
-              action: "persist_connection",
-              message,
-              metadata: input.reportMetadata,
-            });
-            setBusy(false);
-            setError(message);
-            input.onError?.(message);
-            return;
-          }
+        if (!result.ok) {
           setBusy(false);
-        },
-        onClosed: () => {
-          cleanupRef.current = null;
-          sessionRef.current = null;
-          // `popup.closed` is advisory: COOP redirects can make a live popup
-          // appear closed to the opener. Keep server OAuth state alive for a
-          // callback or TTL cleanup; only explicit cancel deletes the session.
-          const message =
-            popupClosedMessage ??
-            "Sign-in cancelled - popup was closed before completing the flow.";
+          setError(result.error);
+          input.onError?.(result.error);
+          return;
+        }
+
+        const persistenceError = await Promise.resolve(input.onSuccess(result)).then(
+          () => null,
+          (cause: unknown) => cause,
+        );
+        if (persistenceError !== null) {
+          const message = messageFromUnknown(persistenceError, "Failed to save connection");
+          reportHandledError(persistenceError, {
+            surface: "oauth",
+            action: "persist_connection",
+            message,
+            metadata: input.reportMetadata,
+          });
           setBusy(false);
           setError(message);
           input.onError?.(message);
-        },
-        onOpenFailed: () => {
-          cleanupRef.current = null;
-          sessionRef.current = null;
-          cancelSession(response.sessionId, input.tokenScope);
-          const message = popupBlockedMessage ?? "Sign-in popup was blocked by the browser";
-          setBusy(false);
-          setError(message);
-          input.onError?.(message);
-        },
-      });
+          return;
+        }
+        setBusy(false);
+      };
+      const handleClosed = () => {
+        cleanupRef.current = null;
+        sessionRef.current = null;
+        // `popup.closed` is advisory: COOP redirects can make a live popup
+        // appear closed to the opener. Keep server OAuth state alive for a
+        // callback or TTL cleanup; only explicit cancel deletes the session.
+        const message =
+          popupClosedMessage ?? "Sign-in cancelled - popup was closed before completing the flow.";
+        setBusy(false);
+        setError(message);
+        input.onError?.(message);
+      };
+      const handleOpenFailed = () => {
+        cleanupRef.current = null;
+        sessionRef.current = null;
+        cancelSession(response.sessionId, input.tokenScope);
+        const message = popupBlockedMessage ?? "Sign-in popup was blocked by the browser";
+        setBusy(false);
+        setError(message);
+        input.onError?.(message);
+      };
+
+      cleanupRef.current = desktopBridge
+        ? openOAuthSystemBrowser<TPayload>({
+            url: response.authorizationUrl,
+            sessionId: response.sessionId,
+            openExternal: desktopBridge.openExternal,
+            onResult: (result) => void handleResult(result),
+            onOpenFailed: handleOpenFailed,
+            onTimeout: handleClosed,
+          })
+        : openOAuthPopup<TPayload>({
+            url: response.authorizationUrl,
+            popupName,
+            channelName: OAUTH_POPUP_MESSAGE_TYPE,
+            expectedSessionId: response.sessionId,
+            reservedPopup: reservedPopup ?? undefined,
+            closedPollMs: detectPopupClosed ? undefined : null,
+            onResult: (result) => void handleResult(result),
+            onClosed: handleClosed,
+            onOpenFailed: handleOpenFailed,
+          });
     },
     [
       cancel,

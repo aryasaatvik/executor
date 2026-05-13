@@ -51,11 +51,11 @@ const SERVICE_VERSION = "1.0.0";
 // Module-scope: one provider per isolate, never shut down. The provider holds
 // the SimpleSpanProcessor + OTLP exporter, so any tracer reference captured by
 // deferred work keeps finding a live exporter after the request Effect resolves.
-let installed = false;
+let provider: WebTracerProvider | null = null;
 const ensureGlobalTracerProvider = (): boolean => {
-  if (installed) return true;
+  if (provider) return true;
   if (!env.AXIOM_TOKEN) return false;
-  const provider = new WebTracerProvider({
+  provider = new WebTracerProvider({
     resource: resourceFromAttributes({
       [ATTR_SERVICE_NAME]: SERVICE_NAME,
       [ATTR_SERVICE_VERSION]: SERVICE_VERSION,
@@ -77,9 +77,16 @@ const ensureGlobalTracerProvider = (): boolean => {
   // through `OtelTracer.layerGlobal` which only needs the global provider,
   // not the OTel context machinery.
   trace.setGlobalTracerProvider(provider);
-  installed = true;
   return true;
 };
+
+// Worker-entry use: install lazily at the start of the fetch handler so the
+// outer `http.server` span can be opened with a real provider, and flush via
+// `ctx.waitUntil(flushTracerProvider())` so SimpleSpanProcessor exports
+// survive request termination.
+export const installTracerProvider = (): boolean => ensureGlobalTracerProvider();
+export const flushTracerProvider = (): Promise<void> =>
+  provider ? provider.forceFlush() : Promise.resolve();
 
 const makeTelemetryLive = (): Layer.Layer<never> =>
   Layer.unwrap(

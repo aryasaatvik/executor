@@ -10,6 +10,9 @@ const {
   title = 'Executor — The gateway to connect your agent to everything',
   description = 'One place every agent plugs into every tool you already use. Wire it up once, bring the whole team.'
 } = Astro.props
+
+const ogImage = new URL('/og-image.png', Astro.site ?? Astro.url).toString()
+const canonical = new URL(Astro.url.pathname, Astro.site ?? Astro.url).toString()
 ---
 
 <html lang="en">
@@ -22,8 +25,19 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="3800" />
+    <meta property="og:image:height" content="2360" />
+    <meta property="og:image:alt" content={title} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
     <title>{title}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

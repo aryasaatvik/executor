@@ -7,84 +7,27 @@
  * Or import:      import { startServer } from "@executor-js/local/serve"
  */
 
-import { timingSafeEqual } from "node:crypto";
 import { resolve, join } from "node:path";
 import { readdirSync } from "node:fs";
+import { setOAuthCompletionListener } from "@executor-js/api";
+import { consumeOAuthResult, publishOAuthResult } from "./oauth-result-store";
+import { startIntegrationsRefresh } from "./server/integrations";
 import { getServerHandlers } from "./server/main";
-
-// ---------------------------------------------------------------------------
-// Host allowlist
-// ---------------------------------------------------------------------------
-
-const DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", "::1"];
-const LOOPBACK_BIND_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
-
-const normalizeCredential = (value: string | undefined): string | null => {
-  const normalized = value?.trim();
-  return normalized && normalized.length > 0 ? normalized : null;
-};
-
-const safeEqual = (actual: string, expected: string): boolean => {
-  const actualBytes = Buffer.from(actual);
-  const expectedBytes = Buffer.from(expected);
-  return actualBytes.length === expectedBytes.length && timingSafeEqual(actualBytes, expectedBytes);
-};
-
-const isLoopbackBindHost = (hostname: string): boolean =>
-  LOOPBACK_BIND_HOSTS.has(hostname.trim().toLowerCase());
-
-const makeIsAllowedHost =
-  (allowed: ReadonlySet<string>) =>
-  (request: Request): boolean => {
-    const host = request.headers.get("host");
-    if (!host) return true;
-    const hostname = host.replace(/:\d+$/, "");
-    return allowed.has(hostname);
-  };
-
-const hasBearerToken = (request: Request, token: string): boolean => {
-  const authorization = request.headers.get("authorization");
-  const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-  return (
-    (bearer !== undefined && safeEqual(bearer, token)) ||
-    safeEqual(request.headers.get("x-executor-token") ?? "", token)
-  );
-};
-
-const hasBasicPassword = (request: Request, password: string): boolean => {
-  const authorization = request.headers.get("authorization");
-  const encoded = authorization?.match(/^Basic\s+(.+)$/i)?.[1]?.trim();
-  if (!encoded) return false;
-
-  let decoded: string;
-  // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: Basic auth decoding accepts untrusted header bytes
-  try {
-    decoded = Buffer.from(encoded, "base64").toString("utf8");
-  } catch {
-    return false;
-  }
-
-  const separator = decoded.indexOf(":");
-  const actualPassword = separator >= 0 ? decoded.slice(separator + 1) : decoded;
-  return safeEqual(actualPassword, password);
-};
-
-const makeIsAuthorized =
-  (auth: { token: string | null; password: string | null }) =>
-  (request: Request): boolean =>
-    (auth.token !== null && hasBearerToken(request, auth.token)) ||
-    (auth.password !== null && hasBasicPassword(request, auth.password));
+import {
+  DEFAULT_ALLOWED_HOSTS,
+  hasFileExtension,
+  isLoopbackBindHost,
+  isUnauthenticatedOAuthCallbackPath,
+  makeIsAllowedHost,
+  makeIsAuthorized,
+  normalizeCredential,
+} from "./serve-shared";
 
 // ---------------------------------------------------------------------------
 // Static files
 // ---------------------------------------------------------------------------
 
 type StaticHandler = () => Response | Promise<Response>;
-
-const hasFileExtension = (pathname: string): boolean => {
-  const lastSegment = pathname.split("/").at(-1) ?? "";
-  return lastSegment.includes(".");
-};
 
 function collectStaticRoutes(dir: string, prefix = ""): Record<string, StaticHandler> {
   const routes: Record<string, StaticHandler> = {};
@@ -170,7 +113,16 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   const isAllowedHost = makeIsAllowedHost(allowedHostSet);
   const clientDir = opts.clientDir ?? resolve(import.meta.dirname, "../dist");
 
+  startIntegrationsRefresh();
+
   const handlers = opts.handlers ?? (await getServerHandlers());
+
+  // Mirror every OAuth callback completion into the local in-memory result
+  // store. The Electron desktop renderer polls /api/oauth/await/:sessionId
+  // for these when the user runs the flow in their system browser (no
+  // shared origin → no postMessage). Cloud doesn't register a listener;
+  // its same-origin web SPA receives results via postMessage directly.
+  setOAuthCompletionListener((result) => publishOAuthResult(result));
 
   // Build static routes from either embedded assets or disk
   let staticRoutes: Record<string, StaticHandler>;
@@ -198,17 +150,33 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
         return new Response("Forbidden", { status: 403 });
       }
 
-      if (requiresAuth && !isAuthorized(req)) {
+      const url = new URL(req.url);
+
+      // OAuth provider callbacks are hit by the user's external browser
+      // and can't carry our Basic auth header. The OAuth `state`
+      // parameter is the security gate — see isUnauthenticatedOAuthCallbackPath.
+      const skipAuth = isUnauthenticatedOAuthCallbackPath(url.pathname);
+
+      if (requiresAuth && !skipAuth && !isAuthorized(req)) {
         return new Response("Unauthorized", {
           status: 401,
           headers: { "www-authenticate": 'Bearer realm="executor", Basic realm="executor"' },
         });
       }
 
-      const url = new URL(req.url);
-
       if (url.pathname.startsWith("/mcp")) {
         return handlers.mcp.handleRequest(req);
+      }
+
+      // OAuth result polling — local-only, served outside the typed API
+      // because cloud (Cloudflare Workers, stateless) can't back the
+      // in-memory store. See setOAuthCompletionListener above.
+      const awaitMatch = /^\/api\/oauth\/await\/([^/?#]+)$/.exec(url.pathname);
+      if (awaitMatch && req.method === "GET") {
+        const result = consumeOAuthResult(awaitMatch[1]);
+        return new Response(JSON.stringify(result), {
+          headers: { "content-type": "application/json" },
+        });
       }
 
       if (url.pathname.startsWith("/api/") || url.pathname === "/api") {
@@ -235,6 +203,7 @@ export async function startServer(opts: StartServerOptions = {}): Promise<Server
   return {
     port: server.port!,
     async stop() {
+      setOAuthCompletionListener(null);
       server.stop(true);
       await handlers.mcp.close();
       await handlers.api.dispose();
