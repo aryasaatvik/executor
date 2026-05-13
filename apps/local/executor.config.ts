@@ -8,6 +8,7 @@ import { keychainPlugin } from "@executor-js/plugin-keychain";
 import { fileSecretsPlugin } from "@executor-js/plugin-file-secrets";
 import { onepasswordHttpPlugin } from "@executor-js/plugin-onepassword/api";
 import { desktopSettingsPlugin } from "@executor-js/plugin-desktop-settings/server";
+import { executionMetricsPlugin } from "@executor-js/plugin-execution-metrics";
 
 // ---------------------------------------------------------------------------
 // Single source of truth for the local app's plugin list.
@@ -36,5 +37,6 @@ export default defineExecutorConfig({
       fileSecretsPlugin(),
       onepasswordHttpPlugin(),
       desktopSettingsPlugin(),
+      executionMetricsPlugin(),
     ] as const,
 });

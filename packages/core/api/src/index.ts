@@ -25,6 +25,8 @@ export {
   type RunOAuthCallbackInput,
 } from "./oauth-popup";
 export { PoliciesApi } from "./policies/api";
+export { MetricsApi } from "./metrics/api";
+export { renderPrometheus } from "./metrics/prometheus";
 export {
   InternalError,
   ErrorCapture,

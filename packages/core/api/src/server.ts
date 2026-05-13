@@ -6,6 +6,7 @@ export {
   SecretsHandlers,
   ScopeHandlers,
   ExecutionsHandlers,
+  MetricsHandlers,
 } from "./handlers";
 export {
   composePluginApi,

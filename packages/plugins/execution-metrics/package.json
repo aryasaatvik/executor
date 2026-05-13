@@ -1,0 +1,51 @@
+{
+  "name": "@executor-js/plugin-execution-metrics",
+  "version": "1.4.27",
+  "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/plugins/execution-metrics",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git",
+    "directory": "packages/plugins/execution-metrics"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "typecheck:slow": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@executor-js/sdk": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@executor-js/api": "workspace:*",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -16,6 +16,7 @@ import { makeQuickJsExecutor } from "@executor-js/runtime-quickjs";
 import { getExecutorBundle } from "./executor";
 import { createMcpRequestHandler, type McpRequestHandler } from "./mcp";
 import { ErrorCaptureLive } from "./observability";
+import { startMetricsExport } from "./telemetry";
 
 // ---------------------------------------------------------------------------
 // Local server API.
@@ -61,6 +62,8 @@ const closeServerHandlers = async (handlers: ServerHandlers): Promise<void> => {
 };
 
 export const createServerHandlers = async (): Promise<ServerHandlers> => {
+  await Effect.runPromise(startMetricsExport());
+
   const { executor, plugins } = await getExecutorBundle();
   const observer = composeExecutionObservers(plugins, executor);
   const engine = createExecutionEngine({

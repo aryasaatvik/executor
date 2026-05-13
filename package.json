@@ -117,7 +117,10 @@
     "quickjs-emscripten": "^0.31.0",
     "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
     "tsup": "^8.5.0",
-    "@effect/opentelemetry": "4.0.0-beta.59"
+    "@effect/opentelemetry": "4.0.0-beta.59",
+    "@opentelemetry/exporter-metrics-otlp-http": "^0.214.0",
+    "@opentelemetry/resources": "^2.6.1",
+    "@opentelemetry/sdk-metrics": "^2.6.1"
   },
   "patchedDependencies": {
     "postgres@3.4.9": "patches/postgres@3.4.9.patch",

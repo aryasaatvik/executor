@@ -9,6 +9,7 @@ import { ExecutionsApi } from "./executions/api";
 import { ScopeApi } from "./scope/api";
 import { OAuthApi } from "./oauth/api";
 import { PoliciesApi } from "./policies/api";
+import { MetricsApi } from "./metrics/api";
 
 export const CoreExecutorApi = HttpApi.make("executor")
   .add(ToolsApi)
@@ -19,6 +20,7 @@ export const CoreExecutorApi = HttpApi.make("executor")
   .add(ScopeApi)
   .add(OAuthApi)
   .add(PoliciesApi)
+  .add(MetricsApi)
   .annotateMerge(
     OpenApi.annotations({
       title: "Executor API",

@@ -3,6 +3,7 @@ import { openApiHttpPlugin } from "@executor-js/plugin-openapi/api";
 import { mcpHttpPlugin } from "@executor-js/plugin-mcp/api";
 import { graphqlHttpPlugin } from "@executor-js/plugin-graphql/api";
 import { workosVaultPlugin, type WorkOSVaultClient } from "@executor-js/plugin-workos-vault";
+import { executionMetricsPlugin } from "@executor-js/plugin-execution-metrics";
 
 // ---------------------------------------------------------------------------
 // Single source of truth for the cloud app's plugin list.
@@ -48,5 +49,6 @@ export default defineExecutorConfig({
         credentials: workosCredentials ?? { apiKey: "", clientId: "" },
         ...(workosVaultClient ? { client: workosVaultClient } : {}),
       }),
+      executionMetricsPlugin(),
     ] as const,
 });
