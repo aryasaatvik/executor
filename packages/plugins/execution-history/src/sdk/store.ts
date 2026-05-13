@@ -15,7 +15,10 @@ export const executionHistorySchema = defineSchema({
     fields: {
       id: { type: "string", required: true },
       scope_id: { type: "string", required: true, index: true },
-      status: { type: ["running", "completed", "failed"], required: true },
+      status: {
+        type: ["running", "waiting_for_interaction", "completed", "failed"],
+        required: true,
+      },
       code: { type: "string", required: true },
       result_json: { type: "string", required: false },
       error_text: { type: "string", required: false },
@@ -78,11 +81,17 @@ type InteractionRow = InferDBFieldsOutput<
 > &
   Record<string, unknown>;
 
-export const ExecutionHistoryRunStatus = Schema.Literals(["running", "completed", "failed"]);
+export const ExecutionHistoryRunStatus = Schema.Literals([
+  "running",
+  "waiting_for_interaction",
+  "completed",
+  "failed",
+]);
 export type ExecutionHistoryRunStatus = typeof ExecutionHistoryRunStatus.Type;
 
 export const EXECUTION_HISTORY_RUN_STATUSES = [
   "running",
+  "waiting_for_interaction",
   "completed",
   "failed",
 ] as const satisfies readonly ExecutionHistoryRunStatus[];
@@ -498,6 +507,23 @@ export const makeExecutionHistoryStore = ({
             updated_at: timestamp,
           },
         });
+        const run = yield* adapter.findOne({
+          model: "execution_history_run",
+          where: [
+            { field: "scope_id", value: event.scopeId },
+            { field: "id", value: event.executionId },
+          ],
+        });
+        if (run?.status === "running") {
+          yield* adapter.update({
+            model: "execution_history_run",
+            where: [
+              { field: "scope_id", value: event.scopeId },
+              { field: "id", value: event.executionId },
+            ],
+            update: { status: "waiting_for_interaction", updated_at: timestamp },
+          });
+        }
         return;
       }
 
@@ -515,6 +541,31 @@ export const makeExecutionHistoryStore = ({
           updated_at: timestamp,
         },
       });
+      const pendingInteractions = yield* adapter.count({
+        model: "execution_history_interaction",
+        where: [
+          { field: "scope_id", value: event.scopeId },
+          { field: "execution_id", value: event.executionId },
+          { field: "status", value: "pending" },
+        ],
+      });
+      const run = yield* adapter.findOne({
+        model: "execution_history_run",
+        where: [
+          { field: "scope_id", value: event.scopeId },
+          { field: "id", value: event.executionId },
+        ],
+      });
+      if (pendingInteractions === 0 && run?.status === "waiting_for_interaction") {
+        yield* adapter.update({
+          model: "execution_history_run",
+          where: [
+            { field: "scope_id", value: event.scopeId },
+            { field: "id", value: event.executionId },
+          ],
+          update: { status: "running", updated_at: timestamp },
+        });
+      }
     });
 
   const get: ExecutionHistoryStore["get"] = (executionId) =>
@@ -688,7 +739,12 @@ export const makeExecutionHistoryStore = ({
         for (const row of filtered) {
           const bucketStart =
             Math.floor(toDate(row.created_at).getTime() / chartBucketMs) * chartBucketMs;
-          const counts = bucketMap.get(bucketStart) ?? { running: 0, completed: 0, failed: 0 };
+          const counts = bucketMap.get(bucketStart) ?? {
+            running: 0,
+            waiting_for_interaction: 0,
+            completed: 0,
+            failed: 0,
+          };
           counts[row.status] += 1;
           bucketMap.set(bucketStart, counts);
         }

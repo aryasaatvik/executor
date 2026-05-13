@@ -3,12 +3,16 @@ import { Effect } from "effect";
 import {
   ExecutionFinished,
   ExecutionId,
+  ExecutionInteractionId,
   ExecutionStarted,
+  InteractionResolved,
+  InteractionStarted,
   Scope,
   ScopeId,
   ToolCallFinished,
   ToolCallStarted,
   ExecutionToolCallId,
+  ToolId,
   collectSchemas,
   composeExecutionObservers,
   createExecutor,
@@ -153,6 +157,71 @@ describe("executionHistoryPlugin", () => {
         cursor: firstPage.nextCursor,
       });
       expect(secondPage.executions.map((item) => item.execution.id)).toEqual(["exec_one"]);
+    }),
+  );
+
+  it.effect("marks executions as waiting while an elicitation is pending", () =>
+    Effect.gen(function* () {
+      const { executor, observer } = yield* build();
+      const executionId = ExecutionId.make("exec_waiting");
+      const interactionId = ExecutionInteractionId.make("interaction_waiting");
+      const scopeId = ScopeId.make("scope_test");
+
+      yield* observer.handle(
+        new ExecutionStarted({
+          executionId,
+          scopeId,
+          code: "return await tools.oauth.connect({})",
+          startedAt: new Date("2026-01-01T00:00:00.000Z"),
+        }),
+      );
+      yield* observer.handle(
+        new InteractionStarted({
+          executionId,
+          interactionId,
+          scopeId,
+          context: {
+            toolId: ToolId.make("oauth.connect"),
+            args: {},
+            request: {
+              _tag: "FormElicitation",
+              message: "Approve access",
+              requestedSchema: {},
+            },
+          },
+          startedAt: new Date("2026-01-01T00:00:01.000Z"),
+        }),
+      );
+
+      const waiting = yield* executor.executionHistory.get(executionId);
+      expect(waiting?.execution.status).toBe("waiting_for_interaction");
+      expect(waiting?.pendingInteraction?.status).toBe("pending");
+
+      yield* observer.handle(
+        new InteractionResolved({
+          executionId,
+          interactionId,
+          scopeId,
+          status: "accepted",
+          response: { action: "accept", content: { ok: true } },
+          completedAt: new Date("2026-01-01T00:00:02.000Z"),
+        }),
+      );
+
+      const resumed = yield* executor.executionHistory.get(executionId);
+      expect(resumed?.execution.status).toBe("running");
+      expect(resumed?.pendingInteraction).toBeNull();
+
+      yield* observer.handle(
+        new ExecutionFinished({
+          executionId,
+          scopeId,
+          status: "completed",
+          completedAt: new Date("2026-01-01T00:00:03.000Z"),
+        }),
+      );
+      const completed = yield* executor.executionHistory.get(executionId);
+      expect(completed?.execution.status).toBe("completed");
     }),
   );
 });

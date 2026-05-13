@@ -18,7 +18,13 @@ import { Separator } from "@executor-js/react/components/separator";
 import type { ExecutionHistoryListItem, ExecutionHistoryRunStatus } from "../sdk";
 import { runsAtom, runDetailAtom, runToolCallsAtom, type RunsQuery } from "./atoms";
 
-const STATUS_OPTIONS = ["all", "running", "completed", "failed"] as const;
+const STATUS_OPTIONS = [
+  "all",
+  "running",
+  "waiting_for_interaction",
+  "completed",
+  "failed",
+] as const;
 const INTERACTION_OPTIONS = ["all", "true", "false"] as const;
 const PAGE_SIZE = 50;
 
@@ -37,7 +43,12 @@ const statusClass = (status: ExecutionHistoryRunStatus): string =>
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
     : status === "failed"
       ? "border-destructive/30 bg-destructive/10 text-destructive"
-      : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+      : status === "waiting_for_interaction"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        : "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+
+const statusLabel = (status: ExecutionHistoryRunStatus): string =>
+  status === "waiting_for_interaction" ? "waiting" : status;
 
 function JsonBlock(props: { readonly value: string | null }) {
   if (!props.value) return <p className="text-sm text-muted-foreground">None</p>;
@@ -76,7 +87,7 @@ function RunDetail(props: { readonly runId: string | null }) {
                 <h2 className="mt-1 text-lg font-semibold">Run detail</h2>
               </div>
               <Badge variant="outline" className={statusClass(run.status)}>
-                {run.status}
+                {statusLabel(run.status)}
               </Badge>
             </div>
 
@@ -195,7 +206,7 @@ export function RunsPage() {
               <SelectContent>
                 {STATUS_OPTIONS.map((option) => (
                   <SelectItem key={option} value={option}>
-                    {option === "all" ? "All statuses" : option}
+                    {option === "all" ? "All statuses" : statusLabel(option)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -256,7 +267,7 @@ export function RunsPage() {
                         <span className="min-w-0">
                           <span className="flex items-center gap-2">
                             <Badge variant="outline" className={statusClass(run.status)}>
-                              {run.status}
+                              {statusLabel(run.status)}
                             </Badge>
                             <span className="truncate font-mono text-xs text-muted-foreground">
                               {run.id}
