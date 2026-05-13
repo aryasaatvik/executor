@@ -163,6 +163,7 @@
         "@executor-js/integrations-registry": "workspace:*",
         "@executor-js/plugin-desktop-settings": "workspace:*",
         "@executor-js/plugin-example": "workspace:*",
+        "@executor-js/plugin-execution-history": "workspace:*",
         "@executor-js/plugin-file-secrets": "workspace:*",
         "@executor-js/plugin-google-discovery": "workspace:*",
         "@executor-js/plugin-graphql": "workspace:*",
@@ -637,6 +638,41 @@
         "react": "catalog:",
       },
       "optionalPeers": [
+        "react",
+      ],
+    },
+    "packages/plugins/execution-history": {
+      "name": "@executor-js/plugin-execution-history",
+      "version": "1.4.27",
+      "dependencies": {
+        "@executor-js/sdk": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/atom-react": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "@executor-js/storage-core": "workspace:*",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "bun-types": "catalog:",
+        "react": "catalog:",
+        "tsup": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@effect/atom-react": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "@tanstack/react-router": "catalog:",
+        "react": "catalog:",
+      },
+      "optionalPeers": [
+        "@effect/atom-react",
+        "@executor-js/api",
+        "@executor-js/react",
+        "@tanstack/react-router",
         "react",
       ],
     },
@@ -1378,6 +1414,8 @@
     "@executor-js/plugin-desktop-settings": ["@executor-js/plugin-desktop-settings@workspace:packages/plugins/desktop-settings"],
 
     "@executor-js/plugin-example": ["@executor-js/plugin-example@workspace:packages/plugins/example"],
+
+    "@executor-js/plugin-execution-history": ["@executor-js/plugin-execution-history@workspace:packages/plugins/execution-history"],
 
     "@executor-js/plugin-file-secrets": ["@executor-js/plugin-file-secrets@workspace:packages/plugins/file-secrets"],
 

@@ -30,6 +30,7 @@
     "@executor-js/integrations-registry": "workspace:*",
     "@executor-js/plugin-desktop-settings": "workspace:*",
     "@executor-js/plugin-example": "workspace:*",
+    "@executor-js/plugin-execution-history": "workspace:*",
     "@executor-js/plugin-file-secrets": "workspace:*",
     "@executor-js/plugin-google-discovery": "workspace:*",
     "@executor-js/plugin-graphql": "workspace:*",
