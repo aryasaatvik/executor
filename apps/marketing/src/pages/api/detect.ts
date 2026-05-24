@@ -1,6 +1,7 @@
 import type { APIRoute } from "astro";
 import { Effect } from "effect";
-import { createExecutor, makeTestConfig, type Tool } from "@executor-js/sdk";
+import { createExecutor, type Tool } from "@executor-js/sdk";
+import { makeTestConfig } from "@executor-js/sdk/testing";
 import { openApiHttpPlugin } from "@executor-js/plugin-openapi/api";
 import { graphqlHttpPlugin } from "@executor-js/plugin-graphql/api";
 import { googleDiscoveryHttpPlugin } from "@executor-js/plugin-google-discovery/api";
@@ -84,13 +85,16 @@ export const POST: APIRoute = async ({ request }) => {
         // Add source to register its tools (Google Discovery needs auth so skip)
         if (match.kind === "openapi") {
           yield* executor.openapi.addSpec({
-            spec: match.endpoint,
+            spec: { kind: "url", url: match.endpoint },
+            name: match.name,
             namespace: match.namespace,
+            baseUrl: match.endpoint,
             scope: "test-scope",
           });
         } else if (match.kind === "graphql") {
           yield* executor.graphql.addSource({
             endpoint: match.endpoint,
+            name: match.name,
             namespace: match.namespace,
             scope: "test-scope",
           });

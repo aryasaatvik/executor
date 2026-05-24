@@ -1,6 +1,6 @@
 {
   "name": "@executor-js/plugin-openapi",
-  "version": "1.4.26",
+  "version": "1.4.33",
   "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/plugins/openapi",
   "bugs": {
     "url": "https://github.com/RhysSullivan/executor/issues"
@@ -73,7 +73,6 @@
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
     "@executor-js/react": "workspace:*",
-    "@executor-js/storage-core": "workspace:*",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "bun-types": "catalog:",

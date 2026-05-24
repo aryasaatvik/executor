@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { PlusIcon } from "lucide-react";
-import type { ScopeId } from "@executor-js/sdk";
+import type { ScopeId } from "@executor-js/sdk/shared";
 
 import { Button } from "../components/button";
 import {
@@ -9,6 +9,8 @@ import {
   CardStackEmpty,
   CardStackEntry,
 } from "../components/card-stack";
+import { Field, FieldGroup, FieldLabel } from "../components/field";
+import { Input } from "../components/input";
 import {
   defaultHeaderAuthPresets,
   type HeaderAuthPreset,
@@ -41,11 +43,11 @@ export interface HeadersListProps {
   readonly sourceName?: string;
   /** Inline-created secrets are written to this explicit scope. */
   readonly targetScope: ScopeId;
-  /** Scope choices shown only inside the inline "+ New secret" form. */
+  /** Scope choices available for where this source credential is used. */
   readonly credentialScopeOptions?: readonly CredentialTargetScopeOption[];
   /** Scope choices for where this source credential is used. */
   readonly bindingScopeOptions?: readonly CredentialTargetScopeOption[];
-  readonly restrictSecretsToTargetScope?: boolean;
+  readonly defaultValueKind?: HeaderState["valueKind"];
 }
 
 export function HeadersList({
@@ -61,9 +63,8 @@ export function HeadersList({
   rowPreviewComponent,
   sourceName,
   targetScope,
-  credentialScopeOptions,
   bindingScopeOptions,
-  restrictSecretsToTargetScope,
+  defaultValueKind = "secret",
 }: HeadersListProps) {
   const [picking, setPicking] = useState(false);
   const canAddMore = !singleHeader || headers.length === 0;
@@ -84,6 +85,7 @@ export function HeadersList({
         prefix: preset.prefix,
         presetKey: preset.key,
         secretId: null,
+        valueKind: preset.valueKind ?? defaultValueKind,
         targetScope,
       },
     ]);
@@ -97,6 +99,8 @@ export function HeadersList({
       secretId: string | null;
       prefix?: string;
       presetKey?: string;
+      valueKind?: HeaderState["valueKind"];
+      literalValue?: string;
       targetScope?: ScopeId;
       secretScope?: ScopeId;
     }>,
@@ -132,13 +136,10 @@ export function HeadersList({
         ) : (
           <>
             {headers.map((header, index) => (
-              <SecretHeaderAuthRow
+              <HeaderRow
                 key={index}
-                name={header.name}
-                prefix={header.prefix}
-                presetKey={header.presetKey}
-                secretId={header.secretId}
-                secretScope={header.secretScope}
+                header={header}
+                targetScope={targetScope}
                 onChange={(update) => updateHeader(index, update)}
                 onSelectSecret={(secretId, scopeId) =>
                   updateHeader(index, {
@@ -149,10 +150,7 @@ export function HeadersList({
                 onRemove={singleHeader ? undefined : () => removeHeader(index)}
                 existingSecrets={existingSecrets}
                 sourceName={sourceName}
-                targetScope={header.targetScope ?? targetScope}
-                credentialScopeOptions={credentialScopeOptions}
                 bindingScopeOptions={bindingScopeOptions}
-                restrictSecretsToTargetScope={restrictSecretsToTargetScope}
                 copy={rowCopy}
                 previewComponent={rowPreviewComponent}
               />
@@ -164,6 +162,116 @@ export function HeadersList({
         )}
       </CardStackContent>
     </CardStack>
+  );
+}
+
+function HeaderRow(props: {
+  readonly header: HeaderState;
+  readonly targetScope: ScopeId;
+  readonly onChange: (
+    update: Partial<{
+      name: string;
+      secretId: string | null;
+      prefix?: string;
+      presetKey?: string;
+      valueKind?: HeaderState["valueKind"];
+      literalValue?: string;
+      targetScope?: ScopeId;
+      secretScope?: ScopeId;
+    }>,
+  ) => void;
+  readonly onSelectSecret: (secretId: string, scopeId?: ScopeId) => void;
+  readonly onRemove?: () => void;
+  readonly existingSecrets: readonly SecretPickerSecret[];
+  readonly sourceName?: string;
+  readonly bindingScopeOptions?: readonly CredentialTargetScopeOption[];
+  readonly copy?: Partial<SecretCredentialRowCopy>;
+  readonly previewComponent?: SecretCredentialPreviewComponent;
+}) {
+  if (props.header.valueKind === "text") {
+    return (
+      <TextHeaderRow
+        name={props.header.name}
+        value={props.header.literalValue ?? ""}
+        onChange={(update) => props.onChange(update)}
+        onRemove={props.onRemove}
+        rowLabel={props.copy?.rowLabel}
+        nameLabel={props.copy?.nameLabel}
+        namePlaceholder={props.copy?.namePlaceholder}
+      />
+    );
+  }
+
+  return (
+    <SecretHeaderAuthRow
+      name={props.header.name}
+      prefix={props.header.prefix}
+      presetKey={props.header.presetKey}
+      secretId={props.header.secretId}
+      secretScope={props.header.secretScope}
+      onChange={props.onChange}
+      onSelectSecret={props.onSelectSecret}
+      onRemove={props.onRemove}
+      existingSecrets={props.existingSecrets}
+      sourceName={props.sourceName}
+      targetScope={props.header.targetScope ?? props.targetScope}
+      bindingScopeOptions={props.bindingScopeOptions}
+      copy={props.copy}
+      previewComponent={props.previewComponent}
+    />
+  );
+}
+
+function TextHeaderRow(props: {
+  readonly name: string;
+  readonly value: string;
+  readonly onChange: (update: { name?: string; literalValue?: string }) => void;
+  readonly onRemove?: () => void;
+  readonly rowLabel?: string;
+  readonly nameLabel?: string;
+  readonly namePlaceholder?: string;
+}) {
+  return (
+    <div className="space-y-2.5 px-4 py-3">
+      <div className="flex w-full items-center justify-between gap-4">
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          {props.rowLabel ?? "Header"}
+        </span>
+        {props.onRemove && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            className="text-muted-foreground hover:text-destructive"
+            onClick={props.onRemove}
+          >
+            Remove
+          </Button>
+        )}
+      </div>
+      <FieldGroup className="grid grid-cols-2 gap-3">
+        <Field>
+          <FieldLabel>{props.nameLabel ?? "Name"}</FieldLabel>
+          <Input
+            value={props.name}
+            onChange={(event) => props.onChange({ name: (event.target as HTMLInputElement).value })}
+            placeholder={props.namePlaceholder ?? "X-Organization-Id"}
+            className="font-mono"
+          />
+        </Field>
+        <Field>
+          <FieldLabel>Value</FieldLabel>
+          <Input
+            value={props.value}
+            onChange={(event) =>
+              props.onChange({ literalValue: (event.target as HTMLInputElement).value })
+            }
+            placeholder="workspace-id"
+            className="font-mono"
+          />
+        </Field>
+      </FieldGroup>
+    </div>
   );
 }
 

@@ -1,10 +1,11 @@
 {
   "name": "@executor-js/api",
-  "version": "1.4.14",
+  "version": "1.4.21",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./client": "./src/client.ts",
     "./server": "./src/server.ts"
   },
   "scripts": {
@@ -15,7 +16,6 @@
   "dependencies": {
     "@executor-js/execution": "workspace:*",
     "@executor-js/sdk": "workspace:*",
-    "@executor-js/storage-core": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

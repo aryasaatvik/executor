@@ -86,5 +86,56 @@ export const SourcesHandlers = HttpApiBuilder.group(ExecutorApi, "sources", (han
           }));
         }),
       ),
+    )
+    .handle("configure", ({ params: path, payload }) =>
+      capture(
+        Effect.gen(function* () {
+          const executor = yield* ExecutorService;
+          return yield* executor.sources.configure({
+            source: payload.source,
+            scope: payload.scope ?? path.scopeId,
+            type: payload.type,
+            config: payload.config,
+          });
+        }),
+      ),
+    )
+    .handle("listBindings", ({ params: path }) =>
+      capture(
+        Effect.gen(function* () {
+          const executor = yield* ExecutorService;
+          return yield* executor.sources.listBindings({
+            source: {
+              id: path.sourceId,
+              scope: path.sourceScopeId,
+            },
+          });
+        }),
+      ),
+    )
+    .handle("setBinding", ({ payload }) =>
+      capture(
+        Effect.gen(function* () {
+          const executor = yield* ExecutorService;
+          return yield* executor.sources.setBinding(payload);
+        }),
+      ),
+    )
+    .handle("removeBinding", ({ payload }) =>
+      capture(
+        Effect.gen(function* () {
+          const executor = yield* ExecutorService;
+          yield* executor.sources.removeBinding(payload);
+          return { removed: true };
+        }),
+      ),
+    )
+    .handle("replaceBindings", ({ payload }) =>
+      capture(
+        Effect.gen(function* () {
+          const executor = yield* ExecutorService;
+          return yield* executor.sources.replaceBindings(payload);
+        }),
+      ),
     ),
 );

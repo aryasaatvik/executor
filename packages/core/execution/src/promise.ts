@@ -47,6 +47,7 @@ export type ExecutionEngine = {
     executionId: string,
     response: ResumeResponse,
   ) => Promise<ExecutionResult | null>;
+  readonly getPausedExecution: (executionId: string) => Promise<PausedExecution | null>;
   readonly getDescription: () => Promise<string>;
 };
 
@@ -67,10 +68,12 @@ const toPromiseInvokeOptions = (options: EffectInvokeOptions): PromiseInvokeOpti
 
   return {
     onElicitation: (ctx) =>
-      onElicitation({
-        ...ctx,
-        toolId: ToolId.make(ctx.toolId),
-      }),
+      Effect.runPromise(
+        onElicitation({
+          ...ctx,
+          toolId: ToolId.make(ctx.toolId),
+        }),
+      ),
   };
 };
 
@@ -89,6 +92,12 @@ const wrapPromiseExecutor = (pe: PromiseExecutor): EffectExecutor => ({
     refresh: (input) => fromPromise(() => pe.sources.refresh(input)),
     detect: (url) => fromPromise(() => pe.sources.detect(url)),
     definitions: (id) => fromPromise(() => pe.sources.definitions(id)),
+    configure: (input) => fromPromise(() => pe.sources.configure(input)),
+    listBindings: (input) => fromPromise(() => pe.sources.listBindings(input)),
+    resolveBinding: (input) => fromPromise(() => pe.sources.resolveBinding(input)),
+    setBinding: (input) => fromPromise(() => pe.sources.setBinding(input)),
+    removeBinding: (input) => fromPromise(() => pe.sources.removeBinding(input)),
+    replaceBindings: (input) => fromPromise(() => pe.sources.replaceBindings(input)),
   },
   secrets: {
     get: (id) => fromPromise(() => pe.secrets.get(id)),
@@ -117,6 +126,7 @@ const wrapPromiseExecutor = (pe: PromiseExecutor): EffectExecutor => ({
   },
   credentialBindings: {
     listForSource: (input) => fromPromise(() => pe.credentialBindings.listForSource(input)),
+    resolveBinding: (input) => fromPromise(() => pe.credentialBindings.resolveBinding(input)),
     resolve: (input) => fromPromise(() => pe.credentialBindings.resolve(input)),
     set: (input) => fromPromise(() => pe.credentialBindings.set(input)),
     remove: (input) => fromPromise(() => pe.credentialBindings.remove(input)),
@@ -160,6 +170,7 @@ export const toPromiseExecutionEngine = <E extends Cause.YieldableError>(
     ),
   executeWithPause: (code) => Effect.runPromise(engine.executeWithPause(code)),
   resume: (executionId, response) => Effect.runPromise(engine.resume(executionId, response)),
+  getPausedExecution: (executionId) => Effect.runPromise(engine.getPausedExecution(executionId)),
   getDescription: () => Effect.runPromise(engine.getDescription),
 });
 

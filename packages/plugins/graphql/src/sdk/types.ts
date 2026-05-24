@@ -1,12 +1,10 @@
 import { Effect, Schema } from "effect";
 import {
   ConfiguredCredentialValue,
-  CredentialBindingValue,
   credentialSlotKey,
-  ScopedSecretCredentialInput,
   SecretBackedValue,
-  ScopeId,
-} from "@executor-js/sdk/core";
+} from "@executor-js/sdk/shared";
+import { HttpConfiguredValueInput, HttpCredentialInput } from "@executor-js/sdk/http-source";
 
 // ---------------------------------------------------------------------------
 // GraphQL operation kind
@@ -73,11 +71,9 @@ export type QueryParamValue = typeof QueryParamValue.Type;
 
 export const ConfiguredGraphqlCredentialValue = ConfiguredCredentialValue;
 export type ConfiguredGraphqlCredentialValue = typeof ConfiguredGraphqlCredentialValue.Type;
-export const GraphqlCredentialInput = Schema.Union([
-  ScopedSecretCredentialInput,
-  HeaderValue,
-  ConfiguredGraphqlCredentialValue,
-]);
+export const GraphqlConfiguredValueInput = HttpConfiguredValueInput;
+export type GraphqlConfiguredValueInput = typeof GraphqlConfiguredValueInput.Type;
+export const GraphqlCredentialInput = HttpCredentialInput;
 export type GraphqlCredentialInput = typeof GraphqlCredentialInput.Type;
 
 export const graphqlHeaderSlot = (name: string): string => credentialSlotKey("header", name);
@@ -99,36 +95,18 @@ export const GraphqlSourceAuth = Schema.Union([
 export type GraphqlSourceAuth = typeof GraphqlSourceAuth.Type;
 
 export const GraphqlSourceAuthInput = Schema.Union([
-  GraphqlSourceAuth,
   Schema.Struct({
-    kind: Schema.Literal("oauth2"),
-    connectionId: Schema.String,
+    kind: Schema.Literal("none"),
+  }),
+  Schema.Struct({
+    oauth2: Schema.optional(
+      Schema.Struct({
+        connection: Schema.optional(HttpCredentialInput),
+      }),
+    ),
   }),
 ]);
 export type GraphqlSourceAuthInput = typeof GraphqlSourceAuthInput.Type;
-
-export const GraphqlSourceBindingValue = CredentialBindingValue;
-export type GraphqlSourceBindingValue = typeof GraphqlSourceBindingValue.Type;
-
-export const GraphqlSourceBindingInput = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScope: ScopeId,
-  scope: ScopeId,
-  slot: Schema.String,
-  value: GraphqlSourceBindingValue,
-});
-export type GraphqlSourceBindingInput = typeof GraphqlSourceBindingInput.Type;
-
-export const GraphqlSourceBindingRef = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScopeId: ScopeId,
-  scopeId: ScopeId,
-  slot: Schema.String,
-  value: GraphqlSourceBindingValue,
-  createdAt: Schema.Date,
-  updatedAt: Schema.Date,
-});
-export type GraphqlSourceBindingRef = typeof GraphqlSourceBindingRef.Type;
 
 export const InvocationConfig = Schema.Struct({
   /** The GraphQL endpoint URL */

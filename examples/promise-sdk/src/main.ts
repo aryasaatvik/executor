@@ -1,8 +1,9 @@
 /**
  * Example: Promise-based executor SDK with MCP, OpenAPI, and GraphQL
- * — no Effect knowledge needed. In-memory stores, runs anywhere.
+ * — no Effect knowledge or database setup needed. Uses the SDK's
+ * ephemeral in-memory FumaDB backend by default.
  */
-import { createExecutor, SecretId, SetSecretInput } from "@executor-js/sdk/promise";
+import { createExecutor } from "@executor-js/sdk/promise";
 import { mcpPlugin } from "@executor-js/plugin-mcp/promise";
 import { openApiPlugin } from "@executor-js/plugin-openapi/promise";
 import { graphqlPlugin } from "@executor-js/plugin-graphql/promise";
@@ -11,9 +12,11 @@ import { graphqlPlugin } from "@executor-js/plugin-graphql/promise";
 // 1. Create the executor with all plugins
 // ---------------------------------------------------------------------------
 
+const plugins = [mcpPlugin(), openApiPlugin(), graphqlPlugin()] as const;
+
 const executor = await createExecutor({
   scopes: [{ id: "my-app", name: "my-app" }],
-  plugins: [mcpPlugin(), openApiPlugin(), graphqlPlugin()] as const,
+  plugins,
   onElicitation: "accept-all",
 });
 
@@ -41,9 +44,14 @@ await executor.mcp.addSource({
 // ---------------------------------------------------------------------------
 
 await executor.openapi.addSpec({
-  spec: "https://petstore3.swagger.io/api/v3/openapi.json",
+  spec: {
+    kind: "url",
+    url: "https://petstore3.swagger.io/api/v3/openapi.json",
+  },
   namespace: "petstore",
   scope: "my-app",
+  name: "Petstore",
+  baseUrl: "https://petstore3.swagger.io/api/v3",
 });
 
 // With auth headers (static or secret-backed)
@@ -64,6 +72,7 @@ await executor.openapi.addSpec({
 
 await executor.graphql.addSource({
   endpoint: "https://graphql.anilist.co",
+  name: "AniList",
   namespace: "anilist",
   scope: "my-app",
 });
@@ -98,14 +107,12 @@ if (anilistTool) {
 // 7. Secrets — shared across all plugins
 // ---------------------------------------------------------------------------
 
-await executor.secrets.set(
-  SetSecretInput.make({
-    id: SecretId.make("api-key"),
-    scope: "my-app" as SetSecretInput["scope"],
-    name: "Shared API Key",
-    value: "sk_...",
-  }),
-);
+await executor.secrets.set({
+  id: "api-key",
+  scope: "my-app",
+  name: "Shared API Key",
+  value: "sk_...",
+});
 
 const resolved = await executor.secrets.get("api-key");
 console.log("Secret:", resolved);

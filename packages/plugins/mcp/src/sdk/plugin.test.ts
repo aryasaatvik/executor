@@ -1,7 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Result } from "effect";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 
 import {
   ConnectionId,
@@ -13,14 +11,30 @@ import {
   OAUTH2_PROVIDER_KEY,
   createExecutor,
   definePlugin,
-  makeTestConfig,
   type SecretProvider,
 } from "@executor-js/sdk";
+import { makeTestConfig } from "@executor-js/sdk/testing";
 
 import { mcpPlugin, userFacingProbeMessage } from "./plugin";
-import { MCP_OAUTH_CONNECTION_SLOT } from "./types";
+import {
+  MCP_OAUTH_CLIENT_ID_SLOT,
+  MCP_OAUTH_CLIENT_SECRET_SLOT,
+  MCP_OAUTH_CONNECTION_SLOT,
+} from "./types";
 import { extractManifestFromListToolsResult, deriveMcpNamespace, joinToolPath } from "./manifest";
-import { serveMcpServer } from "../testing";
+import { makeAnnotationsMcpServer, makeGreetingMcpServer, serveMcpServer } from "../testing";
+
+const mcpOAuth2Config = {
+  kind: "oauth2" as const,
+  securitySchemeName: "OAuth2",
+  flow: "authorizationCode" as const,
+  tokenUrl: "https://auth.example.test/token",
+  authorizationUrl: "https://auth.example.test/authorize",
+  clientIdSlot: MCP_OAUTH_CLIENT_ID_SLOT,
+  clientSecretSlot: MCP_OAUTH_CLIENT_SECRET_SLOT,
+  connectionSlot: MCP_OAUTH_CONNECTION_SLOT,
+  scopes: [],
+};
 
 // ---------------------------------------------------------------------------
 // Memory secrets plugin — without a writable provider in the stack,
@@ -201,24 +215,28 @@ describe("mcpPlugin", () => {
       expect(executor.mcp.removeSource).toBeTypeOf("function");
       expect(executor.mcp.refreshSource).toBeTypeOf("function");
       expect(executor.mcp.probeEndpoint).toBeTypeOf("function");
+      expect(executor.mcp.getSource).toBeTypeOf("function");
+      expect((yield* executor.tools.list()).map((tool) => tool.id)).toContain(
+        "executor.mcp.configureSource",
+      );
       expect(executor.oauth.start).toBeTypeOf("function");
       expect(executor.oauth.complete).toBeTypeOf("function");
     }),
   );
 
-  it.effect("sources list is initially empty", () =>
+  it.effect("sources list has no configured MCP sources initially", () =>
     Effect.gen(function* () {
       const executor = yield* createExecutor(makeTestConfig({ plugins: [mcpPlugin()] as const }));
       const sources = yield* executor.sources.list();
-      expect(sources).toHaveLength(0);
+      expect(sources.filter((source) => !source.runtime)).toHaveLength(0);
     }),
   );
 
-  it.effect("tools list is initially empty", () =>
+  it.effect("tools list has no configured MCP source tools initially", () =>
     Effect.gen(function* () {
       const executor = yield* createExecutor(makeTestConfig({ plugins: [mcpPlugin()] as const }));
       const tools = yield* executor.tools.list();
-      expect(tools).toHaveLength(0);
+      expect(tools.filter((tool) => !tool.id.startsWith("executor.mcp."))).toHaveLength(0);
     }),
   );
 
@@ -254,13 +272,176 @@ describe("mcpPlugin", () => {
 
       const tools = yield* executor.tools.list();
       expect(tools.filter((t) => t.sourceId === "broken_source")).toHaveLength(0);
+      const inspected = yield* executor.tools.invoke(
+        "executor.mcp.getSource",
+        { namespace: "broken_source", scope: "test-scope" },
+        { onElicitation: "accept-all" },
+      );
+      expect(inspected).toMatchObject({
+        ok: true,
+        data: { source: { namespace: "broken_source", scope: "test-scope" } },
+      });
+    }),
+  );
+
+  it.effect("static addSource reports saved remote source when discovery fails", () =>
+    Effect.gen(function* () {
+      const executor = yield* createExecutor(makeTestConfig({ plugins: [mcpPlugin()] as const }));
+
+      const result = yield* executor.tools.invoke(
+        "executor.mcp.addSource",
+        {
+          transport: "remote",
+          name: "broken static",
+          endpoint: "http://127.0.0.1:1/mcp",
+          remoteTransport: "auto",
+          namespace: "broken_static_source",
+        },
+        { onElicitation: "accept-all" },
+      );
+
+      expect(result).toMatchObject({
+        ok: true,
+        data: {
+          namespace: "broken_static_source",
+          source: { id: "broken_static_source", scope: "test-scope" },
+          toolCount: 0,
+          discovery: {
+            status: "failed",
+          },
+        },
+      });
+
+      const source = yield* executor.mcp.getSource("broken_static_source", "test-scope");
+      expect(source?.namespace).toBe("broken_static_source");
+    }),
+  );
+
+  it.effect("static probeEndpoint returns actionable tool failures", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({ plugins: [mcpPlugin()] as const });
+      const executor = yield* createExecutor(config);
+
+      const result = yield* executor.tools.invoke("executor.mcp.probeEndpoint", {
+        endpoint: "http://127.0.0.1:1/mcp",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "mcp_connection_failed",
+        },
+      });
+
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
+    }),
+  );
+
+  it.effect("uses initial credential bindings for add-time tool discovery", () =>
+    Effect.gen(function* () {
+      const server = yield* serveMcpServer(makeGreetingMcpServer, {
+        auth: {
+          validateAuthorization: (authorization) =>
+            Effect.succeed(authorization === "Bearer secret-token"),
+        },
+      });
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [makeMemorySecretsPlugin()(), mcpPlugin()] as const }),
+      );
+      yield* executor.secrets.set({
+        id: SecretId.make("mcp-token"),
+        scope: ScopeId.make("test-scope"),
+        name: "MCP token",
+        value: "secret-token",
+        provider: "memory",
+      });
+
+      const result = yield* executor.mcp.addSource({
+        transport: "remote",
+        scope: "test-scope",
+        name: "authenticated",
+        endpoint: server.endpoint,
+        namespace: "authenticated_mcp",
+        headers: {
+          Authorization: { kind: "secret", prefix: "Bearer " },
+        },
+        credentials: {
+          scope: "test-scope",
+          headers: {
+            Authorization: { kind: "secret", secretId: "mcp-token" },
+          },
+        },
+      });
+
+      expect(result).toEqual({ toolCount: 1, namespace: "authenticated_mcp" });
+      const requests = yield* server.requests;
+      expect(requests.some((request) => request.authorization === "Bearer secret-token")).toBe(
+        true,
+      );
+    }),
+  );
+
+  it.effect("marks source oauth-backed when add-time credentials include oauth", () =>
+    Effect.gen(function* () {
+      const server = yield* serveMcpServer(makeGreetingMcpServer, {
+        auth: {
+          validateAuthorization: (authorization) =>
+            Effect.succeed(authorization === "Bearer oauth-token"),
+        },
+      });
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [makeMemorySecretsPlugin()(), mcpPlugin()] as const }),
+      );
+      const connectionId = ConnectionId.make("mcp-oauth2-initial");
+      yield* executor.connections.create(
+        CreateConnectionInput.make({
+          id: connectionId,
+          scope: ScopeId.make("test-scope"),
+          provider: OAUTH2_PROVIDER_KEY,
+          identityLabel: "Initial MCP OAuth",
+          accessToken: TokenMaterial.make({
+            secretId: SecretId.make(`${connectionId}.access_token`),
+            name: "Initial MCP OAuth Access Token",
+            value: "oauth-token",
+          }),
+          refreshToken: null,
+          expiresAt: null,
+          oauthScope: null,
+          providerState: null,
+        }),
+      );
+
+      const result = yield* executor.mcp.addSource({
+        transport: "remote",
+        scope: "test-scope",
+        name: "initial oauth",
+        endpoint: server.endpoint,
+        namespace: "initial_oauth_mcp",
+        credentials: {
+          scope: "test-scope",
+          auth: {
+            oauth2: {
+              connection: { kind: "connection", connectionId },
+            },
+          },
+        },
+      });
+
+      expect(result).toEqual({ toolCount: 1, namespace: "initial_oauth_mcp" });
+      const stored = yield* executor.mcp.getSource("initial_oauth_mcp", "test-scope");
+      expect(stored?.config.transport).toBe("remote");
+      if (stored?.config.transport !== "remote") return;
+      expect(stored.config.auth.kind).toBe("oauth2");
+      if (stored.config.auth.kind !== "oauth2") return;
+      expect(stored.config.auth.connectionSlot).toBe(MCP_OAUTH_CONNECTION_SLOT);
     }),
   );
 
   // -------------------------------------------------------------------------
   // Multi-scope shadowing — regression suite covering the bug class where
-  // store reads/writes that don't pin scope_id collapse onto whichever row
-  // the scoped adapter's `scope_id IN (stack)` filter sees first. Each
+  // store reads/writes that don't pin scope_id collapse onto whichever visible
+  // row wins first. Each
   // scenario is reproducible against the pre-fix store.
   //
   // MCP discovery runs on addSource against an unreachable endpoint so
@@ -373,7 +554,7 @@ describe("mcpPlugin", () => {
     }),
   );
 
-  it.effect("updateSource on user shadow does not mutate the org row", () =>
+  it.effect("sources.configure on user shadow does not mutate the org row", () =>
     Effect.gen(function* () {
       const executor = yield* createExecutor(
         makeTestConfig({
@@ -393,9 +574,14 @@ describe("mcpPlugin", () => {
         endpoint: "http://127.0.0.1:1/user-mcp",
       });
 
-      yield* executor.mcp.updateSource("shared", USER_SCOPE, {
-        name: "User Renamed",
-        endpoint: "http://127.0.0.1:1/user-new-mcp",
+      yield* executor.sources.configure({
+        source: { id: "shared", scope: ScopeId.make(USER_SCOPE) },
+        scope: ScopeId.make(USER_SCOPE),
+        type: "mcp",
+        config: {
+          name: "User Renamed",
+          endpoint: "http://127.0.0.1:1/user-new-mcp",
+        },
       });
 
       const userView = yield* executor.mcp.getSource("shared", USER_SCOPE);
@@ -412,7 +598,7 @@ describe("mcpPlugin", () => {
     }),
   );
 
-  it.effect("updateSource removes bindings for credential slots no longer present", () =>
+  it.effect("sources.configure removes bindings for credential slots no longer present", () =>
     Effect.gen(function* () {
       const executor = yield* createExecutor(
         makeTestConfig({
@@ -435,33 +621,44 @@ describe("mcpPlugin", () => {
           name: "stale binding",
           endpoint: "http://127.0.0.1:1/mcp",
           namespace: "stale_binding",
-          credentialTargetScope: "test-scope",
-          auth: {
-            kind: "header",
-            headerName: "Authorization",
-            secretId: "old-token",
-            prefix: "Bearer ",
+          headers: {
+            Authorization: { kind: "secret", prefix: "Bearer " },
           },
         })
         .pipe(Effect.result);
-
-      yield* executor.mcp.updateSource("stale_binding", "test-scope", {
-        auth: { kind: "none" },
+      yield* executor.sources.configure({
+        source: { id: "stale_binding", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: {
+          headers: {
+            Authorization: { kind: "secret", secretId: "old-token", prefix: "Bearer " },
+          },
+        },
       });
 
-      const bindings = yield* executor.mcp.listSourceBindings("stale_binding", "test-scope");
+      yield* executor.sources.configure({
+        source: { id: "stale_binding", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: { headers: {} },
+      });
+
+      const bindings = yield* executor.sources.listBindings({
+        source: { id: "stale_binding", scope: ScopeId.make("test-scope") },
+      });
       expect(bindings).toEqual([]);
     }),
   );
 
   // -------------------------------------------------------------------------
-  // updateSource must persist auth changes to the config file too —
+  // sources.configure must persist auth changes to the config file too —
   // otherwise the next boot replays the file's stale auth and silently
   // overwrites the DB. Symmetric with addSource/removeSource which
   // already write through.
   // -------------------------------------------------------------------------
 
-  it.effect("updateSource writes auth changes back to the config file", () =>
+  it.effect("sources.configure writes auth changes back to the config file", () =>
     Effect.gen(function* () {
       const calls: Array<{ op: "upsert" | "remove"; payload: unknown }> = [];
       const stubSink = {
@@ -498,25 +695,32 @@ describe("mcpPlugin", () => {
           name: "Sentry",
           endpoint: "http://127.0.0.1:1/sentry-mcp",
           namespace: "sentry",
-          credentialTargetScope: "test-scope",
-          auth: {
-            kind: "header",
-            headerName: "Authorization",
-            secretId: "sentry-token-old",
-            prefix: "Bearer ",
+          headers: {
+            Authorization: { kind: "secret", prefix: "Bearer " },
           },
         })
         .pipe(Effect.result);
+      yield* executor.sources.configure({
+        source: { id: "sentry", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: {
+          headers: {
+            Authorization: { kind: "secret", secretId: "sentry-token-old", prefix: "Bearer " },
+          },
+        },
+      });
 
       calls.length = 0; // ignore the addSource upsert; we're asserting on update
 
-      yield* executor.mcp.updateSource("sentry", "test-scope", {
-        credentialTargetScope: ScopeId.make("test-scope"),
-        auth: {
-          kind: "header",
-          headerName: "Authorization",
-          secretId: "sentry-token-new",
-          prefix: "Bearer ",
+      yield* executor.sources.configure({
+        source: { id: "sentry", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: {
+          headers: {
+            Authorization: { kind: "secret", secretId: "sentry-token-new", prefix: "Bearer " },
+          },
         },
       });
 
@@ -526,11 +730,11 @@ describe("mcpPlugin", () => {
         kind: "mcp",
         transport: "remote",
         namespace: "sentry",
-        auth: {
-          kind: "header",
-          headerName: "Authorization",
-          secret: "secret-public-ref:sentry-token-new",
-          prefix: "Bearer ",
+        headers: {
+          Authorization: {
+            value: "secret-public-ref:sentry-token-new",
+            prefix: "Bearer ",
+          },
         },
       });
     }),
@@ -565,10 +769,7 @@ describe("mcpPlugin", () => {
           endpoint: "http://127.0.0.1:1/deferred-mcp",
           remoteTransport: "auto",
           namespace: "deferred_oauth",
-          auth: {
-            kind: "oauth2",
-            connectionSlot: MCP_OAUTH_CONNECTION_SLOT,
-          },
+          oauth2: mcpOAuth2Config,
         })
         .pipe(Effect.result);
 
@@ -610,10 +811,7 @@ describe("mcpPlugin", () => {
           endpoint: "http://127.0.0.1:1/needs-auth-mcp",
           remoteTransport: "auto",
           namespace: "needs_auth",
-          auth: {
-            kind: "oauth2",
-            connectionSlot: MCP_OAUTH_CONNECTION_SLOT,
-          },
+          oauth2: mcpOAuth2Config,
         })
         .pipe(Effect.result);
 
@@ -666,10 +864,7 @@ describe("mcpPlugin", () => {
           endpoint: "http://127.0.0.1:1/team-mcp",
           remoteTransport: "auto",
           namespace: "team_mcp",
-          auth: {
-            kind: "oauth2",
-            connectionSlot: MCP_OAUTH_CONNECTION_SLOT,
-          },
+          oauth2: mcpOAuth2Config,
         })
         .pipe(Effect.result);
 
@@ -707,11 +902,10 @@ describe("mcpPlugin", () => {
           },
         }),
       );
-      yield* executor.mcp.setSourceBinding({
-        sourceId: "team_mcp",
-        sourceScope: ORG_SCOPE_ID,
+      yield* executor.sources.setBinding({
+        source: { id: "team_mcp", scope: ORG_SCOPE_ID },
         scope: USER_SCOPE_ID,
-        slot: MCP_OAUTH_CONNECTION_SLOT,
+        slotKey: MCP_OAUTH_CONNECTION_SLOT,
         value: { kind: "connection", connectionId },
       });
 
@@ -772,21 +966,30 @@ describe("mcpPlugin", () => {
           name: "header-auth",
           endpoint: "http://127.0.0.1:1/mcp",
           namespace: "header_auth_source",
-          credentialTargetScope: "test-scope",
-          auth: {
-            kind: "header",
-            headerName: "X-API-Key",
-            secretId: "shared-key",
+          headers: {
+            "X-API-Key": { kind: "secret" },
+            "X-Trace": { kind: "secret" },
           },
-          headers: { "X-Trace": { secretId: "shared-key" } },
-          queryParams: { ping: { secretId: "other-secret" } },
+          queryParams: { ping: { kind: "secret" } },
         })
         .pipe(Effect.result);
+      yield* executor.sources.configure({
+        source: { id: "header_auth_source", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: {
+          headers: {
+            "X-API-Key": { kind: "secret", secretId: "shared-key" },
+            "X-Trace": { kind: "secret", secretId: "shared-key" },
+          },
+          queryParams: { ping: { kind: "secret", secretId: "other-secret" } },
+        },
+      });
 
       const usages = yield* executor.secrets.usages(SecretId.make("shared-key"));
       expect(usages.length).toBe(2);
       const slots = usages.map((u) => u.slot).sort();
-      expect(slots).toEqual(["auth:header", "header:x-trace"]);
+      expect(slots).toEqual(["header:x-api-key", "header:x-trace"]);
       expect(usages.every((u) => u.pluginId === "mcp")).toBe(true);
       expect(usages.every((u) => u.ownerKind === "credential-binding")).toBe(true);
 
@@ -834,10 +1037,21 @@ describe("mcpPlugin", () => {
           name: "oauth-source",
           endpoint: "http://127.0.0.1:1/mcp",
           namespace: "oauth_ref",
-          credentialTargetScope: "test-scope",
-          auth: { kind: "oauth2", connectionId: "conn-xyz" },
+          oauth2: mcpOAuth2Config,
         })
         .pipe(Effect.result);
+      yield* executor.sources.configure({
+        source: { id: "oauth_ref", scope: ScopeId.make("test-scope") },
+        scope: ScopeId.make("test-scope"),
+        type: "mcp",
+        config: {
+          auth: {
+            oauth2: {
+              connection: { kind: "connection", connectionId: "conn-xyz" },
+            },
+          },
+        },
+      });
 
       const usages = yield* executor.connections.usages(ConnectionId.make("conn-xyz"));
       expect(usages.length).toBe(1);
@@ -855,52 +1069,7 @@ describe("mcpPlugin", () => {
 // destructiveHint → requiresApproval (end-to-end with a real local server)
 // ---------------------------------------------------------------------------
 
-const createAnnotationsTestServer = () => {
-  const mcpServer = new McpServer(
-    { name: "annotations-test-server", version: "1.0.0" },
-    { capabilities: {} },
-  );
-
-  mcpServer.registerTool(
-    "delete",
-    {
-      description: "A destructive tool",
-      inputSchema: { id: z.string() },
-      annotations: { destructiveHint: true },
-    },
-    async () => ({ content: [] }),
-  );
-
-  mcpServer.registerTool(
-    "delete_titled",
-    {
-      description: "A destructive tool with a title annotation",
-      inputSchema: { id: z.string() },
-      annotations: { destructiveHint: true, title: "Delete dataset" },
-    },
-    async () => ({ content: [] }),
-  );
-
-  mcpServer.registerTool(
-    "list",
-    {
-      description: "A read-only tool",
-      inputSchema: {},
-      annotations: { readOnlyHint: true },
-    },
-    async () => ({ content: [] }),
-  );
-
-  mcpServer.registerTool(
-    "ping",
-    { description: "An unannotated tool", inputSchema: {} },
-    async () => ({ content: [] }),
-  );
-
-  return mcpServer;
-};
-
-const serveAnnotationsTestServer = serveMcpServer(createAnnotationsTestServer);
+const serveAnnotationsTestServer = serveMcpServer(makeAnnotationsMcpServer);
 
 describe("MCP destructiveHint → requiresApproval", () => {
   it.effect("destructiveHint becomes requiresApproval, others stay false", () =>

@@ -27,6 +27,7 @@ const EXECUTOR_GITHUB_URL = (
   .replace(/^git\+/, "")
   .replace(/\.git$/, "");
 
+const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const APP_ROOT = fileURLToPath(new URL("../../packages/app/", import.meta.url));
 
 /**
@@ -113,6 +114,7 @@ export default defineConfig({
   define: {
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(EXECUTOR_VERSION),
     "import.meta.env.VITE_GITHUB_URL": JSON.stringify(EXECUTOR_GITHUB_URL),
+    "import.meta.env.VITE_EXECUTOR_DEV_CLI_CWD": JSON.stringify(REPO_ROOT),
     "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV ?? "development"),
   },
   resolve: {
@@ -121,6 +123,19 @@ export default defineConfig({
   server: {
     port: parseInt(process.env.PORT ?? "5173", 10),
     host: "127.0.0.1",
+    // When the CLI daemon spawns this vite as a child and proxies HTTP
+    // (EXECUTOR_DEV=1), the page is loaded from the daemon's port, but
+    // the daemon does not proxy WebSockets. Point the HMR client at
+    // vite's own port so the browser opens a WS directly to vite, side-
+    // stepping the daemon proxy. Without this, the client tries the
+    // daemon port and floods the console with reconnect errors.
+    hmr: process.env.EXECUTOR_DEV_VITE_PORT
+      ? {
+          host: "127.0.0.1",
+          clientPort: parseInt(process.env.EXECUTOR_DEV_VITE_PORT, 10),
+          protocol: "ws",
+        }
+      : undefined,
     watch: {
       // Workspace packages live under packages/ and are symlinked into
       // node_modules. Without this, chokidar treats them as ordinary

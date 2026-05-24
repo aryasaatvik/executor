@@ -9,8 +9,9 @@ import { sourceWriteKeys } from "@executor-js/react/api/reactivity-keys";
 import {
   HttpCredentialsEditor,
   httpCredentialsValid,
-  serializeScopedHttpCredentials,
+  serializeConfigureHttpCredentials,
   serializeHttpCredentials,
+  serializeTemplateHttpCredentials,
   type HttpCredentialsState,
 } from "@executor-js/react/plugins/http-credentials";
 import {
@@ -37,7 +38,7 @@ import { Spinner } from "@executor-js/react/components/spinner";
 import { addGraphqlSourceOptimistic } from "./atoms";
 import { initialGraphqlCredentials } from "./defaults";
 import { GraphqlSourceFields } from "./GraphqlSourceFields";
-import type { GraphqlCredentialInput } from "../sdk/types";
+import type { GraphqlConfiguredValueInput, GraphqlCredentialInput } from "../sdk/types";
 
 const ErrorMessage = Schema.Struct({ message: Schema.String });
 const decodeErrorMessage = Schema.decodeUnknownOption(ErrorMessage);
@@ -129,34 +130,54 @@ export default function AddGraphqlSource(props: {
   const handleAdd = async () => {
     setAdding(true);
     setAddError(null);
-    const { headers: headerMap, queryParams } = serializeScopedHttpCredentials(
-      credentials,
-      requestCredentialTargetScope,
-    );
+    const { headers: templateHeaders, queryParams: templateQueryParams } =
+      serializeTemplateHttpCredentials(credentials);
+    const { headers: configureHeaders, queryParams: configureQueryParams } =
+      serializeConfigureHttpCredentials(credentials, requestCredentialTargetScope);
+    const hasInitialCredentials =
+      Object.keys(configureHeaders).length > 0 ||
+      Object.keys(configureQueryParams).length > 0 ||
+      (authMode === "oauth2" && tokens);
 
     const { trimmedEndpoint, namespace, displayName } = sourceIdentity();
     const exit = await doAdd({
       params: { scopeId },
       payload: {
-        targetScope: scopeId,
         endpoint: trimmedEndpoint,
         name: displayName,
         namespace,
-        ...(Object.keys(headerMap).length > 0 ? { headers: headerMap } : {}),
-        ...(Object.keys(queryParams).length > 0
+        ...(Object.keys(templateHeaders).length > 0
+          ? { headers: templateHeaders as Record<string, GraphqlConfiguredValueInput> }
+          : {}),
+        ...(Object.keys(templateQueryParams).length > 0
           ? {
-              queryParams: queryParams as Record<string, GraphqlCredentialInput>,
+              queryParams: templateQueryParams as Record<string, GraphqlConfiguredValueInput>,
             }
           : {}),
-        credentialTargetScope:
-          authMode === "oauth2" && tokens
-            ? oauthCredentialTargetScope
-            : requestCredentialTargetScope,
-        ...(authMode === "oauth2" && tokens
+        ...(hasInitialCredentials
           ? {
-              auth: {
-                kind: "oauth2" as const,
-                connectionId: tokens.connectionId,
+              credentials: {
+                scope: requestCredentialTargetScope,
+                ...(Object.keys(configureHeaders).length > 0
+                  ? { headers: configureHeaders as Record<string, GraphqlCredentialInput> }
+                  : {}),
+                ...(Object.keys(configureQueryParams).length > 0
+                  ? {
+                      queryParams: configureQueryParams as Record<string, GraphqlCredentialInput>,
+                    }
+                  : {}),
+                ...(authMode === "oauth2" && tokens
+                  ? {
+                      auth: {
+                        oauth2: {
+                          connection: {
+                            kind: "connection" as const,
+                            connectionId: tokens.connectionId,
+                          },
+                        },
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),

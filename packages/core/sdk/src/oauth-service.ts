@@ -38,7 +38,7 @@
 import { Duration, Effect, Layer, Match, Option, Schema } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import type { StorageFailure, TypedAdapter } from "@executor-js/storage-core";
+import type { IFumaClient, StorageFailure } from "./fuma-runtime";
 
 import {
   ConnectionRefreshError,
@@ -50,7 +50,6 @@ import {
   type ConnectionRef,
 } from "./connections";
 import type { ConnectionProviderNotRegisteredError } from "./errors";
-import type { CoreSchema } from "./core-schema";
 import { ConnectionId, ScopeId, SecretId } from "./ids";
 import { SetSecretInput, type SecretRef } from "./secrets";
 import {
@@ -77,6 +76,10 @@ import {
   beginDynamicAuthorization,
   discoverAuthorizationServerMetadata,
   discoverProtectedResourceMetadata,
+  type BeginDynamicAuthorizationInput,
+  type OAuthAuthorizationServerMetadata,
+  type OAuthClientInformation,
+  type OAuthProtectedResourceMetadata,
 } from "./oauth-discovery";
 import {
   buildAuthorizationUrl,
@@ -88,7 +91,6 @@ import {
   type OAuthEndpointUrlPolicy,
   refreshAccessToken,
 } from "./oauth-helpers";
-import type { ScopedDBAdapter } from "./scoped-adapter";
 
 // ---------------------------------------------------------------------------
 // Session payload — persisted under `oauth2_session.payload` as opaque
@@ -112,6 +114,14 @@ const DynamicDcrSessionPayload = Schema.Struct({
   scopes: Schema.Array(Schema.String),
   resource: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultType(Effect.succeed(null))),
 });
+
+const PendingDynamicDcrSessionRows = Schema.Array(
+  Schema.Struct({
+    payload: Schema.Unknown,
+    expires_at: Schema.Union([Schema.Number, Schema.BigInt, Schema.String]),
+    created_at: Schema.Union([Schema.Date, Schema.String, Schema.Number]),
+  }),
+);
 
 const AuthorizationCodeSessionPayload = Schema.Struct({
   kind: Schema.Literal("authorization-code"),
@@ -143,14 +153,17 @@ const OAuthSessionPayload = Schema.Union([
   AuthorizationCodeSessionPayload,
 ]);
 type OAuthSessionPayload = typeof OAuthSessionPayload.Type;
+type PreviousDynamicAuthorizationState = BeginDynamicAuthorizationInput["previousState"];
 
 const decodeSessionPayload = Schema.decodeUnknownSync(OAuthSessionPayload);
 const encodeSessionPayload = Schema.encodeSync(OAuthSessionPayload);
+const isPendingDynamicDcrSessionRows = Schema.is(PendingDynamicDcrSessionRows);
 
 const UnknownFromJsonString = Schema.fromJsonString(Schema.Unknown);
 const decodeUnknownJsonOption = Schema.decodeUnknownOption(UnknownFromJsonString);
 
 const decodeProviderStateSync = Schema.decodeUnknownSync(OAuthProviderStateSchema);
+const decodeProviderStateOption = Schema.decodeUnknownOption(OAuthProviderStateSchema);
 const encodeProviderStateSync = Schema.encodeSync(OAuthProviderStateSchema);
 
 const coerceJson = (value: unknown): unknown => {
@@ -164,18 +177,12 @@ const decodeProviderState = (value: unknown): OAuthProviderState =>
 // ---------------------------------------------------------------------------
 // Service dependencies — the executor wires these up when it constructs
 // the service. Every dep is a narrow surface so the service stays
-// testable: point to an in-memory adapter + a secrets stub and every
+// testable: point to a FumaDB handle + a secrets stub and every
 // code path is exercisable.
 // ---------------------------------------------------------------------------
 
 export interface OAuthServiceDeps {
-  /** Typed core-schema adapter. Already scope-wrapped upstream so reads
-   *  fall through the scope stack; writes stamp the scope the caller
-   *  named (`tokenScope` on start input). */
-  readonly adapter: TypedAdapter<CoreSchema>;
-  /** Scoped adapter for opening transactions — the typed one doesn't
-   *  expose `.transaction` directly. */
-  readonly rawAdapter: ScopedDBAdapter;
+  readonly fuma: IFumaClient;
   /** Resolves client-id / client-secret refs at start + refresh time.
    *  A `null` return means "secret row is gone" and aborts the flow. */
   readonly secretsGet: (id: string) => Effect.Effect<string | null, StorageFailure>;
@@ -195,6 +202,10 @@ export interface OAuthServiceDeps {
   readonly connectionsCreate: (
     input: CreateConnectionInput,
   ) => Effect.Effect<ConnectionRef, ConnectionProviderNotRegisteredError | StorageFailure>;
+  /** Reads an existing Connection so dynamic-DCR retries can reuse the
+   *  registered OAuth client instead of registering a new client every
+   *  time the user restarts a browser flow. */
+  readonly connectionsGet?: (id: string) => Effect.Effect<ConnectionRef | null, StorageFailure>;
   /** Random session id generator. Tests override to make outputs
    *  deterministic. */
   readonly newSessionId?: () => string;
@@ -247,6 +258,7 @@ export const makeOAuth2Service = (
   const newSessionId = deps.newSessionId ?? defaultSessionId;
   const httpClientLayer = deps.httpClientLayer;
   const endpointUrlPolicy = deps.endpointUrlPolicy;
+  const connectionsGet = deps.connectionsGet ?? (() => Effect.succeed(null));
   const secretsGetResolved =
     deps.secretsGetResolved ??
     ((id: string) =>
@@ -260,6 +272,19 @@ export const makeOAuth2Service = (
     params.scopeId && deps.secretsGetAtScope
       ? deps.secretsGetAtScope(params.secretId, params.scopeId)
       : deps.secretsGet(params.secretId);
+  const secretsGetResolvedAtScope = (params: {
+    readonly secretId: string;
+    readonly scopeId?: string | null;
+  }) =>
+    params.scopeId && deps.secretsGetAtScope
+      ? deps
+          .secretsGetAtScope(params.secretId, params.scopeId)
+          .pipe(
+            Effect.map((value) =>
+              value === null ? null : { value, scopeId: params.scopeId ?? null },
+            ),
+          )
+      : secretsGetResolved(params.secretId);
 
   // -------------------------------------------------------------------
   // probe
@@ -367,17 +392,123 @@ export const makeOAuth2Service = (
   // -------------------------------------------------------------------
   // start — branches on strategy.kind
   // -------------------------------------------------------------------
+
+  const dynamicClientAuthMethod = (
+    state: Extract<OAuthProviderState, { kind: "dynamic-dcr" }>,
+  ): "none" | "client_secret_basic" | "client_secret_post" =>
+    state.clientSecretSecretId
+      ? state.clientAuth === "basic"
+        ? "client_secret_basic"
+        : "client_secret_post"
+      : "none";
+
+  const timestampMillis = (value: unknown): number => {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "string" || typeof value === "number") return new Date(value).getTime();
+    return 0;
+  };
+
+  const previousDynamicStateFromConnection = (
+    connectionId: string,
+  ): Effect.Effect<PreviousDynamicAuthorizationState | undefined, StorageFailure> =>
+    Effect.gen(function* () {
+      const existing = yield* connectionsGet(connectionId);
+      const state = existing?.providerState
+        ? Option.getOrNull(decodeProviderStateOption(coerceJson(existing.providerState)))
+        : null;
+      if (!state || state.kind !== "dynamic-dcr") return undefined;
+
+      const clientSecret =
+        state.clientSecretSecretId !== null
+          ? yield* getSecretFromRecordedScope({
+              secretId: state.clientSecretSecretId,
+              scopeId: state.clientSecretSecretScopeId ?? null,
+            })
+          : null;
+      if (state.clientSecretSecretId !== null && !clientSecret) return undefined;
+
+      return {
+        authorizationServerUrl: state.authorizationServerUrl ?? null,
+        authorizationServerMetadataUrl: state.authorizationServerMetadataUrl,
+        resource: state.resource ?? null,
+        scopes: state.scopes,
+        clientInformation: {
+          client_id: state.clientId,
+          token_endpoint_auth_method: dynamicClientAuthMethod(state),
+          ...(clientSecret ? { client_secret: clientSecret } : {}),
+        },
+      };
+    });
+
+  const previousDynamicStateFromPendingSession = (input: {
+    readonly connectionId: string;
+    readonly tokenScope: string;
+  }): Effect.Effect<PreviousDynamicAuthorizationState | undefined, StorageFailure> =>
+    Effect.gen(function* () {
+      const rowsRaw = yield* deps.fuma.use("oauth2_session.findReusableDynamicDcr", (db) =>
+        db.findMany("oauth2_session", {
+          where: (b) =>
+            b.and(
+              b("connection_id", "=", input.connectionId),
+              b("token_scope", "=", input.tokenScope),
+              b("strategy", "=", "dynamic-dcr"),
+            ),
+        }),
+      );
+      const rows = isPendingDynamicDcrSessionRows(rowsRaw) ? rowsRaw : [];
+
+      const reusable = rows
+        .filter((row) => Number(row.expires_at) > now())
+        .sort((a, b) => {
+          const aTime = timestampMillis(a.created_at);
+          const bTime = timestampMillis(b.created_at);
+          return bTime - aTime;
+        });
+
+      for (const row of reusable) {
+        const payload = decodeSessionPayload(row.payload);
+        if (payload.kind !== "dynamic-dcr") continue;
+        return {
+          authorizationServerUrl: payload.authorizationServerUrl,
+          authorizationServerMetadataUrl: payload.authorizationServerMetadataUrl,
+          authorizationServerMetadata:
+            payload.authorizationServerMetadata as OAuthAuthorizationServerMetadata,
+          resourceMetadata: payload.resourceMetadata as OAuthProtectedResourceMetadata | null,
+          resourceMetadataUrl: payload.resourceMetadataUrl,
+          resource: payload.resource,
+          scopes: payload.scopes,
+          clientInformation: payload.clientInformation as OAuthClientInformation,
+        };
+      }
+      return undefined;
+    });
+
+  const previousDynamicState = (input: {
+    readonly connectionId: string;
+    readonly tokenScope: string;
+  }) =>
+    previousDynamicStateFromPendingSession(input).pipe(
+      Effect.flatMap((pending) =>
+        pending ? Effect.succeed(pending) : previousDynamicStateFromConnection(input.connectionId),
+      ),
+    );
+
   const startDynamicDcr = (
     input: OAuthStartInput,
     strategy: OAuthDynamicDcrStrategy,
   ): Effect.Effect<OAuthStartResult, OAuthStartError | StorageFailure> =>
     Effect.gen(function* () {
+      const previousState = yield* previousDynamicState({
+        connectionId: input.connectionId,
+        tokenScope: input.tokenScope,
+      });
       const started = yield* beginDynamicAuthorization(
         {
           endpoint: input.endpoint,
           redirectUrl: input.redirectUrl,
           state: "",
           scopes: strategy.scopes,
+          previousState,
         },
         {
           httpClientLayer,
@@ -458,7 +589,10 @@ export const makeOAuth2Service = (
     strategy: OAuthAuthorizationCodeStrategy,
   ): Effect.Effect<OAuthStartResult, OAuthStartError | StorageFailure> =>
     Effect.gen(function* () {
-      const clientIdRef = yield* secretsGetResolved(strategy.clientIdSecretId).pipe(
+      const clientIdRef = yield* secretsGetResolvedAtScope({
+        secretId: strategy.clientIdSecretId,
+        scopeId: strategy.clientIdSecretScopeId,
+      }).pipe(
         Effect.mapError(
           (err) =>
             // Storage failure propagates; null returns aren't errors — the
@@ -499,7 +633,10 @@ export const makeOAuth2Service = (
         clientIdSecretScopeId: clientIdRef.scopeId,
         clientSecretSecretId: strategy.clientSecretSecretId ?? null,
         clientSecretSecretScopeId: strategy.clientSecretSecretId
-          ? ((yield* secretsGetResolved(strategy.clientSecretSecretId))?.scopeId ?? null)
+          ? ((yield* secretsGetResolvedAtScope({
+              secretId: strategy.clientSecretSecretId,
+              scopeId: strategy.clientSecretSecretScopeId,
+            }))?.scopeId ?? null)
           : null,
         scopes: [...strategy.scopes],
         scopeSeparator: strategy.scopeSeparator,
@@ -525,8 +662,14 @@ export const makeOAuth2Service = (
     strategy: OAuthClientCredentialsStrategy,
   ): Effect.Effect<OAuthStartResult, OAuthStartError | StorageFailure> =>
     Effect.gen(function* () {
-      const clientIdRef = yield* secretsGetResolved(strategy.clientIdSecretId);
-      const clientSecretRef = yield* secretsGetResolved(strategy.clientSecretSecretId);
+      const clientIdRef = yield* secretsGetResolvedAtScope({
+        secretId: strategy.clientIdSecretId,
+        scopeId: strategy.clientIdSecretScopeId,
+      });
+      const clientSecretRef = yield* secretsGetResolvedAtScope({
+        secretId: strategy.clientSecretSecretId,
+        scopeId: strategy.clientSecretSecretScopeId,
+      });
       if (clientIdRef === null || clientSecretRef === null) {
         return yield* new OAuthStartError({
           message: "client_id / client_secret secret not found",
@@ -634,10 +777,9 @@ export const makeOAuth2Service = (
     payload: OAuthSessionPayload;
     strategyKind: string;
   }): Effect.Effect<void, StorageFailure> =>
-    deps.adapter
-      .create({
-        model: "oauth2_session",
-        data: {
+    deps.fuma
+      .use("oauth2_session.create", (db) =>
+        db.create("oauth2_session", {
           id: args.sessionId,
           scope_id: args.input.tokenScope,
           plugin_id: args.input.pluginId,
@@ -648,9 +790,8 @@ export const makeOAuth2Service = (
           payload: encodeSessionPayload(args.payload) as Record<string, unknown>,
           expires_at: now() + OAUTH2_SESSION_TTL_MS,
           created_at: new Date(),
-        },
-        forceAllowId: true,
-      })
+        }),
+      )
       .pipe(Effect.asVoid);
 
   // -------------------------------------------------------------------
@@ -663,10 +804,19 @@ export const makeOAuth2Service = (
     OAuthCompleteError | OAuthSessionNotFoundError | StorageFailure
   > =>
     Effect.gen(function* () {
-      const row = yield* deps.adapter.findOne({
-        model: "oauth2_session",
-        where: [{ field: "id", value: input.state }],
-      });
+      const row = (yield* deps.fuma.use("oauth2_session.findForComplete", (db) =>
+        db.findFirst("oauth2_session", {
+          where: (b) => b("id", "=", input.state),
+        }),
+      )) as {
+        readonly id: string;
+        readonly scope_id: string;
+        readonly connection_id: string;
+        readonly token_scope: string;
+        readonly redirect_url: string;
+        readonly payload: unknown;
+        readonly expires_at: number | bigint | string;
+      } | null;
       if (!row) {
         return yield* new OAuthSessionNotFoundError({ sessionId: input.state });
       }
@@ -674,13 +824,11 @@ export const makeOAuth2Service = (
         return yield* new OAuthSessionNotFoundError({ sessionId: input.state });
       }
 
-      const deleteSession = deps.adapter.delete({
-        model: "oauth2_session",
-        where: [
-          { field: "id", value: input.state },
-          { field: "scope_id", value: row.scope_id },
-        ],
-      });
+      const deleteSession = deps.fuma.use("oauth2_session.deleteForComplete", (db) =>
+        db.deleteMany("oauth2_session", {
+          where: (b) => b.and(b("id", "=", input.state), b("scope_id", "=", row.scope_id)),
+        }),
+      );
 
       if (input.error) {
         yield* deleteSession;
@@ -974,15 +1122,13 @@ export const makeOAuth2Service = (
     });
 
   const cancel = (sessionId: string, tokenScope: string): Effect.Effect<void, StorageFailure> =>
-    Effect.gen(function* () {
-      yield* deps.adapter.delete({
-        model: "oauth2_session",
-        where: [
-          { field: "id", value: sessionId },
-          { field: "scope_id", value: tokenScope },
-        ],
-      });
-    });
+    deps.fuma
+      .use("oauth2_session.cancel", (db) =>
+        db.deleteMany("oauth2_session", {
+          where: (b) => b.and(b("id", "=", sessionId), b("scope_id", "=", tokenScope)),
+        }),
+      )
+      .pipe(Effect.asVoid);
 
   // -------------------------------------------------------------------
   // Canonical connection provider — refresh handler

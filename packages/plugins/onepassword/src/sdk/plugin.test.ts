@@ -1,19 +1,24 @@
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import { Effect } from "effect";
 
-import { ScopeId, createExecutor, makeTestConfig } from "@executor-js/sdk";
+import { ScopeId, createExecutor } from "@executor-js/sdk";
+import { makeTestWorkspaceLayer, TestWorkspace } from "@executor-js/sdk/testing";
 
 import { onepasswordPlugin } from "./plugin";
 import { OnePasswordConfig, DesktopAppAuth } from "./types";
 
-describe("onepassword plugin", () => {
+const plugins = [onepasswordPlugin()] as const;
+
+layer(
+  makeTestWorkspaceLayer({
+    plugins,
+  }),
+  { timeout: "15 seconds" },
+)("onepassword plugin", (it) => {
   it.effect("registers onepassword as a secret provider", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [onepasswordPlugin()] as const,
-        }),
-      );
+      const { config: harnessConfig } = yield* TestWorkspace;
+      const executor = yield* createExecutor({ ...harnessConfig, plugins });
       const providers = yield* executor.secrets.providers();
       expect(providers).toContain("onepassword");
     }),
@@ -21,11 +26,8 @@ describe("onepassword plugin", () => {
 
   it.effect("configure / getConfig / removeConfig round-trip via blob store", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [onepasswordPlugin()] as const,
-        }),
-      );
+      const { config: harnessConfig } = yield* TestWorkspace;
+      const executor = yield* createExecutor({ ...harnessConfig, plugins });
 
       const initial = yield* executor.onepassword.getConfig();
       expect(initial).toBeNull();
@@ -52,13 +54,43 @@ describe("onepassword plugin", () => {
     }),
   );
 
+  it.effect("exposes provider configuration as agent-callable static tools", () =>
+    Effect.gen(function* () {
+      const { config: harnessConfig } = yield* TestWorkspace;
+      const executor = yield* createExecutor({ ...harnessConfig, plugins });
+
+      const configured = yield* executor.tools.invoke(
+        "executor.onepassword.configure",
+        {
+          scope: "test-scope",
+          auth: { kind: "desktop-app", accountName: "my.1password.com" },
+          vaultId: "vault-123",
+          name: "Personal",
+        },
+        { onElicitation: "accept-all" },
+      );
+
+      expect(configured).toEqual({ ok: true, data: { configured: true } });
+      expect(yield* executor.tools.invoke("executor.onepassword.getConfig", {})).toMatchObject({
+        ok: true,
+        data: { config: { vaultId: "vault-123", name: "Personal" } },
+      });
+
+      const removed = yield* executor.tools.invoke(
+        "executor.onepassword.removeConfig",
+        { targetScope: "test-scope" },
+        { onElicitation: "accept-all" },
+      );
+
+      expect(removed).toEqual({ ok: true, data: { removed: true } });
+      expect(yield* executor.onepassword.getConfig()).toBeNull();
+    }),
+  );
+
   it.effect("status reports not-configured before configure", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [onepasswordPlugin()] as const,
-        }),
-      );
+      const { config: harnessConfig } = yield* TestWorkspace;
+      const executor = yield* createExecutor({ ...harnessConfig, plugins });
       const status = yield* executor.onepassword.status();
       expect(status.connected).toBe(false);
       expect(status.error).toBe("Not configured");

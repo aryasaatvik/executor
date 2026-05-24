@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { existsSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 // Make sibling binaries (if any are added later) discoverable on $PATH so
 // child processes spawned without an absolute path still find them.
@@ -139,26 +140,50 @@ const waitForShutdownSignal = () =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isServerReachable = (baseUrl: string): Effect.Effect<boolean> =>
+interface DaemonScopeInfo {
+  readonly id: string;
+  readonly name: string;
+  readonly dir: string;
+}
+
+const readDaemonScopeInfo = (baseUrl: string): Effect.Effect<DaemonScopeInfo | null> =>
   Effect.tryPromise(() =>
     fetch(`${baseUrl}/api/scope`, { signal: AbortSignal.timeout(2000) }),
   ).pipe(
     Effect.flatMap((res) => {
-      if (!res.ok) return Effect.succeed(false);
+      if (!res.ok) return Effect.succeed(null);
       return Effect.tryPromise(() => res.json()).pipe(
         Effect.map((payload) => {
-          if (!isRecord(payload)) return false;
-          return (
+          if (!isRecord(payload)) return null;
+          if (
             typeof payload.id === "string" &&
             typeof payload.name === "string" &&
             typeof payload.dir === "string"
-          );
+          ) {
+            return {
+              id: payload.id,
+              name: payload.name,
+              dir: payload.dir,
+            };
+          }
+          return null;
         }),
-        Effect.catchCause(() => Effect.succeed(false)),
+        Effect.catchCause(() => Effect.succeed(null)),
       );
     }),
-    Effect.catchCause(() => Effect.succeed(false)),
+    Effect.catchCause(() => Effect.succeed(null)),
   );
+
+const isServerReachable = (baseUrl: string): Effect.Effect<boolean> =>
+  readDaemonScopeInfo(baseUrl).pipe(Effect.map((scopeInfo) => scopeInfo !== null));
+
+const normalizeDaemonScopeDir = (dir: string): string => {
+  const resolved = resolve(dir);
+  return existsSync(resolved) ? realpathSync.native(resolved) : resolved;
+};
+
+const currentDaemonScopeDir = (): string =>
+  normalizeDaemonScopeDir(process.env.EXECUTOR_SCOPE_DIR ?? process.cwd());
 
 const script = process.argv[1];
 const isDevMode = isDevCliEntrypoint(script);
@@ -176,6 +201,17 @@ const parseDaemonUrl = (baseUrl: string) =>
 
 const daemonBaseUrl = (hostname: string, port: number): string =>
   `http://${canonicalDaemonHost(hostname)}:${port}`;
+
+const installDefaultExecutorWebBaseUrl = (baseUrl: string): (() => void) => {
+  if (process.env.EXECUTOR_WEB_BASE_URL !== undefined) {
+    return () => {};
+  }
+
+  process.env.EXECUTOR_WEB_BASE_URL = baseUrl;
+  return () => {
+    delete process.env.EXECUTOR_WEB_BASE_URL;
+  };
+};
 
 const cleanupPointer = (input: { hostname: string; scopeId: string; port: number }) =>
   Effect.gen(function* () {
@@ -302,7 +338,8 @@ const ensureDaemon = (
 ): Effect.Effect<string, Error, FileSystem.FileSystem | PlatformPath.Path> =>
   Effect.gen(function* () {
     const resolvedTarget = yield* resolveDaemonTarget(baseUrl);
-    if (yield* isServerReachable(resolvedTarget.baseUrl)) {
+    const reachableScope = yield* readDaemonScopeInfo(resolvedTarget.baseUrl);
+    if (reachableScope && normalizeDaemonScopeDir(reachableScope.dir) === currentDaemonScopeDir()) {
       return resolvedTarget.baseUrl;
     }
 
@@ -409,6 +446,7 @@ type ExecuteCodeOutcome =
       readonly status: "paused";
       readonly text: string;
       readonly executionId: string | undefined;
+      readonly approvalUrl: string | undefined;
       readonly interaction:
         | {
             readonly kind: "url" | "form";
@@ -418,6 +456,11 @@ type ExecuteCodeOutcome =
           }
         | undefined;
     };
+
+const buildResumeApprovalUrl = (baseUrl: string, executionId: string): string => {
+  const url = new URL(`/resume/${encodeURIComponent(executionId)}`, baseUrl);
+  return url.toString();
+};
 
 const executeCode = (input: {
   baseUrl: string;
@@ -433,10 +476,12 @@ const executeCode = (input: {
     });
 
     if (response.status === "paused") {
+      const executionId = extractExecutionId(response.structured);
       return {
         status: "paused" as const,
         text: response.text,
-        executionId: extractExecutionId(response.structured),
+        executionId,
+        approvalUrl: executionId ? buildResumeApprovalUrl(daemonUrl, executionId) : undefined,
         interaction: extractPausedInteraction(response.structured),
       };
     }
@@ -456,6 +501,10 @@ const printExecutionOutcome = (input: { baseUrl: string; outcome: ExecuteCodeOut
     if (input.outcome.status === "paused") {
       console.log(input.outcome.text);
       if (input.outcome.executionId) {
+        if (input.outcome.approvalUrl) {
+          console.log("\nApprove in browser:");
+          console.log(`  ${input.outcome.approvalUrl}`);
+        }
         const commandPrefix = `${cliPrefix} resume --execution-id ${input.outcome.executionId} --base-url ${input.baseUrl}`;
         if (input.outcome.interaction?.kind === "form") {
           const requestedSchema = input.outcome.interaction.requestedSchema;
@@ -464,12 +513,12 @@ const printExecutionOutcome = (input: { baseUrl: string; outcome: ExecuteCodeOut
           }
           const template = buildResumeContentTemplate(requestedSchema);
           const contentArg = shellQuoteArg(JSON.stringify(template));
-          console.log("\nResume commands:");
+          console.log("\nCLI fallback:");
           console.log(`  ${commandPrefix} --action accept --content ${contentArg}`);
           console.log(`  ${commandPrefix} --action decline`);
           console.log(`  ${commandPrefix} --action cancel`);
         } else {
-          console.log("\nResume command:");
+          console.log("\nCLI fallback:");
           console.log(`  ${commandPrefix} --action accept`);
         }
       }
@@ -505,41 +554,49 @@ const runForegroundSession = (input: {
   authPassword: string | undefined;
 }) =>
   Effect.gen(function* () {
-    const server = yield* Effect.promise(() =>
-      startServer({
-        port: input.port,
-        hostname: input.hostname,
-        allowedHosts: input.allowedHosts,
-        authToken: input.authToken,
-        authPassword: input.authPassword,
-        embeddedWebUI,
-      }),
-    );
-
     const displayHost =
       input.hostname === "0.0.0.0" || input.hostname === "::" ? "localhost" : input.hostname;
-    const baseUrl = `http://${displayHost}:${server.port}`;
-    console.log(`Executor is ready.`);
-    console.log(`Web:     ${baseUrl}`);
-    console.log(`MCP:     ${baseUrl}/mcp`);
-    console.log(`OpenAPI: ${baseUrl}/api/docs`);
-    if (input.hostname !== "127.0.0.1" && input.hostname !== "localhost") {
-      console.log(
-        `\n⚠  Listening on ${input.hostname}. Executor runs arbitrary commands — only expose on trusted networks.`,
-      );
-      if (input.allowedHosts.length > 0) {
-        console.log(`   Extra allowed Host headers: ${input.allowedHosts.join(", ")}`);
-      }
-      if (input.authPassword) {
-        console.log("   Basic authentication is enabled.");
-      } else if (input.authToken) {
-        console.log("   Token authentication is enabled.");
-      }
-    }
-    console.log(`\nPress Ctrl+C to stop.`);
+    const restoreWebBaseUrl = installDefaultExecutorWebBaseUrl(
+      `http://${displayHost}:${input.port}`,
+    );
 
-    yield* waitForShutdownSignal();
-    yield* Effect.promise(() => server.stop());
+    try {
+      const server = yield* Effect.promise(() =>
+        startServer({
+          port: input.port,
+          hostname: input.hostname,
+          allowedHosts: input.allowedHosts,
+          authToken: input.authToken,
+          authPassword: input.authPassword,
+          embeddedWebUI,
+        }),
+      );
+
+      const baseUrl = `http://${displayHost}:${server.port}`;
+      console.log(`Executor is ready.`);
+      console.log(`Web:     ${baseUrl}`);
+      console.log(`MCP:     ${baseUrl}/mcp`);
+      console.log(`OpenAPI: ${baseUrl}/api/docs`);
+      if (input.hostname !== "127.0.0.1" && input.hostname !== "localhost") {
+        console.log(
+          `\n⚠  Listening on ${input.hostname}. Executor runs arbitrary commands — only expose on trusted networks.`,
+        );
+        if (input.allowedHosts.length > 0) {
+          console.log(`   Extra allowed Host headers: ${input.allowedHosts.join(", ")}`);
+        }
+        if (input.authPassword) {
+          console.log("   Basic authentication is enabled.");
+        } else if (input.authToken) {
+          console.log("   Token authentication is enabled.");
+        }
+      }
+      console.log(`\nPress Ctrl+C to stop.`);
+
+      yield* waitForShutdownSignal();
+      yield* Effect.promise(() => server.stop());
+    } finally {
+      restoreWebBaseUrl();
+    }
   });
 
 const runDaemonSession = (input: {
@@ -551,67 +608,75 @@ const runDaemonSession = (input: {
 }) =>
   Effect.gen(function* () {
     const daemonHost = canonicalDaemonHost(input.hostname);
-    const scopeId = currentDaemonScopeId();
-    const existing = yield* readDaemonPointer({ hostname: daemonHost, scopeId });
-
-    if (existing) {
-      const existingUrl = daemonBaseUrl(existing.hostname, existing.port);
-      if (isPidAlive(existing.pid) && (yield* isServerReachable(existingUrl))) {
-        return yield* Effect.fail(
-          new Error(
-            [
-              `A daemon is already running for scope ${scopeId} on ${daemonHost}.`,
-              `Existing daemon: ${existingUrl} (pid ${existing.pid}).`,
-              `Stop it first: ${cliPrefix} daemon stop`,
-            ].join("\n"),
-          ),
-        );
-      }
-      yield* cleanupPointer({ hostname: existing.hostname, scopeId, port: existing.port });
-    }
-
-    const server = yield* Effect.promise(() =>
-      startServer({
-        port: input.port,
-        hostname: input.hostname,
-        allowedHosts: input.allowedHosts,
-        authToken: input.authToken,
-        authPassword: input.authPassword,
-        embeddedWebUI,
-      }),
+    const restoreWebBaseUrl = installDefaultExecutorWebBaseUrl(
+      daemonBaseUrl(daemonHost, input.port),
     );
-
-    const daemonPort = server.port;
-    const token = randomUUID();
-
-    yield* writeDaemonRecord({
-      hostname: daemonHost,
-      port: daemonPort,
-      pid: process.pid,
-      scopeDir: process.env.EXECUTOR_SCOPE_DIR ?? null,
-    });
-    yield* writeDaemonPointer({
-      hostname: daemonHost,
-      port: daemonPort,
-      pid: process.pid,
-      scopeId,
-      scopeDir: process.env.EXECUTOR_SCOPE_DIR ?? null,
-      token,
-    });
-
-    console.log(`Daemon ready on http://${daemonHost}:${daemonPort}`);
-    if (input.authPassword) {
-      console.log("Basic authentication is enabled.");
-    } else if (input.authToken) {
-      console.log("Token authentication is enabled.");
-    }
+    const scopeId = currentDaemonScopeId();
 
     try {
-      yield* waitForShutdownSignal();
+      const existing = yield* readDaemonPointer({ hostname: daemonHost, scopeId });
+
+      if (existing) {
+        const existingUrl = daemonBaseUrl(existing.hostname, existing.port);
+        if (isPidAlive(existing.pid) && (yield* isServerReachable(existingUrl))) {
+          return yield* Effect.fail(
+            new Error(
+              [
+                `A daemon is already running for scope ${scopeId} on ${daemonHost}.`,
+                `Existing daemon: ${existingUrl} (pid ${existing.pid}).`,
+                `Stop it first: ${cliPrefix} daemon stop`,
+              ].join("\n"),
+            ),
+          );
+        }
+        yield* cleanupPointer({ hostname: existing.hostname, scopeId, port: existing.port });
+      }
+
+      const server = yield* Effect.promise(() =>
+        startServer({
+          port: input.port,
+          hostname: input.hostname,
+          allowedHosts: input.allowedHosts,
+          authToken: input.authToken,
+          authPassword: input.authPassword,
+          embeddedWebUI,
+        }),
+      );
+
+      const daemonPort = server.port;
+      const token = randomUUID();
+
+      try {
+        yield* writeDaemonRecord({
+          hostname: daemonHost,
+          port: daemonPort,
+          pid: process.pid,
+          scopeDir: process.env.EXECUTOR_SCOPE_DIR ?? null,
+        });
+        yield* writeDaemonPointer({
+          hostname: daemonHost,
+          port: daemonPort,
+          pid: process.pid,
+          scopeId,
+          scopeDir: process.env.EXECUTOR_SCOPE_DIR ?? null,
+          token,
+        });
+
+        console.log(`Daemon ready on http://${daemonHost}:${daemonPort}`);
+        if (input.authPassword) {
+          console.log("Basic authentication is enabled.");
+        } else if (input.authToken) {
+          console.log("Token authentication is enabled.");
+        }
+
+        yield* waitForShutdownSignal();
+      } finally {
+        yield* Effect.promise(() => server.stop());
+        yield* removeDaemonRecord({ hostname: daemonHost, port: daemonPort });
+        yield* removeDaemonPointer({ hostname: daemonHost, scopeId }).pipe(Effect.ignore);
+      }
     } finally {
-      yield* Effect.promise(() => server.stop());
-      yield* removeDaemonRecord({ hostname: daemonHost, port: daemonPort });
-      yield* removeDaemonPointer({ hostname: daemonHost, scopeId }).pipe(Effect.ignore);
+      restoreWebBaseUrl();
     }
   });
 
@@ -681,12 +746,52 @@ const withStdoutReroutedToStderr = async <A>(body: () => Promise<A>): Promise<A>
   }
 };
 
-const runStdioMcpSession = () =>
+const runStdioMcpSession = (input: { readonly elicitationMode: "browser" | "model" }) =>
   Effect.gen(function* () {
-    const executor = yield* Effect.promise(() => withStdoutReroutedToStderr(() => getExecutor()));
-    yield* Effect.promise(() =>
-      runMcpStdioServer({ executor, codeExecutor: makeQuickJsExecutor() }),
+    const web = yield* Effect.promise(() =>
+      withStdoutReroutedToStderr(async () => {
+        const host = "127.0.0.1";
+        const port = await Effect.runPromise(
+          chooseDaemonPort({ preferredPort: DEFAULT_PORT, hostname: host }),
+        );
+        const baseUrl = `http://localhost:${port}`;
+        const restoreWebBaseUrl = installDefaultExecutorWebBaseUrl(baseUrl);
+
+        try {
+          const executor = await getExecutor();
+          const server = await startServer({
+            port,
+            hostname: host,
+            embeddedWebUI,
+          });
+          const serverBaseUrl = `http://localhost:${server.port}`;
+          return { executor, server, baseUrl: serverBaseUrl, restoreWebBaseUrl };
+        } catch (cause) {
+          restoreWebBaseUrl();
+          throw cause;
+        }
+      }),
     );
+
+    try {
+      yield* Effect.promise(() =>
+        runMcpStdioServer({
+          executor: web.executor,
+          codeExecutor: makeQuickJsExecutor(),
+          elicitationMode:
+            input.elicitationMode === "browser"
+              ? {
+                  mode: "browser" as const,
+                  approvalUrl: (executionId) =>
+                    `${web.baseUrl}/resume/${encodeURIComponent(executionId)}`,
+                }
+              : { mode: input.elicitationMode },
+        }),
+      );
+    } finally {
+      web.restoreWebBaseUrl();
+      yield* Effect.promise(() => web.server.stop());
+    }
   });
 
 const scope = Options.string("scope").pipe(
@@ -1206,6 +1311,17 @@ const resumeCommand = Command.make(
         payload: { action, content: contentObj },
       });
 
+      if (result.status === "paused") {
+        console.log(result.text);
+        const nextExecutionId = extractExecutionId(result.structured);
+        if (nextExecutionId) {
+          console.log("");
+          console.log("Approval required:");
+          console.log(buildResumeApprovalUrl(daemonUrl, nextExecutionId));
+        }
+        process.exit(0);
+      }
+
       if (result.isError) {
         if (shouldPrintVerboseErrors(process.argv)) {
           console.error(result.text);
@@ -1456,11 +1572,23 @@ const daemonCommand = Command.make("daemon").pipe(
   Command.withDescription("Manage the local daemon"),
 );
 
-const mcpCommand = Command.make("mcp", { scope }, ({ scope }) =>
-  Effect.gen(function* () {
-    applyScope(scope);
-    yield* runStdioMcpSession();
-  }),
+const mcpCommand = Command.make(
+  "mcp",
+  {
+    scope,
+    elicitationMode: Options.choice("elicitation-mode", ["browser", "model"] as const)
+      .pipe(Options.withDefault("model"))
+      .pipe(
+        Options.withDescription(
+          "Choose the stdio approval flow: browser approval or a CLI resume tool exposed to the model.",
+        ),
+      ),
+  },
+  ({ scope, elicitationMode }) =>
+    Effect.gen(function* () {
+      applyScope(scope);
+      yield* runStdioMcpSession({ elicitationMode });
+    }),
 ).pipe(Command.withDescription("Start an MCP server over stdio"));
 
 // ---------------------------------------------------------------------------

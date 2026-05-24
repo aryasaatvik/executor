@@ -2,7 +2,7 @@
 //
 // The `McpSessionDO` in mcp-session.ts wires several things that previously
 // had zero integration coverage:
-//   - `createScopedExecutor` against a real drizzle adapter (the 2026-04-16
+//   - `createScopedExecutor` against a real FumaDB/Drizzle handle (the 2026-04-16
 //     prod outage was a schema spread bug here; see services/db.schema.test.ts)
 //   - `createExecutionEngine` with an in-process code executor
 //   - `createExecutorMcpServer` for the MCP request surface
@@ -29,15 +29,15 @@ import {
   FormElicitation,
   Scope,
   ScopeId,
-  collectSchemas,
+  collectTables,
   createExecutor,
   definePlugin,
 } from "@executor-js/sdk";
 import { FetchHttpClient } from "effect/unstable/http";
-import { makePostgresAdapter, makePostgresBlobStore } from "@executor-js/storage-postgres";
 import { makeTestWorkOSVaultClient } from "@executor-js/plugin-workos-vault/testing";
 import executorConfig from "../executor.config";
 import { DbService } from "./services/db";
+import { createDrizzleFumaDb } from "./services/fuma";
 
 // ---------------------------------------------------------------------------
 // Test-only plugin: exposes one in-memory tool that elicits once. Lets the
@@ -92,7 +92,10 @@ const ELICITATION_CAPS: ClientCapabilities = {
   elicitation: { form: {}, url: {} },
 };
 
-type BuildOptions = { readonly withElicitingPlugin?: boolean };
+type BuildOptions = {
+  readonly withElicitingPlugin?: boolean;
+  readonly elicitationMode?: "model" | "native";
+};
 
 const buildScopedExecutor = (scopeId: string, scopeName: string, options: BuildOptions = {}) =>
   Effect.gen(function* () {
@@ -103,9 +106,12 @@ const buildScopedExecutor = (scopeId: string, scopeName: string, options: BuildO
     const plugins = options.withElicitingPlugin
       ? ([...basePlugins, elicitingTestPlugin()] as const)
       : basePlugins;
-    const schema = collectSchemas(plugins);
-    const adapter = makePostgresAdapter({ db, schema });
-    const blobs = makePostgresBlobStore({ db });
+    const fuma = createDrizzleFumaDb({
+      db,
+      tables: collectTables(plugins),
+      namespace: "executor_cloud",
+      provider: "postgresql",
+    });
     const scope = Scope.make({
       id: ScopeId.make(scopeId),
       name: scopeName,
@@ -113,8 +119,7 @@ const buildScopedExecutor = (scopeId: string, scopeName: string, options: BuildO
     });
     return yield* createExecutor({
       scopes: [scope],
-      adapter,
-      blobs,
+      db: fuma.db,
       plugins,
       httpClientLayer: FetchHttpClient.layer,
       onElicitation: "accept-all",
@@ -132,7 +137,10 @@ const openSession = (
     Effect.gen(function* () {
       const executor = yield* buildScopedExecutor(orgId, `Org ${orgId}`, options);
       const engine = createExecutionEngine({ executor, codeExecutor: makeQuickJsExecutor() });
-      const mcpServer = yield* createExecutorMcpServer({ engine });
+      const mcpServer = yield* createExecutorMcpServer({
+        engine,
+        elicitationMode: options.elicitationMode ? { mode: options.elicitationMode } : undefined,
+      });
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
       const client = new Client(
         { name: "cloud-e2e-test", version: "1.0.0" },
@@ -203,7 +211,10 @@ describe("cloud MCP session end-to-end", () => {
 
   it.effect("bridges a form elicitation from engine to client and back", () =>
     Effect.gen(function* () {
-      const { client } = yield* openSession(nextOrgId(), { withElicitingPlugin: true });
+      const { client } = yield* openSession(nextOrgId(), {
+        withElicitingPlugin: true,
+        elicitationMode: "native",
+      });
 
       client.setRequestHandler(ElicitRequestSchema, async () => ({
         action: "accept" as const,

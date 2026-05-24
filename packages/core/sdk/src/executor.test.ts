@@ -1,567 +1,349 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Data, Effect, Exit, Predicate, Result, Schema } from "effect";
+import { Data, Effect, Predicate, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { makeMemoryAdapter } from "@executor-js/storage-core/testing/memory";
-import type { DBAdapter, Where } from "@executor-js/storage-core";
-
-import { makeInMemoryBlobStore } from "./blob";
-import { CreateConnectionInput, TokenMaterial } from "./connections";
-import { collectSchemas, createExecutor } from "./executor";
-import { ElicitationResponse, FormElicitation, UrlElicitation } from "./elicitation";
-import { defineSchema, definePlugin, tool } from "./plugin";
-import { RemoveSecretInput, SetSecretInput } from "./secrets";
-import { makeTestConfig } from "./testing";
-import type { SecretProvider } from "./secrets";
-import { ConnectionId, ScopeId, SecretId } from "./ids";
+import { scopedExecutorTable, textColumn } from "./core-schema";
+import { ElicitationResponse } from "./elicitation";
+import { ToolNotFoundError } from "./errors";
+import { createExecutor } from "./executor";
+import { ScopeId, SecretId } from "./ids";
+import { definePlugin } from "./plugin";
 import { Scope } from "./scope";
 import { SourceDetectionResult } from "./types";
-
-type FindManyCall = {
-  readonly model: string;
-  readonly where?: readonly Where[];
-};
+import {
+  makeTestConfig,
+  makeTestExecutor,
+  memorySecretsPlugin,
+  serveOAuthTestServer,
+} from "./testing";
 
 class TestPluginError extends Data.TaggedError("TestPluginError")<{
   readonly message: string;
 }> {}
 
-const recordFindMany = (adapter: DBAdapter, calls: FindManyCall[]): DBAdapter => ({
-  ...adapter,
-  findMany: (data) => {
-    calls.push({ model: data.model, where: data.where });
-    return adapter.findMany(data);
-  },
-  transaction: (callback) =>
-    adapter.transaction((trx) =>
-      callback({
-        ...trx,
-        findMany: (data) => {
-          calls.push({ model: data.model, where: data.where });
-          return trx.findMany(data);
-        },
-      }),
-    ),
+const testScope = Scope.make({
+  id: ScopeId.make("test-scope"),
+  name: "test",
+  createdAt: new Date(),
 });
 
-// ---------------------------------------------------------------------------
-// Tiny test plugin — declares a static source with two built-in tools, a
-// plugin schema for a per-row key/value table, and a dynamic invokeTool
-// handler. Exercises everything createExecutor has to wire up.
-// ---------------------------------------------------------------------------
+const txSchema = {
+  executor_tx_item: scopedExecutorTable("executor_tx_item", {
+    value: textColumn("value"),
+  }),
+};
 
-// Plugin-declared schema. `defineSchema` preserves literal types via
-// `const` inference — no `as const satisfies DBSchema` ceremony.
-const testSchema = defineSchema({
-  test_thing: {
-    fields: {
-      id: { type: "string", required: true },
-      value: { type: "string", required: true },
-    },
-  },
-});
+type TxItemRow = {
+  readonly id: string;
+  readonly scope_id: string;
+  readonly value: string;
+};
 
-let testAnnotationResolveCount = 0;
-
-const testPlugin = definePlugin(() => ({
-  id: "test" as const,
-  schema: testSchema,
-
-  // `adapter` is typed against testSchema automatically — no imports of
-  // DBAdapter, no typedAdapter wrapping. `model: "test_thing"` is
-  // narrowed to the schema's model names, and row data shape comes
-  // from the schema's field definitions.
-  storage: ({ adapter }) => ({
-    writeThing: (id: string, value: string) =>
-      adapter
-        .create({
-          model: "test_thing",
-          data: { id, value },
-          forceAllowId: true,
-        })
-        .pipe(Effect.asVoid),
-    readThing: (id: string) =>
-      adapter
-        .findOne({
-          model: "test_thing",
-          where: [{ field: "id", value: id }],
-        })
-        .pipe(Effect.map((row) => row?.value ?? null)),
+const txPlugin = definePlugin(() => ({
+  id: "tx" as const,
+  schema: txSchema,
+  storage: ({ fuma }) => ({
+    create: (row: TxItemRow) =>
+      fuma.use("tx.item.create", (db) => db.create("executor_tx_item", row)).pipe(Effect.asVoid),
+    list: () =>
+      fuma.use("tx.item.list", (db) =>
+        db.findMany("executor_tx_item", {
+          select: ["id", "scope_id", "value"],
+          orderBy: ["id", "asc"],
+        }),
+      ),
   }),
   extension: (ctx) => ({
-    echo: (text: string) => Effect.succeed(`echo:${text}`),
-
-    addThing: (id: string, value: string) =>
+    seed: (id: string, value: string, scope = String(ctx.scopes[0]!.id)) =>
+      ctx.storage.create({ id, scope_id: scope, value }),
+    list: () => ctx.storage.list(),
+    failAfterPluginAndCoreWrites: () =>
       ctx.transaction(
         Effect.gen(function* () {
-          yield* ctx.storage.writeThing(id, value);
+          const scope = String(ctx.scopes[0]!.id);
+          yield* ctx.storage.create({
+            id: "tx-row",
+            scope_id: scope,
+            value: "created-before-failure",
+          });
           yield* ctx.core.sources.register({
-            id,
-            scope: ctx.scopes[0]!.id,
+            id: "tx-source",
+            scope,
             kind: "test",
-            name: id,
-            canRemove: true,
+            name: "Tx Source",
+            tools: [{ name: "run", description: "run" }],
+          });
+          return yield* new TestPluginError({ message: "rollback" });
+        }),
+      ),
+    catchDuplicateCreate: () =>
+      Effect.gen(function* () {
+        const scope = String(ctx.scopes[0]!.id);
+        yield* ctx.storage.create({ id: "dup", scope_id: scope, value: "first" });
+        return yield* ctx.storage.create({ id: "dup", scope_id: scope, value: "second" }).pipe(
+          Effect.as({ caught: false as const, model: null as string | null }),
+          Effect.catchTag("UniqueViolationError", (error) =>
+            Effect.succeed({ caught: true as const, model: error.model ?? null }),
+          ),
+        );
+      }),
+  }),
+}))();
+
+const detector = (id: string, confidence: SourceDetectionResult["confidence"]) =>
+  definePlugin(() => ({
+    id,
+    storage: () => ({}),
+    detect: () =>
+      Effect.succeed(
+        SourceDetectionResult.make({
+          kind: id,
+          confidence,
+          endpoint: `https://example.com/${id}`,
+          name: id,
+          namespace: id,
+        }),
+      ),
+  }))();
+
+const schemaProbePlugin = definePlugin(() => ({
+  id: "schemaProbe" as const,
+  storage: () => ({}),
+  extension: (ctx) => ({
+    registerSource: () =>
+      ctx.transaction(
+        Effect.gen(function* () {
+          const scope = String(ctx.scopes[0]!.id);
+          yield* ctx.core.sources.register({
+            id: "schema-source",
+            scope,
+            kind: "schema",
+            name: "Schema Source",
             tools: [
-              { name: "read", description: "read the thing" },
-              { name: "write", description: "overwrite the thing" },
+              {
+                name: "inspect",
+                description: "inspect",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    pet: { $ref: "#/$defs/Pet" },
+                  },
+                  required: ["pet"],
+                },
+                outputSchema: { $ref: "#/$defs/Owner" },
+              },
             ],
+          });
+          yield* ctx.core.definitions.register({
+            sourceId: "schema-source",
+            scope,
+            definitions: {
+              Pet: {
+                anyOf: [{ $ref: "#/$defs/Dog" }, { $ref: "#/$defs/Cat" }],
+              },
+              Dog: {
+                type: "object",
+                properties: {
+                  collar: { $ref: "#/$defs/Collar" },
+                },
+              },
+              Cat: {
+                type: "object",
+                properties: {
+                  lives: { type: "number" },
+                },
+              },
+              Collar: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                },
+              },
+              Owner: {
+                type: "object",
+                properties: {
+                  pet: { $ref: "#/$defs/Pet" },
+                },
+              },
+              Unused: {
+                type: "object",
+                properties: {
+                  value: { type: "string" },
+                },
+              },
+            },
           });
         }),
       ),
   }),
-  staticSources: (self) => [
-    {
-      id: "test.control",
-      kind: "control",
-      name: "Test Control",
-      tools: [
-        {
-          name: "echo",
-          description: "static echo tool",
-          handler: ({ args }) => self.echo((args as { text: string }).text),
-        },
-      ],
-    },
-  ],
-  invokeTool: ({ ctx, toolRow, args }) =>
-    Effect.gen(function* () {
-      // toolRow.source_id = the thing id (we registered the source with
-      // that id). toolRow.name = "read" | "write". No string splitting.
-      const thingId = toolRow.source_id;
-      if (toolRow.name === "read") {
-        return yield* ctx.storage.readThing(thingId);
-      }
-      if (toolRow.name === "write") {
-        const { value } = args as { value: string };
-        yield* ctx.storage.writeThing(thingId, value);
-        return { ok: true };
-      }
-      return yield* new TestPluginError({
-        message: `unknown tool ${toolRow.id}`,
-      });
-    }),
+}))();
 
-  // Derived annotations: `write` gates on approval, `read` doesn't.
-  // Purely computed from the tool's name — no data persisted on the row.
-  resolveAnnotations: ({ toolRows }) =>
-    Effect.sync(() => {
-      testAnnotationResolveCount++;
-      const out: Record<string, { requiresApproval: boolean; approvalDescription?: string }> = {};
-      for (const row of toolRows) {
-        if (row.name === "write") {
-          out[row.id] = {
-            requiresApproval: true,
-            approvalDescription: `Overwrite ${row.source_id}`,
-          };
-        } else {
-          out[row.id] = { requiresApproval: false };
-        }
-      }
-      return out;
-    }),
-}));
-
-// ---------------------------------------------------------------------------
-// Test plugin that contributes an in-memory writable secret provider so
-// the secrets surface has something to talk to.
-// ---------------------------------------------------------------------------
-
-const memoryProvider: SecretProvider = (() => {
-  const store = new Map<string, string>();
-  const key = (scope: string, id: string) => `${scope}\u0000${id}`;
-  return {
-    key: "memory",
-    writable: true,
-    get: (id, scope) => Effect.sync(() => store.get(key(scope, id)) ?? null),
-    set: (id, value, scope) =>
-      Effect.sync(() => {
-        store.set(key(scope, id), value);
-      }),
-    delete: (id, scope) => Effect.sync(() => store.delete(key(scope, id))),
-    list: () =>
-      Effect.sync(() =>
-        Array.from(store.keys()).map((k) => {
-          const name = k.split("\u0000", 2)[1] ?? k;
-          return { id: name, name };
-        }),
-      ),
-  };
-})();
-
-const memorySecretsPlugin = definePlugin(() => ({
-  id: "memory-secrets" as const,
-  storage: () => ({}),
-  secretProviders: [memoryProvider],
-}));
-
-const memoryConnectionPlugin = definePlugin(() => ({
-  id: "memory-connection" as const,
-  storage: () => ({}),
-  connectionProviders: [{ key: "memory-connection" }],
-}));
-
-const staleRouteProvider: SecretProvider = {
-  key: "stale-route",
-  writable: true,
-  get: () => Effect.succeed(null),
-  has: () => Effect.succeed(false),
-  set: () => Effect.void,
-  delete: () => Effect.succeed(false),
-  list: () => Effect.succeed([]),
-};
-
-const staleRouteSecretsPlugin = definePlugin(() => ({
-  id: "stale-route-secrets" as const,
-  storage: () => ({}),
-  secretProviders: [staleRouteProvider],
-}));
-
-const opaqueRouteProvider: SecretProvider = {
-  key: "opaque-route",
-  writable: true,
-  get: () => Effect.succeed(null),
-  set: () => Effect.void,
-  delete: () => Effect.succeed(false),
-  list: () => Effect.succeed([]),
-};
-
-const opaqueRouteSecretsPlugin = definePlugin(() => ({
-  id: "opaque-route-secrets" as const,
-  storage: () => ({}),
-  secretProviders: [opaqueRouteProvider],
-}));
-
-const providerOnlySecretPlugin = definePlugin(() => ({
-  id: "provider-only-secret" as const,
-  storage: () => ({}),
-  secretProviders: [
-    {
-      key: "provider-only",
-      writable: false,
-      get: (id: string) => Effect.succeed(id === "provider-token" ? "provider-value" : null),
-      list: () => Effect.succeed([{ id: "provider-token", name: "Provider token" }]),
-    } satisfies SecretProvider,
-  ],
-}));
-
-const fallbackOrderingPlugin = (laterCalls: { count: number }) =>
-  definePlugin(() => ({
-    id: "fallback-ordering" as const,
-    storage: () => ({}),
-    secretProviders: [
-      {
-        key: "first-fallback",
-        writable: false,
-        get: (id: string) => Effect.succeed(id === "token" ? "first-value" : null),
-        list: () => Effect.succeed([{ id: "token", name: "token" }]),
-      },
-      {
-        key: "later-fallback",
-        writable: false,
-        get: () =>
-          Effect.sync(() => {
-            laterCalls.count += 1;
-            return "later-value";
-          }),
-        list: () => Effect.succeed([{ id: "token", name: "token" }]),
-      },
-    ] satisfies readonly SecretProvider[],
-  }));
-
-const fallbackDisabledPlugin = definePlugin(() => ({
-  id: "fallback-disabled" as const,
-  storage: () => ({}),
-  secretProviders: [
-    {
-      key: "fallback-disabled-provider",
-      writable: false,
-      allowFallback: false,
-      get: (id: string) => Effect.succeed(id === "token" ? "disabled-value" : null),
-      list: () => Effect.succeed([{ id: "token", name: "token" }]),
-    },
-  ] satisfies readonly SecretProvider[],
-}));
-
-const duplicateToolsPlugin = definePlugin(() => ({
-  id: "duplicateTools" as const,
+const caseSensitiveDynamicPlugin = definePlugin(() => ({
+  id: "caseDynamic" as const,
   storage: () => ({}),
   extension: (ctx) => ({
-    register: () =>
+    registerSource: () =>
       ctx.core.sources.register({
-        id: "dup-source",
-        scope: ctx.scopes[0]!.id,
-        kind: "test",
-        name: "Duplicate source",
-        tools: [
-          { name: "same", description: "first" },
-          { name: "same", description: "last" },
-        ],
+        id: "case_source",
+        scope: String(ctx.scopes[0]!.id),
+        kind: "case",
+        name: "Case Source",
+        tools: [{ name: "listdashboards", description: "list dashboards" }],
       }),
   }),
-}));
+  invokeTool: ({ toolRow }) => Effect.succeed({ invokedToolId: toolRow.id }),
+}))();
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
+const configurableSourcePlugin = definePlugin(() => ({
+  id: "configurable" as const,
+  sourcePresets: [
+    {
+      id: "configurable-demo",
+      name: "Configurable Demo",
+      summary: "Demo source preset for agent and web discovery.",
+      url: "https://example.com/configurable.json",
+      featured: true,
+    },
+  ],
+  storage: ({ pluginStorage }) => ({
+    get: (scope: string, sourceId = "configured-source") =>
+      pluginStorage.getAtScope<{ readonly header: string; readonly sourceScope: string }>({
+        scope,
+        collection: "source-config",
+        key: sourceId,
+      }),
+    visible: (sourceId = "configured-source") =>
+      pluginStorage.get<{ readonly header: string; readonly sourceScope: string }>({
+        collection: "source-config",
+        key: sourceId,
+      }),
+  }),
+  extension: (ctx) => ({
+    registerSource: (scope: string) =>
+      ctx.core.sources.register({
+        id: "configured-source",
+        scope,
+        kind: "configurable",
+        name: "Configurable Source",
+        canRemove: true,
+        tools: [{ name: "run", description: "run configurable source" }],
+      }),
+    getConfigAtScope: (scope: string) => ctx.storage.get(scope),
+    getVisibleConfig: () => ctx.storage.visible(),
+  }),
+  sourceConfigure: {
+    type: "configurable",
+    schema: Schema.Struct({ header: Schema.String }),
+    configure: ({ ctx, sourceId, sourceScope, targetScope, config }) =>
+      ctx.pluginStorage.put({
+        scope: targetScope,
+        collection: "source-config",
+        key: sourceId,
+        data: {
+          ...(config as { readonly header: string }),
+          sourceScope,
+        },
+      }),
+  },
+}))();
 
 describe("createExecutor", () => {
-  it.effect("invokes a static tool via the in-memory pool", () =>
+  it.effect("rolls back plugin and core writes from ctx.transaction failures", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      const result = yield* executor.tools.invoke(
-        "test.control.echo",
-        { text: "hi" },
-        { onElicitation: "accept-all" },
-      );
-      expect(result).toBe("echo:hi");
+      const executor = yield* makeTestExecutor({ plugins: [txPlugin] as const });
+
+      const error = yield* executor.tx.failAfterPluginAndCoreWrites().pipe(Effect.flip);
+
+      expect(error).toMatchObject({ _tag: "TestPluginError", message: "rollback" });
+      expect(yield* executor.tx.list()).toEqual([]);
+      expect(yield* executor.sources.list()).toEqual([]);
+      expect(yield* executor.tools.list()).toEqual([]);
     }),
   );
 
-  it.effect("lists static tools alongside dynamic ones", () =>
+  it.effect("keeps FumaDB unique violations catchable inside plugin code", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
+      const executor = yield* makeTestExecutor({ plugins: [txPlugin] as const });
 
-      const tools = yield* executor.tools.list();
-      const ids = tools.map((t) => t.id);
-      expect(ids).toContain("test.control.echo");
-      expect(ids).toContain("thing1.read");
-      expect(ids).toContain("thing1.write");
+      const result = yield* executor.tx.catchDuplicateCreate();
+
+      expect(result.caught).toBe(true);
+      expect(result.model).toContain("tx.item.create");
     }),
   );
 
-  it.effect("filters tools by query", () =>
+  it.effect("runs plugin and database close hooks", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
-
-      const tools = yield* executor.tools.list({ query: "echo" });
-      expect(tools.map((t) => t.id)).toEqual(["test.control.echo"]);
-    }),
-  );
-
-  it.effect("pushes sourceId tool list filters into storage", () =>
-    Effect.gen(function* () {
-      const config = makeTestConfig({ plugins: [testPlugin()] as const });
-      const findManyCalls: FindManyCall[] = [];
+      let pluginClosed = false;
+      let dbClosed = false;
+      const closablePlugin = definePlugin(() => ({
+        id: "closable" as const,
+        storage: () => ({}),
+        close: () =>
+          Effect.sync(() => {
+            pluginClosed = true;
+          }),
+      }));
+      const config = makeTestConfig({ plugins: [closablePlugin()] as const });
       const executor = yield* createExecutor({
         ...config,
-        adapter: recordFindMany(config.adapter, findManyCalls),
+        db: {
+          db: config.db,
+          close: () =>
+            Effect.sync(() => {
+              dbClosed = true;
+            }),
+        },
         onElicitation: "accept-all",
       });
-      yield* executor.test.addThing("thing1", "hello");
-      yield* executor.test.addThing("thing2", "goodbye");
 
-      findManyCalls.length = 0;
-      const tools = yield* executor.tools.list({ sourceId: "thing1" });
+      yield* executor.close();
 
-      expect(tools.map((t) => t.id).sort()).toEqual(["thing1.read", "thing1.write"]);
-      const toolRead = findManyCalls.find((call) => call.model === "tool");
-      expect(toolRead?.where).toEqual(
-        expect.arrayContaining([expect.objectContaining({ field: "source_id", value: "thing1" })]),
-      );
+      expect(pluginClosed).toBe(true);
+      expect(dbClosed).toBe(true);
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
 
-  it.effect("can list tools without resolving dynamic annotations", () =>
+  it.effect("orders source detection results by confidence and applies configured bounds", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
-      testAnnotationResolveCount = 0;
-
-      const tools = yield* executor.tools.list({
-        sourceId: "thing1",
-        includeAnnotations: false,
-      });
-
-      expect(testAnnotationResolveCount).toBe(0);
-      expect(tools.map((t) => t.id).sort()).toEqual(["thing1.read", "thing1.write"]);
-      expect(tools.every((tool) => tool.annotations === undefined)).toBe(true);
-    }),
-  );
-
-  it.effect("bounds annotation resolution groups", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      for (let index = 0; index < 70; index++) {
-        yield* executor.test.addThing(`thing${index}`, "hello");
-      }
-      testAnnotationResolveCount = 0;
-
-      yield* executor.tools.list();
-
-      expect(testAnnotationResolveCount).toBe(64);
-    }),
-  );
-
-  it.effect("invokes a dynamic tool through plugin.invokeTool", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
-
-      const result = yield* executor.tools.invoke(
-        "thing1.read",
-        {},
-        { onElicitation: "accept-all" },
-      );
-      expect(result).toBe("hello");
-    }),
-  );
-
-  it.effect("enforces tool annotations before invoking", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
-      let approvalMessage = "";
-
-      // requiresApproval: true → declined → ElicitationDeclinedError
-      const declined = yield* executor.tools
-        .invoke(
-          "thing1.write",
-          { value: "updated" },
-          {
-            onElicitation: (ctx) =>
-              Effect.sync(() => {
-                approvalMessage = ctx.request.message;
-                return ElicitationResponse.make({ action: "decline" });
-              }),
-          },
-        )
-        .pipe(Effect.flip);
-      expect(Predicate.isTagged(declined, "ElicitationDeclinedError")).toBe(true);
-      expect(approvalMessage).toContain('"value": "updated"');
-
-      // auto-accept → succeeds
-      const accepted = yield* executor.tools.invoke(
-        "thing1.write",
-        { value: "updated" },
-        { onElicitation: "accept-all" },
-      );
-      expect(accepted).toEqual({ ok: true });
-    }),
-  );
-
-  it.effect("sources.list unions static runtime sources and dynamic ones", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      yield* executor.test.addThing("thing1", "hello");
-
-      const sources = yield* executor.sources.list();
-      const control = sources.find((s) => s.id === "test.control");
-      expect(control).toBeDefined();
-      expect(control!.runtime).toBe(true);
-      expect(control!.canRemove).toBe(false);
-
-      const dynamic = sources.find((s) => s.id === "thing1");
-      expect(dynamic).toBeDefined();
-      expect(dynamic!.runtime).toBe(false);
-      expect(dynamic!.canRemove).toBe(true);
-    }),
-  );
-
-  it.effect("orders source detection results by confidence", () =>
-    Effect.gen(function* () {
-      const lowConfidencePlugin = definePlugin(() => ({
-        id: "low-detect" as const,
-        storage: () => ({}),
-        detect: () =>
-          Effect.succeed(
-            SourceDetectionResult.make({
-              kind: "mcp",
-              confidence: "low",
-              endpoint: "https://example.com/source",
-              name: "Weak OAuth match",
-              namespace: "weak_oauth_match",
-            }),
-          ),
-      }));
-      const highConfidencePlugin = definePlugin(() => ({
-        id: "high-detect" as const,
-        storage: () => ({}),
-        detect: () =>
-          Effect.succeed(
-            SourceDetectionResult.make({
-              kind: "graphql",
-              confidence: "high",
-              endpoint: "https://example.com/source",
-              name: "GraphQL API",
-              namespace: "graphql_api",
-            }),
-          ),
-      }));
-
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [lowConfidencePlugin(), highConfidencePlugin()] as const,
-        }),
-      );
-
-      const results = yield* executor.sources.detect("https://example.com/source");
-
-      expect(results.map((result) => result.kind)).toEqual(["graphql", "mcp"]);
-    }),
-  );
-
-  it.effect("bounds source detection fan-out and results", () =>
-    Effect.gen(function* () {
-      const calls: string[] = [];
-      const detector = (id: string, confidence: "high" | "medium" | "low") =>
-        definePlugin(() => ({
-          id,
-          storage: () => ({}),
-          detect: () =>
-            Effect.sync(() => {
-              calls.push(id);
-              return SourceDetectionResult.make({
-                kind: id,
-                confidence,
-                endpoint: `https://example.com/${id}`,
-                name: id,
-                namespace: id,
-              });
-            }),
-        }));
-
       const executor = yield* createExecutor({
         ...makeTestConfig({
-          plugins: [
-            detector("first", "low")(),
-            detector("second", "high")(),
-            detector("third", "medium")(),
-          ] as const,
+          plugins: [detector("low", "low"), detector("high", "high"), detector("medium", "medium")],
         }),
         sourceDetection: { maxDetectors: 2, maxResults: 1 },
+        onElicitation: "accept-all",
       });
 
       const results = yield* executor.sources.detect("https://example.com/source");
 
-      expect(calls).toEqual(["first", "second"]);
-      expect(results.map((result) => result.kind)).toEqual(["second"]);
+      expect(results.map((result) => result.kind)).toEqual(["high"]);
     }),
   );
 
   it.effect("applies hosted outbound policy before source detection plugins run", () =>
     Effect.gen(function* () {
       let called = false;
-      const detector = definePlugin(() => ({
-        id: "detector" as const,
+      const hostedDetector = definePlugin(() => ({
+        id: "hosted-detector" as const,
         storage: () => ({}),
         detect: () =>
           Effect.sync(() => {
             called = true;
             return SourceDetectionResult.make({
-              kind: "detector",
+              kind: "hosted-detector",
               confidence: "high",
               endpoint: "http://127.0.0.1/source",
-              name: "detector",
-              namespace: "detector",
+              name: "hosted detector",
+              namespace: "hosted_detector",
             });
           }),
       }));
-
       const executor = yield* createExecutor({
-        ...makeTestConfig({ plugins: [detector()] as const }),
+        scopes: [testScope],
+        plugins: [hostedDetector()] as const,
         httpClientLayer: FetchHttpClient.layer,
+        onElicitation: "accept-all",
       });
 
       const results = yield* executor.sources.detect("http://127.0.0.1/source");
@@ -571,1411 +353,541 @@ describe("createExecutor", () => {
     }),
   );
 
-  it.effect("rejects remove of a static source", () =>
+  it.effect("returns schema roots with shared reachable definitions", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      const err = yield* executor.sources
-        .remove({ id: "test.control", targetScope: "test-scope" })
-        .pipe(Effect.flip);
-      expect(Predicate.isTagged(err, "SourceRemovalNotAllowedError")).toBe(true);
+      const executor = yield* makeTestExecutor({ plugins: [schemaProbePlugin] as const });
+
+      yield* executor.schemaProbe.registerSource();
+
+      const schema = yield* executor.tools.schema("schema-source.inspect");
+
+      expect(schema?.inputSchema).toEqual({
+        type: "object",
+        properties: {
+          pet: { $ref: "#/$defs/Pet" },
+        },
+        required: ["pet"],
+      });
+      expect(schema?.outputSchema).toEqual({ $ref: "#/$defs/Owner" });
+      expect(schema?.schemaDefinitions).toEqual({
+        Cat: expect.any(Object),
+        Collar: expect.any(Object),
+        Dog: expect.any(Object),
+        Owner: expect.any(Object),
+        Pet: expect.any(Object),
+      });
+      expect(schema?.schemaDefinitions).not.toHaveProperty("Unused");
+      expect(schema?.inputTypeScript).toContain("pet: Pet");
+      expect(schema?.outputTypeScript).toBe("Owner");
+      expect(schema?.typeScriptDefinitions).toEqual(
+        expect.objectContaining({
+          Pet: expect.any(String),
+          Owner: expect.any(String),
+        }),
+      );
     }),
   );
 
-  it.effect("handles deeply-namespaced tool names (dots in name)", () =>
+  it.effect("resolves dynamic tool ids case-insensitively before invoking plugins", () =>
     Effect.gen(function* () {
-      const namespacedPlugin = definePlugin(() => ({
-        id: "nested" as const,
-        storage: () => ({}),
-        extension: (ctx) => ({
-          register: () =>
-            ctx.core.sources.register({
-              id: "cloudflare",
-              scope: ctx.scopes[0]!.id,
-              kind: "nested",
-              name: "cloudflare",
-              canRemove: true,
-              tools: [
-                { name: "dns.records.create", description: "create DNS record" },
-                { name: "dns.records.list", description: "list DNS records" },
-                { name: "zones.listZones", description: "list zones" },
-              ],
-            }),
-        }),
-        invokeTool: ({ toolRow }) =>
-          // Real plugin would look up by toolRow.id against its own
-          // enrichment table. Here we just echo the structured fields
-          // so the test can assert they came through intact.
-          Effect.succeed({
-            id: toolRow.id,
-            sourceId: toolRow.source_id,
-            name: toolRow.name,
-          }),
-      }));
+      const executor = yield* makeTestExecutor({
+        plugins: [caseSensitiveDynamicPlugin] as const,
+      });
+      yield* executor.caseDynamic.registerSource();
 
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [namespacedPlugin()] as const }),
-      );
-      yield* executor.nested.register();
+      const result = yield* executor.tools.invoke("case_source.listDashboards", {});
 
-      const tools = yield* executor.tools.list();
-      const ids = tools.map((t) => t.id).sort();
-      expect(ids).toContain("cloudflare.dns.records.create");
-      expect(ids).toContain("cloudflare.dns.records.list");
-      expect(ids).toContain("cloudflare.zones.listZones");
+      expect(result).toEqual({ invokedToolId: "case_source.listdashboards" });
+    }),
+  );
 
-      // Invoke by the exact id — dots are just characters, never parsed.
-      const result = (yield* executor.tools.invoke(
-        "cloudflare.dns.records.create",
+  it.effect("applies policies after case-insensitive dynamic tool id resolution", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        plugins: [caseSensitiveDynamicPlugin] as const,
+      });
+      yield* executor.caseDynamic.registerSource();
+      yield* executor.policies.create({
+        targetScope: "test-scope",
+        pattern: "case_source.listdashboards",
+        action: "require_approval",
+      });
+      const calls = { count: 0 };
+
+      const result = yield* executor.tools.invoke(
+        "case_source.listDashboards",
         {},
-        { onElicitation: "accept-all" },
-      )) as { id: string; sourceId: string; name: string };
-
-      // Structured fields round-trip cleanly: source_id and name are
-      // the exact strings the plugin registered.
-      expect(result.id).toBe("cloudflare.dns.records.create");
-      expect(result.sourceId).toBe("cloudflare");
-      expect(result.name).toBe("dns.records.create");
-    }),
-  );
-
-  it.effect("rejects dynamic registration that collides with a static id", () =>
-    Effect.gen(function* () {
-      const collidingPlugin = definePlugin(() => ({
-        id: "collide" as const,
-        storage: () => ({}),
-        extension: (ctx) => ({
-          tryRegister: () =>
-            ctx.core.sources.register({
-              id: "test.control", // collides with testPlugin's static source
-              scope: ctx.scopes[0]!.id,
-              kind: "x",
-              name: "x",
-              tools: [],
+        {
+          onElicitation: () =>
+            Effect.sync(() => {
+              calls.count += 1;
+              return ElicitationResponse.make({ action: "accept" });
             }),
-        }),
-      }));
-
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [testPlugin(), collidingPlugin()] as const,
-        }),
+        },
       );
 
-      // The collision is treated as an internal/programmer error and
-      // surfaces as raw `StorageError` in the typed channel. The HTTP
-      // edge (`@executor-js/api` `withCapture`) is responsible for
-      // translating it to the opaque `InternalError({ traceId })` when
-      // crossing the wire; here, at the SDK layer, we expect the raw tag.
-      const err = yield* executor.collide.tryRegister().pipe(Effect.flip);
-      expect(Predicate.isTagged(err, "StorageError")).toBe(true);
+      expect(result).toEqual({ invokedToolId: "case_source.listdashboards" });
+      expect(calls.count).toBe(1);
     }),
   );
 
-  it.effect("ctx.transaction commits all nested writes on success", () =>
+  it.effect("suggests visible tools for missing dynamic tool ids", () =>
     Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [testPlugin()] as const }));
-      // addThing wraps storage + sources.register in ctx.transaction.
-      yield* executor.test.addThing("thing1", "hello");
+      const executor = yield* makeTestExecutor({
+        plugins: [caseSensitiveDynamicPlugin] as const,
+      });
+      yield* executor.caseDynamic.registerSource();
 
-      const sources = yield* executor.sources.list();
-      expect(sources.find((s) => s.id === "thing1")).toBeDefined();
-
-      const tools = (yield* executor.tools.list()).map((t) => t.id);
-      expect(tools).toContain("thing1.read");
-      expect(tools).toContain("thing1.write");
-
-      // plugin storage row committed too
-      expect(yield* executor.tools.invoke("thing1.read", {}, { onElicitation: "accept-all" })).toBe(
-        "hello",
-      );
-    }),
-  );
-
-  it.effect("ctx.transaction rolls back all nested writes on failure", () =>
-    Effect.gen(function* () {
-      // Plugin that does: storage write -> core.sources.register -> fail.
-      // Every write must roll back.
-      const rollbackPlugin = definePlugin(() => ({
-        id: "rollback" as const,
-        schema: testSchema,
-        storage: ({ adapter }) => ({
-          writeThing: (id: string, value: string) =>
-            adapter
-              .create({
-                model: "test_thing",
-                data: { id, value },
-                forceAllowId: true,
-              })
-              .pipe(Effect.asVoid),
-          countThings: () => adapter.count({ model: "test_thing" }),
-        }),
-        extension: (ctx) => ({
-          doFailingTx: () =>
-            ctx.transaction(
-              Effect.gen(function* () {
-                yield* ctx.storage.writeThing("x1", "v1");
-                yield* ctx.core.sources.register({
-                  id: "rb-source",
-                  scope: ctx.scopes[0]!.id,
-                  kind: "rb",
-                  name: "rb",
-                  canRemove: true,
-                  tools: [{ name: "t", description: "t" }],
-                });
-                return yield* new TestPluginError({ message: "boom" });
-              }),
-            ),
-          countThings: () => ctx.storage.countThings(),
-        }),
-      }));
-
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [rollbackPlugin()] as const }),
-      );
-
-      const result = yield* executor.rollback.doFailingTx().pipe(Effect.result);
-      expect(Result.isFailure(result)).toBe(true);
-
-      // Plugin storage row must not persist.
-      expect(yield* executor.rollback.countThings()).toBe(0);
-      // Core source registration must not persist.
-      const sources = yield* executor.sources.list();
-      expect(sources.find((s) => s.id === "rb-source")).toBeUndefined();
-      const tools = (yield* executor.tools.list()).map((t) => t.id);
-      expect(tools).not.toContain("rb-source.t");
-    }),
-  );
-
-  it.effect("secrets.set writes to provider and metadata row", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [memorySecretsPlugin()] as const,
-        }),
-      );
-
-      yield* executor.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("api-token"),
-          scope: ScopeId.make("test-scope"),
-          name: "API Token",
-          value: "sk-abc",
-        }),
-      );
-
-      const value = yield* executor.secrets.get("api-token");
-      expect(value).toBe("sk-abc");
-
-      const list = yield* executor.secrets.list();
-      expect(list).toHaveLength(1);
-      expect(list[0]!.name).toBe("API Token");
-      expect(list[0]!.provider).toBe("memory");
-    }),
-  );
-
-  it.effect("secrets.get rejects connection-owned token secrets", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [memorySecretsPlugin(), memoryConnectionPlugin()] as const,
-        }),
-      );
-
-      yield* executor.connections.create(
-        CreateConnectionInput.make({
-          id: ConnectionId.make("conn-owned"),
-          scope: ScopeId.make("test-scope"),
-          provider: "memory-connection",
-          identityLabel: "Alice",
-          accessToken: TokenMaterial.make({
-            secretId: SecretId.make("conn-owned.access_token"),
-            name: "Access",
-            value: "access-secret",
-          }),
-          refreshToken: TokenMaterial.make({
-            secretId: SecretId.make("conn-owned.refresh_token"),
-            name: "Refresh",
-            value: "refresh-secret",
-          }),
-          expiresAt: null,
-          oauthScope: "read",
-          providerState: null,
-        }),
-      );
-
-      const leaked = yield* executor.secrets.get("conn-owned.access_token").pipe(Effect.flip);
-      expect(Predicate.isTagged(leaked, "SecretOwnedByConnectionError")).toBe(true);
-
-      const status = yield* executor.secrets.status("conn-owned.access_token");
-      expect(status).toBe("missing");
-      const visibleIds = (yield* executor.secrets.list()).map((s) => String(s.id));
-      expect(visibleIds).not.toContain("conn-owned.access_token");
-
-      const token = yield* executor.connections.accessToken("conn-owned");
-      expect(token).toBe("access-secret");
-    }),
-  );
-
-  it.effect("invoke fails with ToolNotFoundError for unknown tool", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(makeTestConfig());
-      const err = yield* executor.tools
-        .invoke("does.not.exist", {}, { onElicitation: "accept-all" })
+      const error = yield* executor.tools
+        .invoke("case_source.listDashboardsWRONG", {})
         .pipe(Effect.flip);
-      expect(Predicate.isTagged(err, "ToolNotFoundError")).toBe(true);
+
+      expect(error).toBeInstanceOf(ToolNotFoundError);
+      if (!Predicate.isTagged("ToolNotFoundError")(error)) return;
+      expect(error.suggestions).toEqual(["case_source.listdashboards"]);
     }),
   );
 
-  it.effect("tools.schema renders TypeScript previews for static tools", () =>
+  it.effect("dispatches source.configure through the owning plugin with explicit scopes", () =>
     Effect.gen(function* () {
-      const previewPlugin = definePlugin(() => ({
-        id: "preview" as const,
-        storage: () => ({}),
-        staticSources: () => [
-          {
-            id: "preview.ctl",
-            kind: "control",
-            name: "Preview Ctl",
-            tools: [
-              tool({
-                name: "createContact",
-                description: "create",
-                inputSchema: Schema.toStandardSchemaV1(
-                  Schema.toStandardJSONSchemaV1(
-                    Schema.Struct({ name: Schema.String, age: Schema.Finite }),
-                  ),
-                ),
-                outputSchema: Schema.toStandardSchemaV1(
-                  Schema.toStandardJSONSchemaV1(Schema.String),
-                ),
-                execute: (input) => Effect.succeed(input),
-              }),
-            ],
-          },
-        ],
-      }));
+      const orgScope = Scope.make({
+        id: ScopeId.make("org"),
+        name: "Org",
+        createdAt: new Date(),
+      });
+      const userScope = Scope.make({
+        id: ScopeId.make("user"),
+        name: "User",
+        createdAt: new Date(),
+      });
+      const executor = yield* createExecutor({
+        scopes: [userScope, orgScope],
+        plugins: [configurableSourcePlugin] as const,
+        onElicitation: "accept-all",
+      });
 
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [previewPlugin()] as const }),
+      yield* executor.configurable.registerSource("org");
+      yield* executor.sources.configure({
+        source: { id: "configured-source", scope: "org" },
+        scope: "org",
+        type: "configurable",
+        config: { header: "org-token" },
+      });
+      yield* executor.sources.configure({
+        source: { id: "configured-source", scope: "org" },
+        scope: "user",
+        type: "configurable",
+        config: { header: "user-token" },
+      });
+
+      const orgConfig = yield* executor.configurable.getConfigAtScope("org");
+      const visibleConfig = yield* executor.configurable.getVisibleConfig();
+
+      expect(orgConfig?.data).toEqual({ header: "org-token", sourceScope: "org" });
+      expect(visibleConfig?.data).toEqual({ header: "user-token", sourceScope: "org" });
+    }),
+  );
+
+  it.effect("core tools configure sources through agent-visible tool calls", () =>
+    Effect.gen(function* () {
+      const orgScope = Scope.make({
+        id: ScopeId.make("org"),
+        name: "Org",
+        createdAt: new Date(),
+      });
+      const userScope = Scope.make({
+        id: ScopeId.make("user"),
+        name: "User",
+        createdAt: new Date(),
+      });
+      const config = makeTestConfig({
+        scopes: [userScope, orgScope],
+        plugins: [configurableSourcePlugin] as const,
+      });
+      const executor = yield* createExecutor({
+        ...config,
+        coreTools: { webBaseUrl: "http://executor.test" },
+      });
+
+      yield* executor.configurable.registerSource("org");
+
+      expect((yield* executor.tools.list()).map((tool) => tool.id)).not.toContain(
+        "executor.coreTools.sources.configureSchemas",
       );
+      const presets = yield* executor.tools.invoke("executor.coreTools.sources.presets", {
+        query: "demo",
+      });
+      expect(presets).toMatchObject({
+        presets: [
+          expect.objectContaining({
+            pluginId: "configurable",
+            id: "configurable-demo",
+            name: "Configurable Demo",
+            url: "https://example.com/configurable.json",
+            featured: true,
+          }),
+        ],
+      });
 
-      const schema = yield* executor.tools.schema("preview.ctl.createContact");
-      expect(schema).not.toBeNull();
-      expect(schema!.inputTypeScript).toBe("{ name: string; age: number }");
-      expect(schema!.outputTypeScript).toBe("string");
-    }),
-  );
+      yield* executor.tools.invoke("executor.coreTools.sources.configure", {
+        source: { id: "configured-source", scope: "org" },
+        scope: "user",
+        type: "configurable",
+        config: { header: "agent-token" },
+      });
 
-  it.effect("close calls each plugin's close hook", () =>
-    Effect.gen(function* () {
-      let closed = 0;
-      const closeable = definePlugin(() => ({
-        id: "closeable" as const,
-        storage: () => ({}),
-        close: () => Effect.sync(() => void closed++),
-      }));
-
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [closeable()] as const }));
+      const visibleConfig = yield* executor.configurable.getVisibleConfig();
+      expect(visibleConfig?.data).toEqual({ header: "agent-token", sourceScope: "org" });
 
       yield* executor.close();
-      expect(closed).toBe(1);
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
 
-  it.effect("static tool can suspend mid-invocation with FormElicitation", () =>
+  it.effect("core tools generate browser handoff URLs for secret values", () =>
     Effect.gen(function* () {
-      const loginPlugin = definePlugin(() => ({
-        id: "login" as const,
-        storage: () => ({}),
-        staticSources: () => [
-          {
-            id: "login.ctl",
-            kind: "control",
-            name: "Login",
-            tools: [
-              {
-                name: "signIn",
-                description: "sign in",
-                handler: ({ elicit }) =>
-                  Effect.gen(function* () {
-                    const response = yield* elicit(
-                      FormElicitation.make({
-                        message: "Enter credentials",
-                        requestedSchema: {
-                          type: "object",
-                          properties: {
-                            username: { type: "string" },
-                            password: { type: "string" },
-                          },
-                        },
-                      }),
-                    );
-                    return {
-                      user: response.content?.username,
-                      status: "logged_in",
-                    };
-                  }),
-              },
-            ],
-          },
-        ],
-      }));
+      const config = makeTestConfig({ plugins: [memorySecretsPlugin()] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        coreTools: { webBaseUrl: "http://executor.test" },
+      });
 
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [loginPlugin()] as const }));
+      const result = yield* executor.tools.invoke("executor.coreTools.secrets.create", {
+        name: "api-token",
+        provider: "memory",
+      });
 
-      const result = yield* executor.tools.invoke(
-        "login.ctl.signIn",
-        {},
-        {
-          onElicitation: (ctx) => {
-            expect(Predicate.isTagged(ctx.request, "FormElicitation")).toBe(true);
-            return Effect.succeed(
-              ElicitationResponse.make({
-                action: "accept",
-                content: { username: "alice", password: "s3cret" },
-              }),
-            );
-          },
+      expect(result).toMatchObject({
+        id: expect.any(String),
+        url: expect.any(String),
+        instructions: expect.stringContaining("placeholder"),
+      });
+      const url = new URL((result as { readonly url: string }).url);
+      expect(url.origin).toBe("http://executor.test");
+      expect(url.pathname).toBe("/secrets");
+      expect(url.searchParams.get("scope")).toBe("test-scope");
+      expect(url.searchParams.get("name")).toBe("api-token");
+      expect(url.searchParams.get("provider")).toBe("memory");
+      expect(url.searchParams.get("secretId")).toBe((result as { readonly id: string }).id);
+
+      const idResult = yield* executor.tools.invoke("executor.coreTools.secrets.create", {
+        scope: "test-scope",
+        name: "api-token-by-id",
+        provider: "memory",
+      });
+      const idUrl = new URL((idResult as { readonly url: string }).url);
+      expect(idUrl.searchParams.get("scope")).toBe("test-scope");
+      expect(idUrl.searchParams.get("name")).toBe("api-token-by-id");
+
+      const invalidProvider = yield* executor.tools.invoke("executor.coreTools.secrets.create", {
+        name: "api-token-invalid-provider",
+        provider: "vercel",
+      });
+      expect(invalidProvider).toMatchObject({
+        ok: false,
+        error: {
+          code: "secret_provider_not_found",
+          message:
+            'Unknown secret storage provider "vercel". Omit provider unless the user chose one from secrets.providers.',
+          details: { providers: ["memory"] },
         },
-      );
+      });
 
-      expect(result).toEqual({ user: "alice", status: "logged_in" });
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
 
-  it.effect("static tool can request URL visit via UrlElicitation", () =>
+  it.effect("core tools require an explicit secret scope when multiple scopes are visible", () =>
     Effect.gen(function* () {
-      const oauthPlugin = definePlugin(() => ({
-        id: "oauth" as const,
-        storage: () => ({}),
-        staticSources: () => [
-          {
-            id: "oauth.ctl",
-            kind: "control",
-            name: "OAuth",
-            tools: [
-              {
-                name: "connect",
-                description: "oauth connect",
-                handler: ({ elicit }) =>
-                  Effect.gen(function* () {
-                    const response = yield* elicit(
-                      UrlElicitation.make({
-                        message: "Authorize the app",
-                        url: "https://oauth.example.com/authorize?state=abc",
-                        elicitationId: "oauth-abc",
-                      }),
-                    );
-                    return {
-                      connected: true,
-                      code: response.content?.code,
-                    };
-                  }),
-              },
-            ],
-          },
-        ],
-      }));
+      const orgScope = Scope.make({
+        id: ScopeId.make("org"),
+        name: "Org",
+        createdAt: new Date(),
+      });
+      const userScope = Scope.make({
+        id: ScopeId.make("user"),
+        name: "User",
+        createdAt: new Date(),
+      });
+      const config = makeTestConfig({
+        scopes: [userScope, orgScope],
+        plugins: [memorySecretsPlugin()] as const,
+      });
+      const executor = yield* createExecutor({
+        ...config,
+        coreTools: { webBaseUrl: "http://executor.test" },
+      });
 
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [oauthPlugin()] as const }));
+      const result = yield* executor.tools.invoke("executor.coreTools.secrets.create", {
+        name: "api-token",
+      });
 
-      const result = yield* executor.tools.invoke(
-        "oauth.ctl.connect",
-        {},
-        {
-          onElicitation: (ctx) => {
-            expect(Predicate.isTagged(ctx.request, "UrlElicitation")).toBe(true);
-            return Effect.succeed(
-              ElicitationResponse.make({
-                action: "accept",
-                content: { code: "auth-code-123" },
-              }),
-            );
-          },
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "scope_not_found",
+          message:
+            "Multiple scopes are visible. Call scopes.list and pass the target scope id or name.",
         },
-      );
-
-      expect(result).toEqual({ connected: true, code: "auth-code-123" });
-    }),
-  );
-
-  // NOTE: behavior change vs. main — the SDK used to auto-decline when no
-  // onElicitation handler was provided (yielding ElicitationDeclinedError).
-  // The new resolver falls back to acceptAllHandler instead. Test locks in
-  // the current behavior; flip the assertion if the default is reverted.
-  it.effect("invoke auto-accepts elicitation when no handler is provided", () =>
-    Effect.gen(function* () {
-      const elicitOnly = definePlugin(() => ({
-        id: "elicitOnly" as const,
-        storage: () => ({}),
-        staticSources: () => [
-          {
-            id: "elicit.ctl",
-            kind: "control",
-            name: "Elicit Ctl",
-            tools: [
-              {
-                name: "ask",
-                description: "ask the user",
-                handler: ({ elicit }) =>
-                  Effect.gen(function* () {
-                    const response = yield* elicit(
-                      FormElicitation.make({
-                        message: "Anything?",
-                        requestedSchema: {},
-                      }),
-                    );
-                    return response.action;
-                  }),
-              },
-            ],
-          },
-        ],
-      }));
-
-      const executor = yield* createExecutor(makeTestConfig({ plugins: [elicitOnly()] as const }));
-
-      const action = yield* executor.tools.invoke(
-        "elicit.ctl.ask",
-        {},
-        { onElicitation: "accept-all" },
-      );
-      expect(action).toBe("accept");
-    }),
-  );
-
-  it.effect("plugin reads and writes secrets via ctx.secrets", () =>
-    Effect.gen(function* () {
-      const rotatePlugin = definePlugin(() => ({
-        id: "rotate" as const,
-        storage: () => ({}),
-        extension: (ctx) => ({
-          rotate: (id: string, newValue: string) =>
-            Effect.gen(function* () {
-              const old = yield* ctx.secrets.get(id);
-              if (old !== null) {
-                yield* ctx.secrets.remove(
-                  RemoveSecretInput.make({
-                    id: SecretId.make(id),
-                    targetScope: ctx.scopes[0]!.id,
-                  }),
-                );
-              }
-              yield* ctx.secrets.set(
-                SetSecretInput.make({
-                  id: SecretId.make(id),
-                  scope: ctx.scopes[0]!.id,
-                  name: id,
-                  value: newValue,
-                }),
-              );
-              return { oldValue: old, newValue };
-            }),
-        }),
-      }));
-
-      const executor = yield* createExecutor(
-        makeTestConfig({
-          plugins: [memorySecretsPlugin(), rotatePlugin()] as const,
-        }),
-      );
-
-      yield* executor.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("DB_PASSWORD"),
-          scope: ScopeId.make("test-scope"),
-          name: "DB_PASSWORD",
-          value: "hunter2",
-        }),
-      );
-
-      const result = yield* executor.rotate.rotate("DB_PASSWORD", "correct-horse-battery-staple");
-      expect(result).toEqual({
-        oldValue: "hunter2",
-        newValue: "correct-horse-battery-staple",
       });
 
-      const after = yield* executor.secrets.get("DB_PASSWORD");
-      expect(after).toBe("correct-horse-battery-staple");
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
-});
 
-// ---------------------------------------------------------------------------
-// Tenant isolation — two executors with different scopes sharing the same
-// adapter / blob store. Every SDK surface that reads rows must filter by
-// the calling scope; the adapter has no scope concept, so the guarantee
-// has to live in the executor / core-table layer. These tests pin the
-// invariant at the cheapest possible level (in-memory adapter).
-// ---------------------------------------------------------------------------
-
-// Per-executor memory provider — mirrors production where each org's
-// `workos-vault` plugin instance has its own client scoped to that org.
-// A module-level shared provider would leak across scopes on its own,
-// independent of the core.secret routing table isolation we're testing.
-const makeScopedMemoryProvider = (): SecretProvider => {
-  const store = new Map<string, string>();
-  const key = (scope: string, id: string) => `${scope}\u0000${id}`;
-  return {
-    key: "scoped-memory",
-    writable: true,
-    get: (id, scope) => Effect.sync(() => store.get(key(scope, id)) ?? null),
-    set: (id, value, scope) =>
-      Effect.sync(() => {
-        store.set(key(scope, id), value);
-      }),
-    delete: (id, scope) => Effect.sync(() => store.delete(key(scope, id))),
-    list: () =>
-      Effect.sync(() =>
-        Array.from(store.keys()).map((k) => {
-          const name = k.split("\u0000", 2)[1] ?? k;
-          return { id: name, name };
-        }),
-      ),
-  };
-};
-
-const tenantPlugin = definePlugin(() => ({
-  id: "tenant" as const,
-  storage: () => ({}),
-  secretProviders: () => [makeScopedMemoryProvider()],
-  staticSources: () => [
-    {
-      id: "tenant.ctl",
-      kind: "control" as const,
-      name: "Tenant Ctl",
-      tools: [
-        tool({
-          name: "noop",
-          description: "noop",
-          inputSchema: Schema.toStandardSchemaV1(Schema.toStandardJSONSchemaV1(Schema.Struct({}))),
-          execute: () => Effect.succeed(null),
-        }),
-      ],
-    },
-  ],
-  extension: (ctx) => ({
-    addSource: (id: string) =>
-      ctx.transaction(
-        Effect.gen(function* () {
-          yield* ctx.core.sources.register({
-            id,
-            scope: ctx.scopes[0]!.id,
-            kind: "tenant",
-            name: id,
-            canRemove: true,
-            tools: [{ name: "t", description: "t" }],
-          });
-        }),
-      ),
-  }),
-}));
-
-const makeSharedTenantExecutors = () =>
-  Effect.gen(function* () {
-    const plugins = [tenantPlugin()] as const;
-    const schema = collectSchemas(plugins);
-    const adapter = makeMemoryAdapter({ schema });
-    const blobs = makeInMemoryBlobStore();
-
-    const makeOne = (id: string) =>
-      createExecutor({
-        scopes: [
-          Scope.make({
-            id: ScopeId.make(id),
-            name: id,
-            createdAt: new Date(),
-          }),
-        ],
-        adapter,
-        blobs,
-        plugins,
-        onElicitation: "accept-all",
+  it.effect("core tools cover web UI source secret and policy management flows", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({
+        plugins: [memorySecretsPlugin(), configurableSourcePlugin] as const,
+      });
+      const executor = yield* createExecutor({
+        ...config,
+        coreTools: { webBaseUrl: "http://executor.test" },
       });
 
-    const execA = yield* makeOne("scope-a");
-    const execB = yield* makeOne("scope-b");
-    return { execA, execB };
-  });
-
-describe("tenant isolation (SDK)", () => {
-  it.effect("sources.list does not leak across scopes", () =>
-    Effect.gen(function* () {
-      const { execA, execB } = yield* makeSharedTenantExecutors();
-      yield* execA.tenant.addSource("a-source");
-
-      const bSources = yield* execB.sources.list();
-      expect(bSources.map((s) => s.id)).not.toContain("a-source");
-    }),
-  );
-
-  it.effect("tools.list does not leak across scopes", () =>
-    Effect.gen(function* () {
-      const { execA, execB } = yield* makeSharedTenantExecutors();
-      yield* execA.tenant.addSource("a-source");
-
-      const bTools = yield* execB.tools.list();
-      expect(bTools.map((t) => t.sourceId)).not.toContain("a-source");
-    }),
-  );
-
-  it.effect("secrets.list does not leak across scopes", () =>
-    Effect.gen(function* () {
-      const { execA, execB } = yield* makeSharedTenantExecutors();
-      yield* execA.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("shared-id"),
-          scope: ScopeId.make("scope-a"),
-          name: "A only",
-          value: "a-value",
-        }),
-      );
-
-      const bSecrets = yield* execB.secrets.list();
-      expect(bSecrets.map((s) => s.id)).not.toContain("shared-id");
-    }),
-  );
-
-  it.effect("secrets.status for another scope's id returns missing", () =>
-    Effect.gen(function* () {
-      const { execA, execB } = yield* makeSharedTenantExecutors();
-      yield* execA.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("shared-id"),
-          scope: ScopeId.make("scope-a"),
-          name: "A only",
-          value: "a-value",
-        }),
-      );
-
-      const status = yield* execB.secrets.status("shared-id");
-      expect(status).toBe("missing");
-    }),
-  );
-
-  it.effect("secrets.get cannot read another scope's value", () =>
-    Effect.gen(function* () {
-      const { execA, execB } = yield* makeSharedTenantExecutors();
-      yield* execA.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("shared-id"),
-          scope: ScopeId.make("scope-a"),
-          name: "A only",
-          value: "a-value",
-        }),
-      );
-
-      const value = yield* execB.secrets.get("shared-id");
-      expect(value).toBeNull();
-    }),
-  );
-
-  it.effect("secrets.set rejects scope outside the executor's stack", () =>
-    Effect.gen(function* () {
-      const { execA } = yield* makeSharedTenantExecutors();
-      const result = yield* Effect.exit(
-        execA.secrets.set(
-          SetSecretInput.make({
-            id: SecretId.make("x"),
-            scope: ScopeId.make("not-in-stack"),
-            name: "x",
-            value: "v",
-          }),
-        ),
-      );
-      expect(Exit.isFailure(result)).toBe(true);
-    }),
-  );
-
-  it.effect("secrets.get — innermost scope shadows outer on same id", () =>
-    Effect.gen(function* () {
-      const plugins = [tenantPlugin()] as const;
-      const schema = collectSchemas(plugins);
-      const adapter = makeMemoryAdapter({ schema });
-      const blobs = makeInMemoryBlobStore();
-
-      const innerScope = ScopeId.make("user-org:u1:o1");
-      const outerScope = ScopeId.make("o1");
-
-      const exec = yield* createExecutor({
-        scopes: [
-          Scope.make({ id: innerScope, name: "inner", createdAt: new Date() }),
-          Scope.make({ id: outerScope, name: "outer", createdAt: new Date() }),
-        ],
-        adapter,
-        blobs,
-        plugins,
-        onElicitation: "accept-all",
+      yield* executor.configurable.registerSource("test-scope");
+      yield* executor.secrets.set({
+        id: SecretId.make("agent-secret"),
+        name: "Agent secret",
+        value: "secret-value",
+        scope: ScopeId.make("test-scope"),
+        provider: "memory",
       });
 
-      yield* exec.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("token"),
-          scope: outerScope,
-          name: "org token",
-          value: "org-value",
-        }),
-      );
-      yield* exec.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("token"),
-          scope: innerScope,
-          name: "user token",
-          value: "user-value",
-        }),
-      );
-
-      const value = yield* exec.secrets.get("token");
-      expect(value).toBe("user-value");
-    }),
-  );
-
-  it.effect("secrets.listAll keeps exact-scope rows that secrets.list dedupes", () =>
-    Effect.gen(function* () {
-      const plugins = [tenantPlugin()] as const;
-      const schema = collectSchemas(plugins);
-      const adapter = makeMemoryAdapter({ schema });
-      const blobs = makeInMemoryBlobStore();
-
-      const innerScope = ScopeId.make("user-org:u1:o1");
-      const outerScope = ScopeId.make("o1");
-
-      const exec = yield* createExecutor({
-        scopes: [
-          Scope.make({ id: innerScope, name: "inner", createdAt: new Date() }),
-          Scope.make({ id: outerScope, name: "outer", createdAt: new Date() }),
-        ],
-        adapter,
-        blobs,
-        plugins,
-        onElicitation: "accept-all",
+      expect(
+        yield* executor.tools.invoke("executor.coreTools.secrets.providers", {}),
+      ).toMatchObject({
+        providers: expect.arrayContaining(["memory"]),
       });
-
-      yield* exec.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("token"),
-          scope: outerScope,
-          name: "org token",
-          value: "org-value",
+      expect(
+        yield* executor.tools.invoke("executor.coreTools.secrets.status", {
+          id: "agent-secret",
         }),
-      );
-      yield* exec.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("token"),
-          scope: innerScope,
-          name: "user token",
-          value: "user-value",
+      ).toEqual({ id: "agent-secret", status: "resolved" });
+      expect(
+        yield* executor.tools.invoke("executor.coreTools.secrets.usages", {
+          id: "agent-secret",
         }),
-      );
+      ).toEqual({ usages: [] });
 
-      const runtimeList = yield* exec.secrets.list();
-      const managementList = yield* exec.secrets.listAll();
-
-      expect(runtimeList.filter((ref) => ref.id === "token")).toHaveLength(1);
-      expect(managementList.filter((ref) => ref.id === "token").map((ref) => ref.scopeId)).toEqual([
-        innerScope,
-        outerScope,
-      ]);
-    }),
-  );
-
-  it.effect("secrets.list hides routing rows when the provider reports no backing value", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [staleRouteSecretsPlugin()] as const }),
-      );
-
-      yield* executor.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("missing-secret"),
-          scope: ScopeId.make("test-scope"),
-          name: "Missing Secret",
-          value: "not-stored",
+      const createdPolicy = yield* executor.tools.invoke("executor.coreTools.policies.create", {
+        targetScope: "test-scope",
+        pattern: "configured-source.*",
+        action: "require_approval",
+      });
+      const policyId = (createdPolicy as { readonly policy: { readonly id: string } }).policy.id;
+      expect(createdPolicy).toMatchObject({
+        policy: {
+          id: expect.any(String),
+          scopeId: "test-scope",
+          pattern: "configured-source.*",
+          action: "require_approval",
+        },
+      });
+      expect(yield* executor.tools.invoke("executor.coreTools.policies.list", {})).toMatchObject({
+        policies: [expect.objectContaining({ id: policyId })],
+      });
+      expect(
+        yield* executor.tools.invoke("executor.coreTools.policies.update", {
+          id: policyId,
+          targetScope: "test-scope",
+          action: "approve",
         }),
+      ).toMatchObject({ policy: { id: policyId, action: "approve" } });
+      yield* executor.tools.invoke("executor.coreTools.policies.remove", {
+        id: policyId,
+        targetScope: "test-scope",
+      });
+      expect(yield* executor.policies.list()).toEqual([]);
+
+      yield* executor.tools.invoke("executor.coreTools.sources.refresh", {
+        id: "configured-source",
+        targetScope: "test-scope",
+      });
+      yield* executor.tools.invoke("executor.coreTools.sources.remove", {
+        id: "configured-source",
+        targetScope: "test-scope",
+      });
+      expect((yield* executor.sources.list()).map((source) => source.id)).not.toContain(
+        "configured-source",
       );
 
-      const refs = yield* executor.secrets.list();
-      const status = yield* executor.secrets.status("missing-secret");
+      yield* executor.tools.invoke("executor.coreTools.secrets.remove", {
+        id: "agent-secret",
+        targetScope: "test-scope",
+      });
+      expect(yield* executor.secrets.list()).toEqual([]);
 
-      expect(refs.map((ref) => ref.id)).not.toContain("missing-secret");
-      expect(status).toBe("missing");
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
     }),
   );
 
-  it.effect("secrets.list keeps routing rows for providers without existence checks", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [opaqueRouteSecretsPlugin()] as const }),
-      );
-
-      yield* executor.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("opaque-secret"),
-          scope: ScopeId.make("test-scope"),
-          name: "Opaque Secret",
-          value: "not-stored",
-        }),
-      );
-
-      const refs = yield* executor.secrets.list();
-      const status = yield* executor.secrets.status("opaque-secret");
-
-      expect(refs.map((ref) => ref.id)).toContain("opaque-secret");
-      expect(status).toBe("resolved");
-    }),
-  );
-
-  it.effect(
-    "secrets.list surfaces provider-enumerated entries; status still gates on routed rows",
-    () =>
+  it.effect("core tools start OAuth and expose completed connections", () =>
+    Effect.scoped(
       Effect.gen(function* () {
-        const executor = yield* createExecutor(
-          makeTestConfig({ plugins: [providerOnlySecretPlugin()] as const }),
-        );
-
-        const refs = yield* executor.secrets.list();
-        const status = yield* executor.secrets.status("provider-token");
-        const value = yield* executor.secrets.get("provider-token");
-
-        const entry = refs.find((ref) => ref.id === "provider-token");
-        expect(entry?.provider).toBe("provider-only");
-        expect(entry?.name).toBe("Provider token");
-        expect(status).toBe("missing");
-        expect(value).toBe("provider-value");
-      }),
-  );
-
-  it.effect("secrets.get short-circuits provider fallback in registration order", () =>
-    Effect.gen(function* () {
-      const laterCalls = { count: 0 };
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [fallbackOrderingPlugin(laterCalls)()] as const }),
-      );
-
-      const value = yield* executor.secrets.get("token");
-
-      expect(value).toBe("first-value");
-      expect(laterCalls.count).toBe(0);
-    }),
-  );
-
-  it.effect("secrets.get skips providers that disable fallback lookup", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [fallbackDisabledPlugin()] as const }),
-      );
-
-      const value = yield* executor.secrets.get("token");
-
-      expect(value).toBeNull();
-    }),
-  );
-
-  it.effect("source registration deduplicates duplicate tool ids before bulk insert", () =>
-    Effect.gen(function* () {
-      const executor = yield* createExecutor(
-        makeTestConfig({ plugins: [duplicateToolsPlugin()] as const }),
-      );
-
-      yield* executor.duplicateTools.register();
-
-      const tools = yield* executor.tools.list();
-      expect(tools.filter((tool) => tool.id === "dup-source.same")).toHaveLength(1);
-      expect(tools.find((tool) => tool.id === "dup-source.same")?.description).toBe("last");
-    }),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Cross-scope write preservation — the scoped adapter auto-injects
-// `scope_id IN (stack)` on every query, which is correct for reads but
-// used to silently widen scope-targeted deletes inside `secrets.set`,
-// `sources.register` and `definitions.register`. A user writing at their
-// inner scope would wipe rows that belonged to the outer scope (e.g. an
-// admin-registered org-wide secret or source). These tests pin each write
-// path to the "only the target scope row is replaced" invariant.
-//
-// Each test uses a single shared adapter across two executors:
-//   - `execOuter` has stack [outer] — models a different user or the
-//     admin who owns the outer-scope row we're checking survives.
-//   - `execInner` has stack [inner, outer] — the overriding user whose
-//     write would (buggy) nuke the outer row.
-// ---------------------------------------------------------------------------
-
-const tenantPluginWithDefs = definePlugin(() => ({
-  id: "tenant-defs" as const,
-  storage: () => ({}),
-  extension: (ctx) => ({
-    addDefs: (sourceId: string, definitions: Record<string, unknown>) =>
-      ctx.core.definitions.register({
-        sourceId,
-        scope: ctx.scopes[0]!.id,
-        definitions,
-      }),
-  }),
-}));
-
-const makeLayeredExecutors = () =>
-  Effect.gen(function* () {
-    const plugins = [tenantPlugin(), tenantPluginWithDefs()] as const;
-    const schema = collectSchemas(plugins);
-    const adapter = makeMemoryAdapter({ schema });
-    const blobs = makeInMemoryBlobStore();
-
-    const outerId = ScopeId.make("org");
-    const innerId = ScopeId.make("user-org:u1:org");
-
-    const outerScope = Scope.make({
-      id: outerId,
-      name: "outer",
-      createdAt: new Date(),
-    });
-    const innerScope = Scope.make({
-      id: innerId,
-      name: "inner",
-      createdAt: new Date(),
-    });
-
-    const execOuter = yield* createExecutor({
-      scopes: [outerScope],
-      adapter,
-      blobs,
-      plugins,
-      onElicitation: "accept-all",
-    });
-    const execInner = yield* createExecutor({
-      scopes: [innerScope, outerScope],
-      adapter,
-      blobs,
-      plugins,
-      onElicitation: "accept-all",
-    });
-    return { execOuter, execInner, outerId, innerId };
-  });
-
-describe("cross-scope write preservation (SDK)", () => {
-  it.effect(
-    "secrets.set at the inner scope does not wipe an outer-scope row with the same id",
-    () =>
-      Effect.gen(function* () {
-        const { execOuter, execInner, outerId, innerId } = yield* makeLayeredExecutors();
-
-        // Admin-equivalent writes the org-wide secret at the outer scope.
-        yield* execInner.secrets.set(
-          SetSecretInput.make({
-            id: SecretId.make("api-token"),
-            scope: outerId,
-            name: "Org default",
-            value: "org-default",
-          }),
-        );
-
-        // User writes a personal override at the inner scope.
-        yield* execInner.secrets.set(
-          SetSecretInput.make({
-            id: SecretId.make("api-token"),
-            scope: innerId,
-            name: "Personal override",
-            value: "personal-override",
-          }),
-        );
-
-        // Outer-only executor — same adapter, scope stack = [outer] —
-        // must still see the outer-scope secret ROW (via `secrets.list`,
-        // which reads the core `secret` table directly). This is where
-        // the bug landed: the inner write's delete used
-        // `scope_id IN [inner, outer]` and wiped the outer row, so a
-        // bystander with just [outer] in their stack saw nothing.
-        //
-        // We assert on list instead of get because each executor's
-        // in-memory secret provider is per-executor in this test harness
-        // (see `makeScopedMemoryProvider`) — the adapter's `secret` rows
-        // are the shared, observable source of truth.
-        const outerRefs = yield* execOuter.secrets.list();
-        expect(outerRefs.map((r) => r.id)).toContain("api-token");
-        expect(outerRefs.find((r) => r.id === "api-token")?.scopeId).toBe(outerId);
-
-        // Inner executor's list is de-duplicated by id (innermost wins),
-        // so we only expect one ref for `api-token` — pinned at the
-        // inner scope.
-        const innerRefs = yield* execInner.secrets.list();
-        const innerRef = innerRefs.find((r) => r.id === "api-token");
-        expect(innerRef?.scopeId).toBe(innerId);
-      }),
-  );
-
-  it.effect(
-    "sources.register at the inner scope does not wipe an outer-scope source with the same id",
-    () =>
-      Effect.gen(function* () {
-        const { execOuter, execInner } = yield* makeLayeredExecutors();
-
-        // Outer-scope executor registers a source.
-        yield* execOuter.tenant.addSource("shared");
-
-        // Inner-stacked executor registers a source with the same id at
-        // its own innermost scope (default for `addSource` in the test
-        // plugin is `ctx.scopes[0]`).
-        yield* execInner.tenant.addSource("shared");
-
-        // Outer executor must still see its source. The bug was that
-        // `writeSourceInput`'s delete-before-create ran stack-wide and
-        // nuked the outer source row before creating the inner one.
-        const outerSources = yield* execOuter.sources.list();
-        expect(outerSources.map((s) => s.id)).toContain("shared");
-
-        // Inner executor's list is de-duplicated by id (innermost wins),
-        // so we only expect one entry for "shared" — pinned at the inner
-        // scope. The fact that it shows up at all (combined with the outer
-        // executor still seeing its own row above) proves no rows went
-        // missing.
-        const innerSources = yield* execInner.sources.list();
-        expect(innerSources.filter((s) => s.id === "shared")).toHaveLength(1);
-      }),
-  );
-
-  it.effect(
-    "definitions.register at the inner scope does not wipe outer-scope definitions for the same sourceId",
-    () =>
-      Effect.gen(function* () {
-        const { execOuter, execInner } = yield* makeLayeredExecutors();
-
-        yield* execOuter["tenant-defs"].addDefs("S", {
-          OuterDef: { type: "object" },
-        });
-        yield* execInner["tenant-defs"].addDefs("S", {
-          InnerDef: { type: "object" },
+        const oauthServer = yield* serveOAuthTestServer();
+        const config = makeTestConfig({ plugins: [memorySecretsPlugin()] as const });
+        const executor = yield* createExecutor({
+          ...config,
+          coreTools: { webBaseUrl: "http://executor.test" },
+          oauthEndpointUrlPolicy: { allowHttp: true },
         });
 
-        // Outer executor should still see its definition. The bug was
-        // that `writeDefinitions` deleted by `source_id` without pinning
-        // a scope, so the inner write's stack-wide delete wiped the
-        // outer row before creating the inner one.
-        const outerDefs = yield* execOuter.tools.definitions();
-        expect(outerDefs.S).toBeDefined();
-        expect(outerDefs.S?.OuterDef).toBeDefined();
-      }),
-  );
-});
+        yield* executor.secrets.set({
+          id: SecretId.make("client-id"),
+          name: "OAuth client id",
+          value: "test-client",
+          scope: ScopeId.make("test-scope"),
+          provider: "memory",
+        });
+        yield* executor.secrets.set({
+          id: SecretId.make("client-secret"),
+          name: "OAuth client secret",
+          value: "test-secret",
+          scope: ScopeId.make("test-scope"),
+          provider: "memory",
+        });
 
-// ---------------------------------------------------------------------------
-// Shadow / precedence / cross-scope remove invariants.
-//
-// The scoped adapter returns rows from every scope in the stack on a read.
-// The SDK owes callers two properties on top of that:
-//
-//   - Writes that target a single scope (delete / remove / unregister) must
-//     not cascade into outer scopes when an inner-scope write collides by id.
-//     The pattern that failed us was `findOne` on a scoped table: in a
-//     multi-scope stack that picks whichever scope the storage backend
-//     iterates first, so the downstream delete can hit the wrong row.
-//
-//   - Reads that are supposed to return a single logical row (resolve one
-//     tool by id, one source by id, one secret by id) must pick the
-//     innermost-scope match. Otherwise a user who shadowed an org default
-//     can silently get the org version back on invoke / schema.
-// ---------------------------------------------------------------------------
+        const schema = yield* executor.tools.schema("executor.coreTools.oauth.start");
+        expect(schema?.inputTypeScript).toContain("credentialScope?: string");
+        expect(schema?.inputTypeScript).not.toContain("scope: string; endpoint");
 
-const invokeMarkerPlugin = definePlugin(() => ({
-  id: "marker" as const,
-  storage: () => ({}),
-  extension: (ctx) => ({
-    register: (sourceId: string, marker: string) =>
-      ctx.transaction(
-        ctx.core.sources.register({
-          id: sourceId,
-          scope: ctx.scopes[0]!.id,
-          kind: "marker",
-          name: marker,
-          canRemove: true,
-          tools: [{ name: "t", description: marker }],
-        }),
-      ),
-  }),
-  invokeTool: ({ toolRow }) =>
-    Effect.succeed({
-      marker: toolRow.description,
-      scope: toolRow.scope_id,
-    }),
-}));
+        const started = yield* executor.tools.invoke("executor.coreTools.oauth.start", {
+          credentialScope: "test-scope",
+          endpoint: oauthServer.resourceUrl,
+          connectionId: "agent-oauth",
+          pluginId: "test-plugin",
+          strategy: {
+            kind: "client-credentials",
+            tokenEndpoint: oauthServer.tokenEndpoint,
+            clientIdSecretId: "client-id",
+            clientSecretSecretId: "client-secret",
+            scopes: ["read"],
+          },
+        });
 
-const makeMarkerExecutors = () =>
-  Effect.gen(function* () {
-    const plugins = [invokeMarkerPlugin()] as const;
-    const schema = collectSchemas(plugins);
-    const adapter = makeMemoryAdapter({ schema });
-    const blobs = makeInMemoryBlobStore();
+        expect(started).toMatchObject({
+          authorizationUrl: null,
+          completedConnection: { connectionId: "agent-oauth" },
+          instructions: expect.stringContaining("completed without a browser handoff"),
+        });
 
-    const outerId = ScopeId.make("org");
-    const innerId = ScopeId.make("user-org:u1:org");
-    const outerScope = Scope.make({
-      id: outerId,
-      name: "outer",
-      createdAt: new Date(),
-    });
-    const innerScope = Scope.make({
-      id: innerId,
-      name: "inner",
-      createdAt: new Date(),
-    });
-
-    const execOuter = yield* createExecutor({
-      scopes: [outerScope],
-      adapter,
-      blobs,
-      plugins,
-      onElicitation: "accept-all",
-    });
-    const execInner = yield* createExecutor({
-      scopes: [innerScope, outerScope],
-      adapter,
-      blobs,
-      plugins,
-      onElicitation: "accept-all",
-    });
-    return { execOuter, execInner, outerId, innerId };
-  });
-
-describe("cross-scope read precedence + remove isolation (SDK)", () => {
-  it.effect("secrets.remove at the inner scope does not wipe outer-scope row with same id", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner, outerId, innerId } = yield* makeLayeredExecutors();
-
-      yield* execInner.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("api-token"),
-          scope: outerId,
-          name: "Org default",
-          value: "org-default",
-        }),
-      );
-      yield* execInner.secrets.set(
-        SetSecretInput.make({
-          id: SecretId.make("api-token"),
-          scope: innerId,
-          name: "Personal override",
-          value: "personal-override",
-        }),
-      );
-
-      // Inner caller removes — should only drop the inner override.
-      yield* execInner.secrets.remove(
-        RemoveSecretInput.make({
-          id: SecretId.make("api-token"),
-          targetScope: innerId,
-        }),
-      );
-
-      // Outer-only executor must still see its org-scope row.
-      const outerRefs = yield* execOuter.secrets.list();
-      expect(outerRefs.map((r) => r.id)).toContain("api-token");
-      expect(outerRefs.find((r) => r.id === "api-token")?.scopeId).toBe(outerId);
-    }),
-  );
-
-  it.effect(
-    "sources.remove at the inner scope does not wipe the outer-scope source with same id",
-    () =>
-      Effect.gen(function* () {
-        const { execOuter, execInner, innerId } = yield* makeLayeredExecutors();
-
-        yield* execOuter.tenant.addSource("shared");
-        yield* execInner.tenant.addSource("shared");
-
-        // Inner caller removes "shared" via the public API. The outer
-        // executor's source row must survive.
-        yield* execInner.sources.remove({ id: "shared", targetScope: innerId });
-
-        const outerSources = yield* execOuter.sources.list();
-        expect(outerSources.map((s) => s.id)).toContain("shared");
-      }),
-  );
-
-  it.effect("ctx.core.sources.unregister at the inner scope does not wipe outer-scope row", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner, innerId } = yield* makeLayeredExecutors();
-
-      yield* execOuter.tenant.addSource("shared");
-      yield* execInner.tenant.addSource("shared");
-
-      // Plugin-owned unregister path (ctx.core.sources.unregister) fires
-      // via a dedicated extension method. We drive it by calling
-      // `sources.remove` — which routes through the same deleteSourceById
-      // helper — but the real regression is the findOne-before-delete
-      // picking the wrong scope's row. The outer row must survive.
-      yield* execInner.sources.remove({ id: "shared", targetScope: innerId });
-
-      const outerSources = yield* execOuter.sources.list();
-      expect(outerSources.filter((s) => s.id === "shared")).toHaveLength(1);
-    }),
-  );
-
-  it.effect(
-    "tools.invoke picks the innermost tool when the same tool id exists at two scopes",
-    () =>
-      Effect.gen(function* () {
-        const { execOuter, execInner, outerId, innerId } = yield* makeMarkerExecutors();
-
-        yield* execOuter.marker.register("shared", "outer");
-        yield* execInner.marker.register("shared", "inner");
-
-        const result = (yield* execInner.tools.invoke(
-          "shared.t",
-          {},
-          { onElicitation: "accept-all" },
-        )) as {
-          marker: string;
-          scope: string;
-        };
-        expect(result.marker).toBe("inner");
-        expect(result.scope).toBe(innerId);
-
-        // Outer-only executor still invokes its own copy.
-        const outerResult = (yield* execOuter.tools.invoke(
-          "shared.t",
-          {},
-          { onElicitation: "accept-all" },
-        )) as { marker: string; scope: string };
-        expect(outerResult.marker).toBe("outer");
-        expect(outerResult.scope).toBe(outerId);
-      }),
-  );
-
-  it.effect("tools.schema — innermost shadow returns the inner description", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner } = yield* makeMarkerExecutors();
-
-      yield* execOuter.marker.register("shared", "outer-desc");
-      yield* execInner.marker.register("shared", "inner-desc");
-
-      const schema = yield* execInner.tools.schema("shared.t");
-      expect(schema?.description).toBe("inner-desc");
-    }),
-  );
-
-  it.effect("tools.list dedupes by id, keeping the innermost row", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner } = yield* makeMarkerExecutors();
-
-      yield* execOuter.marker.register("shared", "outer-desc");
-      yield* execInner.marker.register("shared", "inner-desc");
-
-      const tools = yield* execInner.tools.list();
-      const shared = tools.filter((t) => t.id === "shared.t");
-      expect(shared).toHaveLength(1);
-      expect(shared[0]?.description).toBe("inner-desc");
-    }),
-  );
-
-  it.effect("sources.list dedupes by id, keeping the innermost row", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner } = yield* makeMarkerExecutors();
-
-      yield* execOuter.marker.register("shared", "outer-name");
-      yield* execInner.marker.register("shared", "inner-name");
-
-      const sources = yield* execInner.sources.list();
-      const shared = sources.filter((s) => s.id === "shared");
-      expect(shared).toHaveLength(1);
-      expect(shared[0]?.name).toBe("inner-name");
-    }),
-  );
-
-  it.effect("tools.definitions dedupes by (source_id, name), keeping the innermost row", () =>
-    Effect.gen(function* () {
-      const { execOuter, execInner } = yield* makeLayeredExecutors();
-
-      // Register inner first, outer second. Without precedence-aware
-      // dedup, a naive "iterate rows, last-one-wins" map would end up
-      // keyed to the outer description just because outer was inserted
-      // into the store last.
-      yield* execInner["tenant-defs"].addDefs("S", {
-        Shared: { type: "string", description: "inner" },
-      });
-      yield* execOuter["tenant-defs"].addDefs("S", {
-        Shared: { type: "string", description: "outer" },
-      });
-
-      const defs = yield* execInner.tools.definitions();
-      const shared = defs.S?.Shared as { description?: string } | undefined;
-      expect(shared?.description).toBe("inner");
-    }),
-  );
-
-  it.effect("tools.schema attaches innermost $defs when shadowed across scopes", () =>
-    Effect.gen(function* () {
-      // Source id "S" with a tool that references $defs/Shared, plus a
-      // definition "Shared" registered at both scopes. Schema's attached
-      // $defs should come from the inner scope.
-      const plugins = [
-        tenantPlugin(),
-        tenantPluginWithDefs(),
-        definePlugin(() => ({
-          id: "ref" as const,
-          storage: () => ({}),
-          extension: (ctx) => ({
-            register: (sourceId: string) =>
-              ctx.transaction(
-                ctx.core.sources.register({
-                  id: sourceId,
-                  scope: ctx.scopes[0]!.id,
-                  kind: "ref",
-                  name: sourceId,
-                  canRemove: true,
-                  tools: [
-                    {
-                      name: "use",
-                      description: "uses $defs/Shared",
-                      inputSchema: {
-                        type: "object",
-                        properties: { x: { $ref: "#/$defs/Shared" } },
-                      },
-                    },
-                  ],
-                }),
-              ),
+        const listed = yield* executor.tools.invoke("executor.coreTools.connections.list", {});
+        expect(listed).toMatchObject({
+          connections: [expect.objectContaining({ id: "agent-oauth", provider: "oauth2" })],
+        });
+        expect(
+          yield* executor.tools.invoke("executor.coreTools.connections.providers", {}),
+        ).toMatchObject({
+          providers: expect.arrayContaining(["oauth2"]),
+        });
+        expect(
+          yield* executor.tools.invoke("executor.coreTools.connections.usages", {
+            id: "agent-oauth",
           }),
-        }))(),
-      ] as const;
-      const schema = collectSchemas(plugins);
-      const adapter = makeMemoryAdapter({ schema });
-      const blobs = makeInMemoryBlobStore();
+        ).toEqual({ usages: [] });
+        yield* executor.tools.invoke("executor.coreTools.connections.remove", {
+          id: "agent-oauth",
+          targetScope: "test-scope",
+        });
+        expect(yield* executor.connections.list()).toEqual([]);
 
-      const outerId = ScopeId.make("org");
-      const innerId = ScopeId.make("user-org:u1:org");
-      const execOuter = yield* createExecutor({
-        scopes: [Scope.make({ id: outerId, name: "outer", createdAt: new Date() })],
-        adapter,
-        blobs,
-        plugins,
-        onElicitation: "accept-all",
-      });
-      const execInner = yield* createExecutor({
-        scopes: [
-          Scope.make({ id: innerId, name: "inner", createdAt: new Date() }),
-          Scope.make({ id: outerId, name: "outer", createdAt: new Date() }),
-        ],
-        adapter,
-        blobs,
-        plugins,
-        onElicitation: "accept-all",
+        yield* executor.close();
+        yield* Effect.promise(() => config.testDb.close());
+      }),
+    ),
+  );
+
+  it.effect("core OAuth tools return actionable tool failures for expected errors", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({ plugins: [memorySecretsPlugin()] as const });
+      const executor = yield* createExecutor({
+        ...config,
+        coreTools: { webBaseUrl: "http://executor.test" },
+        oauthEndpointUrlPolicy: { allowHttp: true },
       });
 
-      yield* execOuter.ref.register("S");
-      yield* execInner.ref.register("S");
-
-      yield* execInner["tenant-defs"].addDefs("S", {
-        Shared: { type: "string", description: "inner" },
-      });
-      yield* execOuter["tenant-defs"].addDefs("S", {
-        Shared: { type: "string", description: "outer" },
+      const result = yield* executor.tools.invoke("executor.coreTools.oauth.probe", {
+        endpoint: "http://127.0.0.1:1/mcp",
       });
 
-      const view = yield* execInner.tools.schema("S.use");
-      const input = view?.inputSchema as
-        | { $defs?: { Shared?: { description?: string } } }
-        | undefined;
-      expect(input?.$defs?.Shared?.description).toBe("inner");
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "oauth_probe_failed",
+        },
+      });
+
+      yield* executor.close();
+      yield* Effect.promise(() => config.testDb.close());
     }),
+  );
+
+  it.effect("core tools start browser OAuth and expose the completed connection", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const oauthServer = yield* serveOAuthTestServer();
+        const config = makeTestConfig({ plugins: [memorySecretsPlugin()] as const });
+        const executor = yield* createExecutor({
+          ...config,
+          coreTools: { webBaseUrl: "http://executor.test" },
+          oauthEndpointUrlPolicy: { allowHttp: true },
+        });
+
+        yield* executor.secrets.set({
+          id: SecretId.make("browser-client-id"),
+          name: "OAuth client id",
+          value: "test-client",
+          scope: ScopeId.make("test-scope"),
+          provider: "memory",
+        });
+        yield* executor.secrets.set({
+          id: SecretId.make("browser-client-secret"),
+          name: "OAuth client secret",
+          value: "test-secret",
+          scope: ScopeId.make("test-scope"),
+          provider: "memory",
+        });
+
+        const started = yield* executor.tools.invoke("executor.coreTools.oauth.start", {
+          credentialScope: "test",
+          endpoint: oauthServer.resourceUrl,
+          connectionId: "agent-browser-oauth",
+          pluginId: "test-plugin",
+          strategy: {
+            kind: "authorization-code",
+            authorizationEndpoint: oauthServer.authorizationEndpoint,
+            tokenEndpoint: oauthServer.tokenEndpoint,
+            clientIdSecretId: "browser-client-id",
+            clientSecretSecretId: "browser-client-secret",
+            scopes: ["read"],
+          },
+        });
+        expect(started).toMatchObject({
+          authorizationUrl: expect.stringContaining(oauthServer.authorizationEndpoint),
+          completedConnection: null,
+          instructions: expect.stringContaining("open this authorization URL"),
+        });
+
+        const authorizationUrl = (started as { authorizationUrl: string }).authorizationUrl;
+        const callback = yield* oauthServer.completeAuthorizationCodeFlow({ authorizationUrl });
+        const completed = yield* executor.oauth.complete({
+          state: callback.state,
+          code: callback.code,
+        });
+        expect(completed.connectionId).toBe("agent-browser-oauth");
+
+        const listed = yield* executor.tools.invoke("executor.coreTools.connections.list", {});
+        expect(listed).toMatchObject({
+          connections: [expect.objectContaining({ id: "agent-browser-oauth", provider: "oauth2" })],
+        });
+
+        yield* executor.close();
+        yield* Effect.promise(() => config.testDb.close());
+      }),
+    ),
   );
 });

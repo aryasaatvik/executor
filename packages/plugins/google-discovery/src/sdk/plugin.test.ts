@@ -9,7 +9,6 @@ import {
   ConnectionId,
   CreateConnectionInput,
   createExecutor,
-  makeTestConfig,
   Scope,
   ScopeId,
   SecretId,
@@ -17,6 +16,7 @@ import {
   TokenMaterial,
   type InvokeOptions,
 } from "@executor-js/sdk";
+import { makeTestConfig } from "@executor-js/sdk/testing";
 
 import { googleDiscoveryPlugin } from "./plugin";
 
@@ -425,15 +425,33 @@ describe("Google Discovery plugin", () => {
       });
 
       expect(result.toolCount).toBe(2);
+      expect((yield* executor.tools.list()).map((tool) => tool.id)).toEqual(
+        expect.arrayContaining([
+          "executor.googleDiscovery.probeDiscovery",
+          "executor.googleDiscovery.addSource",
+          "executor.googleDiscovery.getSource",
+          "executor.googleDiscovery.configureSource",
+        ]),
+      );
+
+      const inspected = yield* executor.tools.invoke(
+        "executor.googleDiscovery.getSource",
+        { namespace: "drive", scope: "test-scope" },
+        autoApprove,
+      );
+      expect(inspected).toMatchObject({
+        ok: true,
+        data: { source: { namespace: "drive", scope: "test-scope" } },
+      });
 
       const invocation = (yield* executor.tools.invoke(
         "drive.files.get",
         { fileId: "123", fields: "id,name", prettyPrint: true },
         autoApprove,
-      )) as { data: unknown; error: unknown };
+      )) as { readonly ok: true; readonly data: { status: number; data: unknown } };
 
-      expect(invocation.error).toBeNull();
-      expect(invocation.data).toEqual({ id: "123", name: "Quarterly Plan" });
+      expect(invocation.ok).toBe(true);
+      expect(invocation.data.data).toEqual({ id: "123", name: "Quarterly Plan" });
 
       const apiRequest = handle.requests.find((request) =>
         request.url.startsWith("/drive/v3/files/123"),
@@ -447,8 +465,8 @@ describe("Google Discovery plugin", () => {
 
   // -------------------------------------------------------------------------
   // Multi-scope shadowing — regression suite covering the bug class where
-  // store reads/writes that don't pin scope_id collapse onto whichever row
-  // the scoped adapter's `scope_id IN (stack)` filter sees first. Each
+  // store reads/writes that don't pin scope_id collapse onto whichever visible
+  // row wins first. Each
   // scenario is reproducible against the pre-fix store.
   // -------------------------------------------------------------------------
 

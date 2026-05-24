@@ -4,9 +4,11 @@ export { invoke, invokeWithLayer, resolveHeaders, annotationsForOperation } from
 export {
   openApiPlugin,
   type OpenApiSpecConfig,
+  type OpenApiConfigureCredentialInput,
+  type OpenApiConfigureInput,
   type OpenApiPluginExtension,
   type OpenApiPluginOptions,
-  type OpenApiUpdateSourceInput,
+  type OpenApiSourceRef,
 } from "./plugin";
 export {
   openapiSchema,
@@ -50,9 +52,6 @@ export {
   InvocationResult,
   MediaBinding,
   OAuth2SourceConfig,
-  OpenApiSourceBindingInput,
-  OpenApiSourceBindingRef,
-  OpenApiSourceBindingValue,
   OperationBinding,
   OperationParameter,
   OperationRequestBody,

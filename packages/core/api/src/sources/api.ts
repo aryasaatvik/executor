@@ -1,8 +1,15 @@
 import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { Schema } from "effect";
-import { ScopeId, SourceRemovalNotAllowedError, ToolId } from "@executor-js/sdk";
-
-import { InternalError } from "../observability";
+import {
+  InternalError,
+  CredentialBindingRef,
+  RemoveSourceCredentialBindingInput,
+  ScopeId,
+  SetSourceCredentialBindingInput,
+  SourceRemovalNotAllowedError,
+  ReplaceSourceCredentialBindingsInput,
+  ToolId,
+} from "@executor-js/sdk/shared";
 
 // ---------------------------------------------------------------------------
 // Params
@@ -10,6 +17,11 @@ import { InternalError } from "../observability";
 
 const ScopeParams = { scopeId: ScopeId };
 const SourceParams = { scopeId: ScopeId, sourceId: Schema.String };
+const SourceBindingParams = {
+  scopeId: ScopeId,
+  sourceId: Schema.String,
+  sourceScopeId: ScopeId,
+};
 
 // ---------------------------------------------------------------------------
 // Response schemas
@@ -50,6 +62,16 @@ const ToolMetadataResponse = Schema.Struct({
 
 const DetectRequest = Schema.Struct({
   url: Schema.String.check(Schema.isMaxLength(2_048)),
+});
+
+const ConfigureSourceRequest = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: ScopeId,
+  }),
+  scope: ScopeId,
+  type: Schema.optional(Schema.String),
+  config: Schema.Unknown,
 });
 
 const DetectResultResponse = Schema.Struct({
@@ -104,6 +126,49 @@ export const SourcesApi = HttpApiGroup.make("sources")
       params: ScopeParams,
       payload: DetectRequest,
       success: Schema.Array(DetectResultResponse),
+      error: InternalError,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("configure", "/scopes/:scopeId/sources/configure", {
+      params: ScopeParams,
+      payload: ConfigureSourceRequest,
+      success: Schema.Unknown,
+      error: InternalError,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "listBindings",
+      "/scopes/:scopeId/sources/:sourceId/base/:sourceScopeId/bindings",
+      {
+        params: SourceBindingParams,
+        success: Schema.Array(CredentialBindingRef),
+        error: InternalError,
+      },
+    ),
+  )
+  .add(
+    HttpApiEndpoint.post("setBinding", "/scopes/:scopeId/source-bindings", {
+      params: ScopeParams,
+      payload: SetSourceCredentialBindingInput,
+      success: CredentialBindingRef,
+      error: InternalError,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("removeBinding", "/scopes/:scopeId/source-bindings/remove", {
+      params: ScopeParams,
+      payload: RemoveSourceCredentialBindingInput,
+      success: Schema.Struct({ removed: Schema.Boolean }),
+      error: InternalError,
+    }),
+  )
+  .add(
+    HttpApiEndpoint.post("replaceBindings", "/scopes/:scopeId/source-bindings/replace", {
+      params: ScopeParams,
+      payload: ReplaceSourceCredentialBindingsInput,
+      success: Schema.Array(CredentialBindingRef),
       error: InternalError,
     }),
   );

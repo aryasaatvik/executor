@@ -11,18 +11,34 @@
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { Effect, Exit, Schema } from "effect";
+import { FetchHttpClient, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import {
+  HttpApi,
+  HttpApiBuilder,
+  HttpApiEndpoint,
+  HttpApiGroup,
+  OpenApi,
+} from "effect/unstable/httpapi";
+// The socket-drop and slow-response cases exercise Node transport behavior
+// that Effect's in-memory HTTP test server intentionally abstracts away.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import {
   createExecutor,
   definePlugin,
-  makeTestConfig,
   type InvokeOptions,
   type SecretProvider,
 } from "@executor-js/sdk";
+import { makeTestConfig } from "@executor-js/sdk/testing";
+import {
+  makeOpenApiHttpApiTestSourceConfig,
+  makeOpenApiTestSourceConfig,
+  type OpenApiTestServerShape,
+  serveOpenApiHttpApiTestServer,
+  unwrapInvocation,
+} from "../testing";
 
 import { openApiPlugin } from "./plugin";
 
@@ -53,34 +69,41 @@ const memorySecretsPlugin = definePlugin(() => ({
 type ResponseScript = (req: {
   url: string;
   method: string;
-  headers: Record<string, string | string[] | undefined>;
+  headers: Readonly<Record<string, string>>;
 }) => {
   status?: number;
   headers?: Record<string, string>;
-  body?: string | Buffer;
-  // If true, server destroys the socket mid-response without sending body.
-  drop?: boolean;
+  body?: string;
 };
 
 const startScriptedServer = (script: ResponseScript) =>
+  serveOpenApiHttpApiTestServer({
+    api: FailureApi,
+    handlersLayer: HttpApiBuilder.group(FailureApi, "things", (handlers) =>
+      handlers.handle("listThings", () =>
+        Effect.gen(function* () {
+          const request = yield* HttpServerRequest.HttpServerRequest;
+          const result = script({
+            url: request.url,
+            method: request.method,
+            headers: request.headers,
+          });
+          return HttpServerResponse.text(result.body ?? '{"ok":true}', {
+            status: result.status ?? 200,
+            headers: result.headers ?? { "content-type": "application/json" },
+          });
+        }),
+      ),
+    ),
+  });
+
+const startDroppingServer = () =>
   Effect.acquireRelease(
     Effect.callback<{ baseUrl: string; close: () => void }>((resume) => {
-      const server = createServer((req, res) => {
-        const url = req.url ?? "/";
-        const result = script({ url, method: req.method ?? "GET", headers: req.headers });
-        if (result.drop) {
-          // Send headers then forcibly destroy the socket to simulate a
-          // real-world connection drop mid-body.
-          res.writeHead(result.status ?? 200, result.headers ?? {});
-          res.write("partial");
-          req.socket.destroy();
-          return;
-        }
-        res.writeHead(
-          result.status ?? 200,
-          result.headers ?? { "content-type": "application/json" },
-        );
-        res.end(result.body ?? '{"ok":true}');
+      const server = createServer((_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write("partial");
+        res.destroy();
       });
       server.listen(0, "127.0.0.1", () => {
         const port = (server.address() as AddressInfo).port;
@@ -95,30 +118,15 @@ const startScriptedServer = (script: ResponseScript) =>
     (s) => Effect.sync(() => s.close()),
   );
 
-const makeSpec = () =>
-  JSON.stringify({
-    openapi: "3.0.0",
-    info: { title: "FailuresTest", version: "1.0.0" },
-    paths: {
-      "/things": {
-        get: {
-          operationId: "listThings",
-          tags: ["things"],
-          responses: {
-            "200": {
-              description: "ok",
-              content: {
-                "application/json": {
-                  schema: { type: "array", items: { type: "object" } },
-                },
-              },
-            },
-            default: { description: "error" },
-          },
-        },
-      },
-    },
-  });
+const ThingsGroup = HttpApiGroup.make("things").add(
+  HttpApiEndpoint.get("listThings", "/things", {
+    success: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
+);
+
+const FailureApi = HttpApi.make("failuresTest")
+  .add(ThingsGroup)
+  .annotateMerge(OpenApi.annotations({ title: "FailuresTest", version: "1.0.0" }));
 
 const buildExecutor = (baseUrl: string) =>
   Effect.gen(function* () {
@@ -130,12 +138,32 @@ const buildExecutor = (baseUrl: string) =>
         ] as const,
       }),
     );
-    yield* executor.openapi.addSpec({
-      spec: makeSpec(),
-      scope: TEST_SCOPE,
-      namespace: "f",
-      baseUrl,
-    });
+    yield* executor.openapi.addSpec(
+      makeOpenApiHttpApiTestSourceConfig(FailureApi, {
+        scope: TEST_SCOPE,
+        namespace: "f",
+        baseUrl,
+      }),
+    );
+    return executor;
+  });
+
+const buildExecutorForOpenApiServer = (server: OpenApiTestServerShape) =>
+  Effect.gen(function* () {
+    const executor = yield* createExecutor(
+      makeTestConfig({
+        plugins: [
+          openApiPlugin({ httpClientLayer: FetchHttpClient.layer }),
+          memorySecretsPlugin(),
+        ] as const,
+      }),
+    );
+    yield* executor.openapi.addSpec(
+      makeOpenApiTestSourceConfig(server, {
+        scope: TEST_SCOPE,
+        namespace: "f",
+      }),
+    );
     return executor;
   });
 
@@ -147,12 +175,12 @@ describe("OpenAPI upstream failure modes", () => {
   // failure is acceptable; what isn't is a silent successful return.
   it.effect("upstream 500 surfaces via the error envelope (not silent success)", () =>
     Effect.gen(function* () {
-      const { baseUrl } = yield* startScriptedServer(() => ({
+      const server = yield* startScriptedServer(() => ({
         status: 500,
         headers: { "content-type": "application/json" },
         body: '{"error":{"code":"internal","message":"db timeout"}}',
       }));
-      const executor = yield* buildExecutor(baseUrl);
+      const executor = yield* buildExecutorForOpenApiServer(server);
 
       const exit = yield* executor.tools
         .invoke("f.things.listThings", {}, autoApprove)
@@ -176,12 +204,12 @@ describe("OpenAPI upstream failure modes", () => {
 
   it.effect("upstream 4xx surfaces structured error body", () =>
     Effect.gen(function* () {
-      const { baseUrl } = yield* startScriptedServer(() => ({
+      const server = yield* startScriptedServer(() => ({
         status: 422,
         headers: { "content-type": "application/json" },
         body: '{"error":{"field":"name","reason":"too_short"}}',
       }));
-      const executor = yield* buildExecutor(baseUrl);
+      const executor = yield* buildExecutorForOpenApiServer(server);
 
       const exit = yield* executor.tools
         .invoke("f.things.listThings", {}, autoApprove)
@@ -196,14 +224,42 @@ describe("OpenAPI upstream failure modes", () => {
     }),
   );
 
+  it.effect("upstream 401 is classified as credential_rejected", () =>
+    Effect.gen(function* () {
+      const server = yield* startScriptedServer(() => ({
+        status: 401,
+        headers: { "content-type": "application/json" },
+        body: '{"error":{"message":"invalid token"}}',
+      }));
+      const executor = yield* buildExecutorForOpenApiServer(server);
+
+      const result = yield* executor.tools.invoke("f.things.listThings", {}, autoApprove);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "credential_rejected",
+          status: 401,
+          message: expect.stringContaining("Upstream rejected credentials"),
+          details: {
+            category: "authentication",
+            upstream: {
+              status: 401,
+            },
+          },
+        },
+      });
+    }),
+  );
+
   it.effect("upstream returns malformed JSON despite Content-Type: application/json", () =>
     Effect.gen(function* () {
-      const { baseUrl } = yield* startScriptedServer(() => ({
+      const server = yield* startScriptedServer(() => ({
         status: 200,
         headers: { "content-type": "application/json" },
         body: "not json at all <<<<",
       }));
-      const executor = yield* buildExecutor(baseUrl);
+      const executor = yield* buildExecutorForOpenApiServer(server);
 
       // Whatever happens, the test asserts it doesn't produce a defect or
       // hang — either the plugin returns a value (raw text / passthrough)
@@ -221,11 +277,7 @@ describe("OpenAPI upstream failure modes", () => {
 
   it.effect("upstream connection drop mid-response surfaces as a failure", () =>
     Effect.gen(function* () {
-      const { baseUrl } = yield* startScriptedServer(() => ({
-        status: 200,
-        headers: { "content-type": "application/json" },
-        drop: true,
-      }));
+      const { baseUrl } = yield* startDroppingServer();
       const executor = yield* buildExecutor(baseUrl);
 
       const exit = yield* executor.tools
@@ -238,12 +290,12 @@ describe("OpenAPI upstream failure modes", () => {
 
   it.effect("upstream returns wrong content-type (HTML for a JSON op)", () =>
     Effect.gen(function* () {
-      const { baseUrl } = yield* startScriptedServer(() => ({
+      const server = yield* startScriptedServer(() => ({
         status: 200,
         headers: { "content-type": "text/html" },
         body: "<html><body>Service Unavailable</body></html>",
       }));
-      const executor = yield* buildExecutor(baseUrl);
+      const executor = yield* buildExecutorForOpenApiServer(server);
 
       const exit = yield* executor.tools
         .invoke("f.things.listThings", {}, autoApprove)
@@ -280,10 +332,10 @@ describe("OpenAPI upstream failure modes", () => {
       const { baseUrl } = yield* slowServer;
       const executor = yield* buildExecutor(baseUrl);
 
-      const result = yield* executor.tools.invoke("f.things.listThings", {}, autoApprove);
-      // Empty array via .data envelope or directly — accept either shape.
-      const data = (result as { data?: unknown }).data ?? result;
-      expect(data).toEqual([]);
+      const result = unwrapInvocation(
+        yield* executor.tools.invoke("f.things.listThings", {}, autoApprove),
+      );
+      expect(result.data).toEqual([]);
     }),
   );
 });

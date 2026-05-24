@@ -1,13 +1,15 @@
 import { Effect, Schema } from "effect";
 import {
   ConfiguredCredentialValue,
-  CredentialBindingValue,
   credentialSlotKey,
-  ScopedSecretCredentialInput,
-  ScopeId,
   SecretBackedMap,
   SecretBackedValue,
-} from "@executor-js/sdk/core";
+} from "@executor-js/sdk/shared";
+import {
+  HttpConfiguredValueInput,
+  HttpCredentialInput,
+  HttpOAuthConfigureInput,
+} from "@executor-js/sdk/http-source";
 
 export { SecretBackedMap, SecretBackedValue };
 
@@ -25,11 +27,10 @@ export type McpTransport = typeof McpTransport.Type;
 export const ConfiguredMcpCredentialValue = ConfiguredCredentialValue;
 export type ConfiguredMcpCredentialValue = typeof ConfiguredMcpCredentialValue.Type;
 
-export const McpCredentialInput = Schema.Union([
-  ScopedSecretCredentialInput,
-  SecretBackedValue,
-  ConfiguredMcpCredentialValue,
-]);
+export const McpConfiguredValueInput = HttpConfiguredValueInput;
+export type McpConfiguredValueInput = typeof McpConfiguredValueInput.Type;
+
+export const McpCredentialInput = HttpCredentialInput;
 export type McpCredentialInput = typeof McpCredentialInput.Type;
 
 export const mcpHeaderSlot = (name: string): string => credentialSlotKey("header", name);
@@ -68,46 +69,14 @@ export const McpConnectionAuth = Schema.Union([
 export type McpConnectionAuth = typeof McpConnectionAuth.Type;
 
 export const McpConnectionAuthInput = Schema.Union([
-  McpConnectionAuth,
   Schema.Struct({
-    kind: Schema.Literal("header"),
-    headerName: Schema.String,
-    secretId: Schema.String,
-    prefix: Schema.optional(Schema.String),
-    targetScope: Schema.optional(ScopeId),
-    secretScopeId: Schema.optional(ScopeId),
+    kind: Schema.Literal("none"),
   }),
   Schema.Struct({
-    kind: Schema.Literal("oauth2"),
-    connectionId: Schema.String,
-    clientIdSecretId: Schema.optional(Schema.String),
-    clientSecretSecretId: Schema.optional(Schema.NullOr(Schema.String)),
+    oauth2: Schema.optional(HttpOAuthConfigureInput),
   }),
 ]);
 export type McpConnectionAuthInput = typeof McpConnectionAuthInput.Type;
-
-export const McpSourceBindingValue = CredentialBindingValue;
-export type McpSourceBindingValue = typeof McpSourceBindingValue.Type;
-
-export const McpSourceBindingInput = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScope: ScopeId,
-  scope: ScopeId,
-  slot: Schema.String,
-  value: McpSourceBindingValue,
-});
-export type McpSourceBindingInput = typeof McpSourceBindingInput.Type;
-
-export const McpSourceBindingRef = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScopeId: ScopeId,
-  scopeId: ScopeId,
-  slot: Schema.String,
-  value: McpSourceBindingValue,
-  createdAt: Schema.Date,
-  updatedAt: Schema.Date,
-});
-export type McpSourceBindingRef = typeof McpSourceBindingRef.Type;
 
 // ---------------------------------------------------------------------------
 // Stored source data — discriminated union on transport

@@ -17,31 +17,31 @@ export {
   HttpApiSchema,
 } from "effect/unstable/httpapi";
 
-// Storage adapter interface types (re-exported from @executor-js/storage-core
-// so plugin authors can write adapters against a single public surface
-// without depending on storage-core directly).
+// FumaDB integration.
+export { fumadb } from "fumadb";
+export type { FumaDB } from "fumadb";
+export type { AbstractQuery, Condition, ConditionBuilder } from "fumadb/query";
+export { column, idColumn, schema as fumaSchema, table } from "fumadb/schema";
+export type { AnyColumn, AnySchema, AnyTable, Column, Schema as FumaSchema } from "fumadb/schema";
+
 export type {
-  DBAdapter,
-  DBSchema,
-  DBFieldAttribute,
-  DBFieldType,
+  FumaDb,
+  FumaQuery,
+  FumaRow,
+  FumaTables,
+  IFumaClient,
   StorageFailure,
-  TypedAdapter,
-  Where,
-  WhereOperator,
-} from "@executor-js/storage-core";
+} from "./fuma-runtime";
+export { StorageError, UniqueViolationError, isStorageFailure } from "./fuma-runtime";
 
-export { typedAdapter } from "@executor-js/storage-core";
-
-// Storage-layer typed errors (re-exported so plugin code can catchTag
-// `UniqueViolationError` without importing storage-core directly).
-export { StorageError, UniqueViolationError } from "@executor-js/storage-core";
+// Storage-layer typed errors are still exported so plugin code can catchTag
+// `UniqueViolationError`, but FumaDB itself is the storage API.
 
 // IDs (branded)
 export { ScopeId, ToolId, SecretId, PolicyId, ConnectionId, CredentialBindingId } from "./ids";
 
 // Scope
-export { Scope } from "./scope";
+export { Scope, defaultSourceInstallScopeId } from "./scope";
 
 // Errors (tagged)
 export {
@@ -77,8 +77,17 @@ export {
 
 // Core schema
 export {
+  bigintColumn,
+  boolColumn,
   coreSchema,
+  dateColumn,
   isToolPolicyAction,
+  jsonColumn,
+  nullableBigintColumn,
+  nullableJsonColumn,
+  nullableTextColumn,
+  scopedExecutorTable,
+  textColumn,
   TOOL_POLICY_ACTIONS,
   type CoreSchema,
   type SourceInput,
@@ -88,6 +97,7 @@ export {
   type DefinitionRow,
   type SecretRow,
   type ConnectionRow,
+  type PluginStorageRow,
   type CredentialBindingRow,
   type ToolPolicyRow,
   type ToolPolicyAction,
@@ -131,14 +141,18 @@ export {
   ConfiguredCredentialValue,
   ScopedSecretCredentialInput,
   CredentialBindingRef,
-  SetCredentialBindingInput,
-  CredentialBindingSourceInput,
   CredentialBindingSlotInput,
   RemoveCredentialBindingInput,
+  RemoveSourceCredentialBindingInput,
   ReplaceCredentialBindingValue,
   ReplaceCredentialBindingsInput,
+  ReplaceSourceCredentialBindingsInput,
   CredentialBindingResolutionStatus,
   ResolvedCredentialSlot,
+  SetSourceCredentialBindingInput,
+  SourceCredentialBindingSource,
+  SourceCredentialBindingSourceInput,
+  SourceCredentialBindingSlotInput,
   credentialBindingId,
   credentialSlotKey,
   credentialSlotPart,
@@ -181,6 +195,7 @@ export {
   type BlobStore,
   type PluginBlobStore,
   pluginBlobStore,
+  makeFumaBlobStore,
   makeInMemoryBlobStore,
 } from "./blob";
 
@@ -233,7 +248,6 @@ export {
 } from "./oauth-helpers";
 
 export { makeOAuth2Service, type OAuthServiceDeps } from "./oauth-service";
-export type { ScopedDBAdapter, ScopedTypedAdapter } from "./scoped-adapter";
 
 export {
   HostedOutboundRequestBlocked,
@@ -279,38 +293,54 @@ export {
   type StorageDeps,
   type StaticSourceDecl,
   type StaticToolDecl,
+  type StaticToolSchema,
   type StaticToolExecuteContext,
   type StaticToolHandlerInput,
   type StaticToolInput,
+  type ConfigureSourceHandlerInput,
   type InvokeToolInput,
   type SourceLifecycleInput,
+  type SourceConfigureDecl,
   type SecretListEntry,
   type Elicit,
   definePlugin,
-  defineSchema,
   tool,
 } from "./plugin";
+export {
+  pluginStorageId,
+  type PluginStorageEntry,
+  type PluginStorageFacade,
+  type PluginStorageKeyInput,
+  type PluginStorageListInput,
+  type PluginStoragePutInput,
+  type PluginStorageScopedKeyInput,
+} from "./plugin-storage";
 
 // Executor
 export {
   type Executor,
   type ExecutorConfig,
+  type ExecutorDb,
+  type ExecutorDbFactory,
+  type ExecutorDbInput,
   type OnElicitation,
   type InvokeOptions,
   createExecutor,
-  collectSchemas,
+  collectTables,
 } from "./executor";
+
+// Built-in core-tools plugin (scopes.list, secrets.list, secrets.create
+// with URL elicitation). Auto-registered by createExecutor when
+// `coreTools` is set on the config; also exportable for callers who
+// want to register it manually.
+export { coreToolsPlugin, type CoreToolsPluginOptions } from "./core-tools";
 
 // CLI / runtime config
 export {
   defineExecutorConfig,
   type ExecutorCliConfig,
-  type ExecutorDialect,
   type ExecutorPluginsFactory,
 } from "./config";
-
-// Test helper
-export { makeTestConfig } from "./test-config";
 
 // JSON schema $ref helpers (used by openapi for $defs handling)
 export { hoistDefinitions, collectRefs, reattachDefs, normalizeRefs } from "./schema-refs";
@@ -326,3 +356,15 @@ export {
 
 // Wire-level HTTP error schemas usable by plugin HttpApiGroup definitions.
 export { InternalError } from "./api-errors";
+
+// ToolResult — typed value-based discriminated union for tool outcomes.
+// The `Tool` value namespace exposes `Tool.ok` / `Tool.fail` constructors;
+// the `Tool` type alias from `./types` is a separate row projection.
+// TypeScript permits the two to share a name because one is purely a
+// value and the other purely a type.
+export { ToolResult, isToolResult, type ToolError } from "./tool-result";
+export {
+  authToolFailure,
+  type AuthToolFailureCode,
+  type AuthToolFailureInput,
+} from "./auth-tool-failure";

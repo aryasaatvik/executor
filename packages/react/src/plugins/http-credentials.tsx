@@ -1,4 +1,8 @@
-import type { ScopeId, ScopedSecretCredentialInput, SecretBackedValue } from "@executor-js/sdk";
+import type {
+  ScopeId,
+  ScopedSecretCredentialInput,
+  SecretBackedValue,
+} from "@executor-js/sdk/shared";
 
 import { FieldLabel } from "../components/field";
 import { HeadersList } from "./headers-list";
@@ -10,6 +14,10 @@ import {
   type HeaderState,
 } from "./secret-header-auth";
 import type { CredentialTargetScopeOption } from "./credential-target-scope";
+import {
+  type ConfiguredCredentialValueLike,
+  type CredentialBindingRefLike,
+} from "./credential-bindings";
 import type { SecretPickerSecret } from "./secret-picker";
 
 export type { SecretBackedValue };
@@ -17,6 +25,7 @@ export type { SecretBackedValue };
 export type QueryParamState = {
   name: string;
   secretId: string | null;
+  valueKind?: "secret" | "text";
   prefix?: string;
   literalValue?: string;
   targetScope?: ScopeId;
@@ -46,15 +55,15 @@ export const httpCredentialsFromValues = (input: {
   ),
   queryParams: Object.entries(input.queryParams ?? {}).map(([name, value]) => {
     if (typeof value === "string") {
-      return { name, secretId: null, literalValue: value };
+      return { name, secretId: null, literalValue: value, valueKind: "text" as const };
     }
-    return { name, secretId: value.secretId, prefix: value.prefix };
+    return { name, secretId: value.secretId, prefix: value.prefix, valueKind: "secret" as const };
   }),
 });
 
 export const serializeHeaderCredentials = (
   headers: readonly HeaderState[],
-): Record<string, { secretId: string; prefix?: string }> => headersFromState(headers);
+): Record<string, SecretBackedValue> => headersFromState(headers);
 
 export const serializeQueryCredentials = (
   queryParams: readonly QueryParamState[],
@@ -80,7 +89,7 @@ export const serializeQueryCredentials = (
 export const serializeHttpCredentials = (
   credentials: HttpCredentialsState,
 ): {
-  readonly headers: Record<string, { secretId: string; prefix?: string }>;
+  readonly headers: Record<string, SecretBackedValue>;
   readonly queryParams: Record<string, SecretBackedValue>;
 } => ({
   headers: serializeHeaderCredentials(credentials.headers),
@@ -139,8 +148,216 @@ export const serializeScopedHttpCredentials = (
   queryParams: serializeScopedQueryCredentials(credentials.queryParams, fallbackTargetScope),
 });
 
+export type HttpConfigureCredentialInput =
+  | string
+  | {
+      readonly kind: "text";
+      readonly text: string;
+      readonly prefix?: string;
+    }
+  | {
+      readonly kind: "secret";
+      readonly secretId: string;
+      readonly secretScope?: ScopeId;
+      readonly prefix?: string;
+    };
+
+export const serializeConfigureHeaderCredentials = (
+  headers: readonly HeaderState[],
+  fallbackSecretScope: ScopeId,
+): Record<string, HttpConfigureCredentialInput> => {
+  const result: Record<string, HttpConfigureCredentialInput> = {};
+  for (const header of headers) {
+    const name = header.name.trim();
+    if (!name) continue;
+    if (header.valueKind === "text") {
+      if (header.literalValue?.trim()) {
+        result[name] = header.literalValue.trim();
+      }
+      continue;
+    }
+    if (!header.secretId) continue;
+    result[name] = {
+      kind: "secret",
+      secretId: header.secretId,
+      secretScope: header.secretScope ?? fallbackSecretScope,
+      ...(header.prefix ? { prefix: header.prefix } : {}),
+    };
+  }
+  return result;
+};
+
+export const serializeConfigureQueryCredentials = (
+  queryParams: readonly QueryParamState[],
+  fallbackSecretScope: ScopeId,
+): Record<string, HttpConfigureCredentialInput> => {
+  const result: Record<string, HttpConfigureCredentialInput> = {};
+  for (const param of queryParams) {
+    const name = param.name.trim();
+    if (!name) continue;
+    if (param.secretId) {
+      result[name] = {
+        kind: "secret",
+        secretId: param.secretId,
+        secretScope: param.secretScope ?? fallbackSecretScope,
+        ...(param.prefix ? { prefix: param.prefix } : {}),
+      };
+      continue;
+    }
+    if (param.literalValue?.trim()) {
+      result[name] = param.literalValue.trim();
+    }
+  }
+  return result;
+};
+
+export const serializeConfigureHttpCredentials = (
+  credentials: HttpCredentialsState,
+  fallbackSecretScope: ScopeId,
+) => ({
+  headers: serializeConfigureHeaderCredentials(credentials.headers, fallbackSecretScope),
+  queryParams: serializeConfigureQueryCredentials(credentials.queryParams, fallbackSecretScope),
+});
+
+export type HttpTemplateCredentialInput =
+  | string
+  | { readonly kind: "secret"; readonly prefix?: string };
+
+export const serializeTemplateHeaderCredentials = (
+  headers: readonly HeaderState[],
+): Record<string, HttpTemplateCredentialInput> => {
+  const result: Record<string, HttpTemplateCredentialInput> = {};
+  for (const header of headers) {
+    const name = header.name.trim();
+    if (!name) continue;
+    if (header.valueKind === "text") {
+      if (header.literalValue?.trim()) {
+        result[name] = header.literalValue.trim();
+      }
+      continue;
+    }
+    if (!header.secretId) continue;
+    result[name] = {
+      kind: "secret",
+      ...(header.prefix ? { prefix: header.prefix } : {}),
+    };
+  }
+  return result;
+};
+
+export const serializeTemplateQueryCredentials = (
+  queryParams: readonly QueryParamState[],
+): Record<string, HttpTemplateCredentialInput> => {
+  const result: Record<string, HttpTemplateCredentialInput> = {};
+  for (const param of queryParams) {
+    const name = param.name.trim();
+    if (!name) continue;
+    if (param.secretId) {
+      result[name] = {
+        kind: "secret",
+        ...(param.prefix ? { prefix: param.prefix } : {}),
+      };
+      continue;
+    }
+    if (param.literalValue?.trim()) {
+      result[name] = param.literalValue.trim();
+    }
+  }
+  return result;
+};
+
+const bindingBySlot = (
+  bindings: readonly CredentialBindingRefLike[],
+): ReadonlyMap<string, CredentialBindingRefLike> =>
+  new Map(bindings.map((binding) => [binding.slotKey, binding]));
+
+const headerFromConfiguredCredential = (
+  name: string,
+  value: ConfiguredCredentialValueLike,
+  bindings: ReadonlyMap<string, CredentialBindingRefLike>,
+): HeaderState | null => {
+  if (typeof value === "string") {
+    return headerValueToState(name, value);
+  }
+
+  const binding = bindings.get(value.slot);
+  if (binding?.value.kind === "secret") {
+    return {
+      ...headerValueToState(name, {
+        secretId: binding.value.secretId,
+        prefix: value.prefix,
+      }),
+      targetScope: binding.scopeId,
+      secretScope: binding.value.secretScopeId,
+    };
+  }
+
+  if (binding?.value.kind === "text") {
+    return headerValueToState(name, binding.value.text);
+  }
+
+  return null;
+};
+
+const queryParamFromConfiguredCredential = (
+  name: string,
+  value: ConfiguredCredentialValueLike,
+  bindings: ReadonlyMap<string, CredentialBindingRefLike>,
+): QueryParamState | null => {
+  if (typeof value === "string") {
+    return { name, secretId: null, literalValue: value, valueKind: "text" };
+  }
+
+  const binding = bindings.get(value.slot);
+  if (binding?.value.kind === "secret") {
+    return {
+      name,
+      secretId: binding.value.secretId,
+      valueKind: "secret",
+      prefix: value.prefix,
+      targetScope: binding.scopeId,
+      secretScope: binding.value.secretScopeId,
+    };
+  }
+
+  if (binding?.value.kind === "text") {
+    return { name, secretId: null, literalValue: binding.value.text, valueKind: "text" };
+  }
+
+  return null;
+};
+
+export const httpCredentialsFromConfiguredCredentialBindings = (input: {
+  readonly headers?: Record<string, ConfiguredCredentialValueLike> | null;
+  readonly queryParams?: Record<string, ConfiguredCredentialValueLike> | null;
+  readonly bindings: readonly CredentialBindingRefLike[];
+}): HttpCredentialsState => {
+  const bindings = bindingBySlot(input.bindings);
+
+  return {
+    headers: Object.entries(input.headers ?? {}).flatMap(([name, value]) => {
+      const state = headerFromConfiguredCredential(name, value, bindings);
+      return state ? [state] : [];
+    }),
+    queryParams: Object.entries(input.queryParams ?? {}).flatMap(([name, value]) => {
+      const state = queryParamFromConfiguredCredential(name, value, bindings);
+      return state ? [state] : [];
+    }),
+  };
+};
+
+export const serializeTemplateHttpCredentials = (credentials: HttpCredentialsState) => ({
+  headers: serializeTemplateHeaderCredentials(credentials.headers),
+  queryParams: serializeTemplateQueryCredentials(credentials.queryParams),
+});
+
 export const httpCredentialsValid = (credentials: HttpCredentialsState): boolean =>
-  credentials.headers.every((header) => header.name.trim() && header.secretId) &&
+  credentials.headers.every((header) => {
+    if (!header.name.trim()) return false;
+    return header.valueKind === "text"
+      ? Boolean(header.literalValue?.trim())
+      : Boolean(header.secretId);
+  }) &&
   credentials.queryParams.every((param) => {
     if (!param.name.trim()) return false;
     return Boolean(param.secretId || param.literalValue?.trim());
@@ -154,7 +371,6 @@ export function HttpCredentialsEditor(props: {
   readonly targetScope: ScopeId;
   readonly credentialScopeOptions?: readonly CredentialTargetScopeOption[];
   readonly bindingScopeOptions?: readonly CredentialTargetScopeOption[];
-  readonly restrictSecretsToTargetScope?: boolean;
   readonly sections?: {
     readonly headers?: boolean;
     readonly queryParams?: boolean;
@@ -163,6 +379,7 @@ export function HttpCredentialsEditor(props: {
     readonly headers?: string;
     readonly queryParams?: string;
   };
+  readonly headerPresets?: readonly HeaderAuthPreset[];
 }) {
   const showHeaders = props.sections?.headers ?? true;
   const showQueryParams = props.sections?.queryParams ?? true;
@@ -180,7 +397,7 @@ export function HttpCredentialsEditor(props: {
             targetScope={props.targetScope}
             credentialScopeOptions={props.credentialScopeOptions}
             bindingScopeOptions={props.bindingScopeOptions}
-            restrictSecretsToTargetScope={props.restrictSecretsToTargetScope}
+            presets={props.headerPresets}
           />
         </section>
       )}
@@ -196,7 +413,6 @@ export function HttpCredentialsEditor(props: {
             targetScope={props.targetScope}
             credentialScopeOptions={props.credentialScopeOptions}
             bindingScopeOptions={props.bindingScopeOptions}
-            restrictSecretsToTargetScope={props.restrictSecretsToTargetScope}
             presets={queryParamPresets}
             emptyLabel="No query parameters"
             addLabel="Add query parameter"

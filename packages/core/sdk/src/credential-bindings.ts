@@ -1,6 +1,6 @@
 import { Effect, Match, Schema } from "effect";
 
-import type { StorageFailure } from "@executor-js/storage-core";
+import type { StorageFailure } from "./fuma-runtime";
 
 import { credentialBindingKinds, type CredentialBindingRow } from "./core-schema";
 import { ConnectionId, CredentialBindingId, ScopeId, SecretId } from "./ids";
@@ -57,15 +57,14 @@ export const CredentialBindingRef = Schema.Struct({
 });
 export type CredentialBindingRef = typeof CredentialBindingRef.Type;
 
-export const SetCredentialBindingInput = Schema.Struct({
-  targetScope: ScopeId,
-  pluginId: Schema.String,
-  sourceId: Schema.String,
-  sourceScope: ScopeId,
-  slotKey: Schema.String,
-  value: CredentialBindingValue,
-});
-export type SetCredentialBindingInput = typeof SetCredentialBindingInput.Type;
+export type SetPluginCredentialBindingInput = {
+  readonly targetScope: ScopeId;
+  readonly pluginId: string;
+  readonly sourceId: string;
+  readonly sourceScope: ScopeId;
+  readonly slotKey: string;
+  readonly value: CredentialBindingValue;
+};
 
 export const CredentialBindingSourceInput = Schema.Struct({
   pluginId: Schema.String,
@@ -107,6 +106,46 @@ export const ReplaceCredentialBindingsInput = Schema.Struct({
 });
 export type ReplaceCredentialBindingsInput = typeof ReplaceCredentialBindingsInput.Type;
 
+export const SourceCredentialBindingSource = Schema.Struct({
+  id: Schema.String,
+  scope: ScopeId,
+});
+export type SourceCredentialBindingSource = typeof SourceCredentialBindingSource.Type;
+
+export const SourceCredentialBindingSourceInput = Schema.Struct({
+  source: SourceCredentialBindingSource,
+});
+export type SourceCredentialBindingSourceInput = typeof SourceCredentialBindingSourceInput.Type;
+
+export const SourceCredentialBindingSlotInput = Schema.Struct({
+  source: SourceCredentialBindingSource,
+  slotKey: Schema.String,
+});
+export type SourceCredentialBindingSlotInput = typeof SourceCredentialBindingSlotInput.Type;
+
+export const SetSourceCredentialBindingInput = Schema.Struct({
+  scope: ScopeId,
+  source: SourceCredentialBindingSource,
+  slotKey: Schema.String,
+  value: CredentialBindingValue,
+});
+export type SetSourceCredentialBindingInput = typeof SetSourceCredentialBindingInput.Type;
+
+export const RemoveSourceCredentialBindingInput = Schema.Struct({
+  scope: ScopeId,
+  source: SourceCredentialBindingSource,
+  slotKey: Schema.String,
+});
+export type RemoveSourceCredentialBindingInput = typeof RemoveSourceCredentialBindingInput.Type;
+
+export const ReplaceSourceCredentialBindingsInput = Schema.Struct({
+  scope: ScopeId,
+  source: SourceCredentialBindingSource,
+  slotPrefixes: Schema.Array(Schema.String),
+  bindings: Schema.Array(ReplaceCredentialBindingValue),
+});
+export type ReplaceSourceCredentialBindingsInput = typeof ReplaceSourceCredentialBindingsInput.Type;
+
 export const CredentialBindingResolutionStatus = Schema.Literals([
   "resolved",
   "missing",
@@ -129,11 +168,14 @@ export interface CredentialBindingsFacade {
   readonly listForSource: (
     input: CredentialBindingSourceInput,
   ) => Effect.Effect<readonly CredentialBindingRef[], StorageFailure>;
+  readonly resolveBinding: (
+    input: CredentialBindingSlotInput,
+  ) => Effect.Effect<CredentialBindingRef | null, StorageFailure>;
   readonly resolve: (
     input: CredentialBindingSlotInput,
   ) => Effect.Effect<ResolvedCredentialSlot, StorageFailure>;
   readonly set: (
-    input: SetCredentialBindingInput,
+    input: SetPluginCredentialBindingInput,
   ) => Effect.Effect<CredentialBindingRef, StorageFailure>;
   readonly remove: (input: RemoveCredentialBindingInput) => Effect.Effect<void, StorageFailure>;
   readonly replaceForSource: (

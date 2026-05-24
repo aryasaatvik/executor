@@ -1,9 +1,9 @@
-import { Effect } from "effect";
+import { Effect, type Schema as EffectSchema } from "effect";
 import type { Context, Layer } from "effect";
 import type { HttpClient } from "effect/unstable/http";
 import type { HttpApiGroup } from "effect/unstable/httpapi";
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
-import type { DBSchema, StorageFailure } from "@executor-js/storage-core";
+import type { FumaTables, IFumaClient, StorageFailure, TablesToFumaSchema } from "./fuma-runtime";
 
 import type { PluginBlobStore } from "./blob";
 import type {
@@ -14,9 +14,17 @@ import type {
   RemoveConnectionInput,
   UpdateConnectionTokensInput,
 } from "./connections";
-import type { CredentialBindingsFacade } from "./credential-bindings";
+import type {
+  CredentialBindingRef,
+  CredentialBindingsFacade,
+  RemoveSourceCredentialBindingInput,
+  SetSourceCredentialBindingInput,
+  SourceCredentialBindingSlotInput,
+  SourceCredentialBindingSourceInput,
+} from "./credential-bindings";
 import type { DefinitionsInput, SourceInput, ToolAnnotations, ToolRow } from "./core-schema";
-import type { RemoveSourceInput, SourceDetectionResult } from "./types";
+import type { ScopeId } from "./ids";
+import type { RefreshSourceInput, RemoveSourceInput, Source, SourceDetectionResult } from "./types";
 import type {
   ElicitationDeclinedError,
   ElicitationHandler,
@@ -31,53 +39,40 @@ import type {
   ConnectionRefreshNotSupportedError,
   SecretInUseError,
   SecretOwnedByConnectionError,
+  SourceRemovalNotAllowedError,
 } from "./errors";
 import type { OAuthService } from "./oauth";
+import type { PluginStorageFacade } from "./plugin-storage";
+import type {
+  CreateToolPolicyInput,
+  RemoveToolPolicyInput,
+  ToolPolicy,
+  UpdateToolPolicyInput,
+} from "./policies";
 import type { Scope } from "./scope";
-import type { ScopedDBAdapter, ScopedTypedAdapter } from "./scoped-adapter";
 import type { RemoveSecretInput, SecretProvider, SecretRef, SetSecretInput } from "./secrets";
 import type { Usage, UsagesForConnectionInput, UsagesForSecretInput } from "./usages";
 
 // ---------------------------------------------------------------------------
-// StorageDeps — backing passed to a plugin's `storage` factory. The only
-// place a plugin ever sees storage; `PluginCtx` does not carry it. The
-// `adapter` field is a `TypedAdapter<TSchema>` view narrowed by the
-// plugin's own declared `schema` — plugins never import or construct
-// a typed adapter themselves, the executor infers TSchema from the
-// `schema` field on their spec and hands back a typed view.
-//
-// Plugins with no schema (secret-provider-only plugins, etc.) get a
-// bare `DBAdapter` they can ignore.
+// StorageDeps — backing passed to a plugin's `storage` factory. Plugins see
+// FumaDB through the Effect boundary, narrowed to their declared tables. Scope
+// behavior is domain code, not hidden adapter behavior: reads should include
+// `scopedWhere(...)` and writes stamp an explicit `scope_id`.
 // ---------------------------------------------------------------------------
 
-export interface StorageDeps<TSchema extends DBSchema | undefined = undefined> {
+export interface StorageDeps<TTables extends FumaTables | undefined = FumaTables> {
   /**
    * Precedence-ordered scope stack visible to this executor. Innermost
    * first. Reads on scoped tables walk every scope; writes require the
    * plugin to name a target scope explicitly (via `scope_id` on the
-   * adapter payload, via `options.scope` on the blob store).
+   * row payload, via `options.scope` on the blob store).
    */
   readonly scopes: readonly Scope[];
-  /**
-   * Plugin-facing typed adapter. Failures surface as raw `StorageFailure`
-   * (`StorageError` | `UniqueViolationError`). Plugins can
-   * `catchTag("UniqueViolationError", …)` to translate to their own
-   * user-facing errors. `StorageError` bubbles up; the HTTP edge (see
-   * `@executor-js/api` `withCapture`) is the one place that
-   * translates it to the opaque `InternalError({ traceId })`.
-   */
-  readonly adapter: TSchema extends DBSchema ? ScopedTypedAdapter<TSchema> : ScopedDBAdapter;
+  /** Plugin-facing FumaDB query boundary. */
+  readonly fuma: IFumaClient<TablesToFumaSchema<TTables>>;
   readonly blobs: PluginBlobStore;
+  readonly pluginStorage: PluginStorageFacade;
 }
-
-// ---------------------------------------------------------------------------
-// defineSchema — sugar around `as const satisfies DBSchema`. Preserves
-// literal types via the `const` type parameter modifier so plugins can
-// just write `const mySchema = defineSchema({ ... })` without annotation
-// ceremony.
-// ---------------------------------------------------------------------------
-
-export const defineSchema = <const S extends DBSchema>(schema: S): S => schema;
 
 // ---------------------------------------------------------------------------
 // Elicit — suspends the fiber, calls the invoke-time elicitation
@@ -100,11 +95,13 @@ export interface PluginCtx<TStore = unknown> {
   /**
    * Precedence-ordered scope stack visible to this executor. Innermost
    * first. Plugins that write scoped rows must pick an element of
-   * `scopes` as the `scope`/`scope_id` they stamp; reads through the
-   * adapter or `ctx.secrets` automatically fall through the stack.
+   * `scopes` as the `scope`/`scope_id` they stamp; reads should apply
+   * explicit FumaDB scope predicates or use `ctx.secrets` / `ctx.connections`
+   * helpers.
    */
   readonly scopes: readonly Scope[];
   readonly storage: TStore;
+  readonly pluginStorage: PluginStorageFacade;
   readonly httpClientLayer: Layer.Layer<HttpClient.HttpClient>;
 
   readonly core: {
@@ -117,12 +114,53 @@ export interface PluginCtx<TStore = unknown> {
         readonly name?: string;
         readonly url?: string | null;
       }) => Effect.Effect<void, StorageFailure>;
+      readonly list: () => Effect.Effect<readonly Source[], StorageFailure>;
+      readonly remove: (
+        input: RemoveSourceInput,
+      ) => Effect.Effect<void, SourceRemovalNotAllowedError | StorageFailure>;
+      readonly refresh: (input: RefreshSourceInput) => Effect.Effect<void, StorageFailure>;
+      readonly detect: (
+        url: string,
+      ) => Effect.Effect<readonly SourceDetectionResult[], StorageFailure>;
+      readonly configure: (input: {
+        readonly source: {
+          readonly id: string;
+          readonly scope: ScopeId | string;
+        };
+        readonly scope: ScopeId | string;
+        readonly type?: string;
+        readonly config: unknown;
+      }) => Effect.Effect<unknown, StorageFailure>;
+      readonly listBindings: (
+        input: SourceCredentialBindingSourceInput,
+      ) => Effect.Effect<readonly CredentialBindingRef[], StorageFailure>;
+      readonly resolveBinding: (
+        input: SourceCredentialBindingSlotInput,
+      ) => Effect.Effect<CredentialBindingRef | null, StorageFailure>;
+      readonly setBinding: (
+        input: SetSourceCredentialBindingInput,
+      ) => Effect.Effect<CredentialBindingRef, StorageFailure>;
+      readonly removeBinding: (
+        input: RemoveSourceCredentialBindingInput,
+      ) => Effect.Effect<void, StorageFailure>;
+      /** Source configuration declarations for every plugin that
+       *  supports `executor.sources.configure`. Exposed to core tools
+       *  so agent-facing configuration surfaces can describe the
+       *  plugin-specific payload shape before dispatching a write. */
+      readonly configureSchemas: () => readonly SourceConfigureSchema[];
+      readonly presets: () => readonly SourcePresetCatalogEntry[];
+    };
+    readonly policies: {
+      readonly list: () => Effect.Effect<readonly ToolPolicy[], StorageFailure>;
+      readonly create: (input: CreateToolPolicyInput) => Effect.Effect<ToolPolicy, StorageFailure>;
+      readonly update: (input: UpdateToolPolicyInput) => Effect.Effect<ToolPolicy, StorageFailure>;
+      readonly remove: (input: RemoveToolPolicyInput) => Effect.Effect<void, StorageFailure>;
     };
     /** Register shared JSON-schema `$defs` for a source. Tool
      *  input/output schemas registered via `sources.register` can carry
      *  `$ref: "#/$defs/X"` pointers; `executor.tools.schema(toolId)`
-     *  attaches matching defs to the returned schema. Call inside the
-     *  same `ctx.transaction` as `sources.register` for atomicity.
+     *  returns matching reachable defs alongside the schema roots. Call
+     *  inside the same `ctx.transaction` as `sources.register` for atomicity.
      *  Replaces any existing defs for the given sourceId. */
     readonly definitions: {
       readonly register: (input: DefinitionsInput) => Effect.Effect<void, StorageFailure>;
@@ -141,9 +179,17 @@ export interface PluginCtx<TStore = unknown> {
      *  `owned_by_connection_id` set) are filtered out so they don't
      *  clutter the UI — users see the Connection instead. */
     readonly list: () => Effect.Effect<
-      readonly { readonly id: string; readonly name: string; readonly provider: string }[],
+      readonly {
+        readonly id: string;
+        readonly scopeId: ScopeId;
+        readonly name: string;
+        readonly provider: string;
+      }[],
       StorageFailure
     >;
+    readonly status: (id: string) => Effect.Effect<"resolved" | "missing", StorageFailure>;
+    readonly usages: (id: string) => Effect.Effect<readonly Usage[], StorageFailure>;
+    readonly providers: () => Effect.Effect<readonly string[], never>;
     /** Write a secret value through a provider. Used by plugins that
      *  mint secrets on behalf of the user (OAuth2 token storage,
      *  interactive onboarding flows). Normally writes go through
@@ -174,6 +220,8 @@ export interface PluginCtx<TStore = unknown> {
       scope: string,
     ) => Effect.Effect<ConnectionRef | null, StorageFailure>;
     readonly list: () => Effect.Effect<readonly ConnectionRef[], StorageFailure>;
+    readonly usages: (id: string) => Effect.Effect<readonly Usage[], StorageFailure>;
+    readonly providers: () => Effect.Effect<readonly string[], never>;
     readonly create: (
       input: CreateConnectionInput,
     ) => Effect.Effect<ConnectionRef, ConnectionProviderNotRegisteredError | StorageFailure>;
@@ -224,8 +272,7 @@ export interface PluginCtx<TStore = unknown> {
    *  flows; invocation should still resolve tokens via `connections.accessToken`. */
   readonly oauth: OAuthService;
 
-  /** Run `effect` inside a database transaction. Wraps the underlying
-   *  adapter's transaction method. Use this in extension methods that
+  /** Run `effect` inside a FumaDB transaction. Use this in extension methods that
    *  need atomicity across plugin storage writes AND core source/tool
    *  registration. */
   readonly transaction: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E | StorageFailure>;
@@ -367,11 +414,51 @@ export interface SourceLifecycleInput<TStore = unknown> {
    * SDK's `sources.remove` / `sources.refresh` via innermost-wins lookup
    * across the executor's scope stack. Plugins that own a side table
    * keyed by (id, scope_id) must pin their own cleanup to this scope;
-   * relying on the scoped adapter's `scope_id IN (stack)` fall-through
+   * relying on stack-wide scope fall-through
    * would widen the mutation across the whole stack and wipe a
    * shadowed outer-scope row.
    */
   readonly scope: string;
+}
+
+export interface ConfigureSourceHandlerInput<TStore = unknown> {
+  readonly ctx: PluginCtx<TStore>;
+  readonly sourceId: string;
+  readonly sourceScope: string;
+  readonly targetScope: string;
+  readonly config: unknown;
+}
+
+export interface SourceConfigureDecl<TStore = unknown> {
+  readonly type: string;
+  readonly schema?: StaticToolSchema | EffectSchema.Decoder<unknown, never>;
+  readonly configure: (
+    input: ConfigureSourceHandlerInput<TStore>,
+  ) => Effect.Effect<unknown, unknown>;
+}
+
+export interface SourceConfigureSchema {
+  readonly pluginId: string;
+  readonly type: string;
+  readonly schema?: unknown;
+}
+
+export interface SourcePreset {
+  readonly id: string;
+  readonly name: string;
+  readonly summary: string;
+  readonly url?: string;
+  readonly endpoint?: string;
+  readonly icon?: string;
+  readonly featured?: boolean;
+  readonly transport?: "remote" | "stdio";
+  readonly command?: string;
+  readonly args?: readonly string[];
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+export interface SourcePresetCatalogEntry extends SourcePreset {
+  readonly pluginId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -394,7 +481,7 @@ export interface PluginSpec<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TStore = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  TSchema extends DBSchema | undefined = any,
+  TSchema extends FumaTables | undefined = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TExtensionService extends Context.Service<any, any> | undefined = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -411,12 +498,12 @@ export interface PluginSpec<
    *  plugins (no client bundle = nothing to resolve). */
   readonly packageName?: string;
   /** Plugin-declared schema. Merged with coreSchema and other plugins'
-   *  schemas at executor startup via `collectSchemas`. The type flows
-   *  into the `storage` factory's `deps.adapter` as a `TypedAdapter<TSchema>`
-   *  so plugins get narrowed model names + typed rows for free. */
+   *  tables at executor startup via `collectTables`. The type flows
+   *  into the `storage` factory's `deps.fuma` as a FumaDB query boundary so
+   *  plugins get narrowed table names + typed rows for free. */
   readonly schema?: TSchema;
-  /** Build the plugin's typed store from backing. `deps.adapter` is
-   *  already narrowed to this plugin's schema; `deps.blobs` is already
+  /** Build the plugin's typed store from backing. `deps.fuma` is
+   *  already narrowed to this plugin's tables; `deps.blobs` is already
    *  scoped to the plugin id so key collisions across plugins are
    *  structurally impossible. */
   readonly storage: (deps: StorageDeps<TSchema>) => TStore;
@@ -434,6 +521,12 @@ export interface PluginSpec<
    *  with no runtime fetch and no parallel client-side flag to keep in
    *  sync. */
   readonly clientConfig?: unknown;
+
+  /** Source presets shown by the web UI's "Popular sources" list and
+   *  exposed through core tools for agents. Keep this server-safe:
+   *  no React components, only JSON-serializable metadata and optional
+   *  add-flow hints such as URL or stdio command. */
+  readonly sourcePresets?: readonly SourcePreset[];
 
   /** Build the plugin's extension API. The returned object becomes
    *  `executor[plugin.id]` and is also the `self` passed to
@@ -556,6 +649,14 @@ export interface PluginSpec<
 
   readonly refreshSource?: (input: SourceLifecycleInput<TStore>) => Effect.Effect<void, unknown>;
 
+  /** Core-dispatched source configuration. The executor resolves the
+   *  source row, finds the owning plugin, and calls this handler with
+   *  an explicit source scope plus explicit target scope for credential
+   *  values. Plugin-native `openapi.configure` style methods can call
+   *  the same implementation, but callers do not need to know about
+   *  low-level credential bindings. */
+  readonly sourceConfigure?: SourceConfigureDecl<TStore>;
+
   /** URL autodetection hook. When the user pastes a URL in the
    *  onboarding UI, `executor.sources.detect(url)` fans out to every
    *  plugin's `detect`. Return a `SourceDetectionResult` if you
@@ -599,7 +700,7 @@ export interface Plugin<
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TStore = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  TSchema extends DBSchema | undefined = any,
+  TSchema extends FumaTables | undefined = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TExtensionService extends Context.Service<any, any> | undefined = any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -618,7 +719,7 @@ export type ConfiguredPlugin<
   TExtension extends object,
   TStore,
   TOptions extends object,
-  TSchema extends DBSchema | undefined,
+  TSchema extends FumaTables | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TExtensionService extends Context.Service<any, any> | undefined = undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -635,7 +736,7 @@ export function definePlugin<
   TId extends string,
   TExtension extends object,
   TStore,
-  TSchema extends DBSchema | undefined = undefined,
+  TSchema extends FumaTables | undefined = undefined,
   TOptions extends object = {},
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   TExtensionService extends Context.Service<any, any> | undefined = undefined,

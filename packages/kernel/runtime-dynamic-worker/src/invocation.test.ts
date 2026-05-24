@@ -4,6 +4,7 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { SandboxToolInvoker } from "@executor-js/codemode-core";
+import { ExecutionToolError } from "@executor-js/execution";
 import {
   ToolDispatcher,
   makeDynamicWorkerExecutor,
@@ -110,6 +111,19 @@ describe("ToolDispatcher", () => {
       error: {
         message: "Tool RPC payload contains a circular reference",
       },
+    });
+  });
+
+  it("allows shared object references in RPC args", async () => {
+    const invoker = makeInvoker(({ args }) => args);
+    const dispatcher = new ToolDispatcher(invoker, Effect.runPromise);
+    const shared = { value: 1 };
+
+    const result = await dispatcher.call("test.tool", { first: shared, second: shared });
+
+    expect(result).toEqual({
+      ok: true,
+      result: { first: { value: 1 }, second: { value: 1 } },
     });
   });
 
@@ -246,7 +260,7 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(result.result).toBe(7);
   });
 
-  it("surfaces tool errors in execution result", async () => {
+  it("surfaces infra defects through the worker bridge as an opaque generic", async () => {
     const executor = makeDynamicWorkerExecutor({ loader });
     const invoker = failingInvoker("not authorized");
 
@@ -254,7 +268,28 @@ describe("makeDynamicWorkerExecutor", () => {
       executor.execute("async () => { return await tools.secret.read({}); }", invoker),
     );
 
-    expect(result.error).toBe("not authorized");
+    expect(result.error).toBe("Internal tool error");
+  });
+
+  it("preserves public ExecutionToolError messages across the worker bridge", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader });
+    const invoker = {
+      invoke: () =>
+        Effect.fail(
+          new ExecutionToolError({
+            message:
+              "tools.search expects an object: { query?: string; namespace?: string; limit?: number; offset?: number }",
+          }),
+        ),
+    } satisfies SandboxToolInvoker;
+
+    const result = await Effect.runPromise(
+      executor.execute("async () => await tools.search('github')", invoker),
+    );
+
+    expect(result.error).toBe(
+      "tools.search expects an object: { query?: string; namespace?: string; limit?: number; offset?: number }",
+    );
   });
 
   it("does not expose host error stack details to sandbox error handlers", async () => {
@@ -284,11 +319,12 @@ describe("makeDynamicWorkerExecutor", () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(result.result).toMatchObject({ message: "not authorized" });
+    expect(result.result).toMatchObject({ message: "Internal tool error" });
     expect((result.result as { stack?: string }).stack).not.toContain("secret host stack");
+    expect((result.result as { message?: string }).message).not.toContain("not authorized");
   });
 
-  it("surfaces object-shaped tool errors in execution result", async () => {
+  it("collapses object-shaped tool defects to an opaque generic", async () => {
     const executor = makeDynamicWorkerExecutor({ loader });
     const invoker = {
       invoke: () =>
@@ -302,11 +338,11 @@ describe("makeDynamicWorkerExecutor", () => {
       executor.execute("async () => { return await tools.secret.read({}); }", invoker),
     );
 
-    expect(result.error).toBe('{"code":"forbidden","detail":"missing team access"}');
+    expect(result.error).toBe("Internal tool error");
     expect(result.result).toBeNull();
   });
 
-  it("surfaces message-bearing object tool errors in execution result", async () => {
+  it("collapses message-bearing object tool defects to an opaque generic", async () => {
     const executor = makeDynamicWorkerExecutor({ loader });
     const invoker = {
       invoke: () =>
@@ -320,7 +356,8 @@ describe("makeDynamicWorkerExecutor", () => {
       executor.execute("async () => { return await tools.records.query({}); }", invoker),
     );
 
-    expect(result.error).toBe('Field with name "DisplayName" does not exist');
+    expect(result.error).toBe("Internal tool error");
+    expect(result.error).not.toContain("DisplayName");
     expect(result.result).toBeNull();
   });
 
@@ -366,7 +403,7 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(result.error).toBe("Tool RPC payload contains a circular reference");
   });
 
-  it("returns an execution error for circular tool results", async () => {
+  it("returns an opaque generic when a tool result can't be serialized", async () => {
     const executor = makeDynamicWorkerExecutor({ loader });
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
@@ -377,7 +414,20 @@ describe("makeDynamicWorkerExecutor", () => {
     );
 
     expect(result.result).toBeNull();
-    expect(result.error).toBe("Tool RPC payload contains a circular reference");
+    expect(result.error).toBe("Internal tool error");
+  });
+
+  it("returns shared object references from tool results", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader });
+    const shared = { _tag: "None" };
+    const invoker = makeInvoker(() => ({ first: shared, second: shared }));
+
+    const result = await Effect.runPromise(
+      executor.execute("async () => await tools.shared.read({})", invoker),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toEqual({ first: { _tag: "None" }, second: { _tag: "None" } });
   });
 
   it("respects timeout", async () => {

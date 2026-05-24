@@ -24,21 +24,14 @@ import { resolve } from "node:path";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import {
-  HttpApi,
-  HttpApiBuilder,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  OpenApi,
-} from "effect/unstable/httpapi";
-import { HttpRouter, HttpServer } from "effect/unstable/http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Context, Data, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { Context, Data, Effect, Exit, Layer, Option, Schema, Scope } from "effect";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ElicitRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { unstable_dev, type Unstable_DevWorker } from "wrangler";
+import { serveOpenApiHttpApiTestServer } from "@executor-js/plugin-openapi/testing";
 
 import { makeTestBearer } from "./test-bearer";
 
@@ -64,21 +57,13 @@ const ApproveHandlers = HttpApiBuilder.group(UpstreamApi, "approve", (h) =>
   h.handle("approveThing", () => Effect.succeed(ApprovedResponse.make({ approved: true }))),
 );
 
-const UpstreamApiLive = HttpApiBuilder.layer(UpstreamApi).pipe(Layer.provide(ApproveHandlers));
-
-const UpstreamServeLayer = HttpRouter.serve(UpstreamApiLive).pipe(
-  Layer.provide(UpstreamApiLive),
-  Layer.provideMerge(HttpRouter.layer),
-  Layer.provideMerge(NodeHttpServer.layer(() => createServer(), { port: 0, host: "127.0.0.1" })),
-);
-
 // ---------------------------------------------------------------------------
 // Services
 // ---------------------------------------------------------------------------
 
 class Upstream extends Context.Service<
   Upstream,
-  { readonly specJson: string; readonly url: string }
+  { readonly baseUrl: string; readonly specJson: string }
 >()("MiniflareE2E/Upstream") {}
 
 class Worker extends Context.Service<
@@ -116,23 +101,18 @@ class MiniflareE2ETestError extends Data.TaggedError("MiniflareE2ETestError")<{
 
 const UpstreamLive = Layer.effect(
   Upstream,
-  Effect.gen(function* () {
-    const server = yield* HttpServer.HttpServer;
-    const addr = server.address;
-    if (!Predicate.isTagged("TcpAddress")(addr)) {
-      return yield* new MiniflareE2ETestError({
-        message: "upstream server bound to non-TCP address",
-        cause: addr,
-      });
-    }
-    const url = `http://127.0.0.1:${addr.port}`;
-    const specJson = JSON.stringify({
-      ...OpenApi.fromApi(UpstreamApi),
-      servers: [{ url }],
-    });
-    return { specJson, url };
-  }),
-).pipe(Layer.provide(UpstreamServeLayer));
+  Effect.acquireRelease(
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const server = yield* serveOpenApiHttpApiTestServer({
+        api: UpstreamApi,
+        handlersLayer: ApproveHandlers,
+      }).pipe(Scope.provide(scope));
+      return { server, scope };
+    }),
+    ({ scope }) => Scope.close(scope, Exit.void),
+  ).pipe(Effect.map(({ server }) => ({ baseUrl: server.baseUrl, specJson: server.specJson }))),
+);
 
 // ---------------------------------------------------------------------------
 // Telemetry receiver — a node HTTP server on a random port that speaks
@@ -348,7 +328,10 @@ const nextOrgId = () => `org_miniflare_${++orgCounter}`;
 const connectClient = async (
   baseUrl: URL,
   bearer: string,
-  options: { withElicitation?: boolean } = {},
+  options: {
+    withElicitation?: boolean;
+    elicitationMode?: "browser" | "model" | "native";
+  } = {},
 ): Promise<Client> => {
   const client = new Client(
     { name: "mcp-miniflare-e2e", version: "0.0.1" },
@@ -356,7 +339,10 @@ const connectClient = async (
       capabilities: options.withElicitation ? { elicitation: { form: {} } } : {},
     },
   );
-  const transport = new StreamableHTTPClientTransport(new URL("/mcp", baseUrl), {
+  const endpoint = new URL("/mcp", baseUrl);
+  if (options.elicitationMode)
+    endpoint.searchParams.set("elicitation_mode", options.elicitationMode);
+  const transport = new StreamableHTTPClientTransport(endpoint, {
     requestInit: { headers: { authorization: `Bearer ${bearer}` } },
   });
   await client.connect(transport);
@@ -770,13 +756,14 @@ layer(TestEnv, { timeout: 60_000 })("cloud MCP over real HTTP (miniflare)", (it)
     () =>
       Effect.gen(function* () {
         const { baseUrl, seedOrg } = yield* Worker;
-        const { specJson } = yield* Upstream;
+        const { baseUrl: upstreamBaseUrl, specJson } = yield* Upstream;
         const orgId = nextOrgId();
         yield* Effect.promise(() => seedOrg(orgId, "Elicit Org"));
 
         const client = yield* Effect.promise(() =>
           connectClient(baseUrl, makeTestBearer(nextAccountId(), orgId), {
             withElicitation: true,
+            elicitationMode: "native",
           }),
         );
 
@@ -795,7 +782,7 @@ layer(TestEnv, { timeout: 60_000 })("cloud MCP over real HTTP (miniflare)", (it)
         // `HttpApiGroup` name ("approve") becomes part of the sandbox path,
         // so the invocation reads `tools.approveapi.approve.approveThing`.
         const code = [
-          `await tools.executor.openapi.addSource({ scope: ${JSON.stringify(orgId)}, spec: ${JSON.stringify(specJson)}, namespace: "approveapi" });`,
+          `await tools.executor.openapi.addSource({ name: "Approve API", baseUrl: ${JSON.stringify(upstreamBaseUrl)}, spec: { kind: "blob", value: ${JSON.stringify(specJson)} }, namespace: "approveapi" });`,
           `return await tools.approveapi.approve.approveThing({});`,
         ].join("\n");
         const result = yield* Effect.promise(() =>

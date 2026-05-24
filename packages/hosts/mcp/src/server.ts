@@ -7,7 +7,7 @@ import type {
   JsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import { Validator } from "@cfworker/json-schema";
-import { z } from "zod/v4";
+import * as z from "zod/v4";
 
 import type {
   ElicitationResponse,
@@ -22,6 +22,7 @@ import {
   formatPausedExecution,
   type ExecutionEngine,
   type ExecutionEngineConfig,
+  type ResumeResponse,
 } from "@executor-js/execution";
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,23 @@ type SharedMcpServerConfig = {
    * Enable verbose MCP capability / elicitation debug logging.
    */
   readonly debug?: boolean;
+  /**
+   * Controls how elicitation is handled for this MCP connection. The default
+   * is model-managed resume, where paused executions expose interaction
+   * metadata and the model can call `resume` with the user's response.
+   */
+  readonly elicitationMode?:
+    | {
+        readonly mode: "browser";
+        readonly approvalUrl: (executionId: string) => string;
+      }
+    | {
+        readonly mode: "model";
+      }
+    | {
+        readonly mode: "native";
+      };
+  readonly browserApprovalStore?: BrowserApprovalStore;
 };
 
 export type ExecutorMcpServerConfig<E extends Cause.YieldableError = Cause.YieldableError> =
@@ -77,6 +95,11 @@ export type ExecutorMcpServerConfig<E extends Cause.YieldableError = Cause.Yield
   | ({ readonly engine: ExecutionEngine<E> } & SharedMcpServerConfig)
   | (ExecutionEngineConfig<E> & SharedMcpServerConfig & { readonly stateless: true })
   | ({ readonly engine: ExecutionEngine<E>; readonly stateless: true } & SharedMcpServerConfig);
+
+export type BrowserApprovalStore = {
+  readonly takeResponse: (executionId: string) => Effect.Effect<ResumeResponse | null>;
+  readonly waitForResponse?: (executionId: string) => Effect.Effect<ResumeResponse | null>;
+};
 
 // ---------------------------------------------------------------------------
 // Elicitation bridge
@@ -95,13 +118,9 @@ const readDebugDefault = (): boolean => {
   return value === "1" || value === "true";
 };
 
-const supportsManagedElicitation = (server: McpServer): boolean =>
-  getElicitationSupport(server).form;
-
 const capabilitySnapshot = (server: McpServer) => ({
   clientCapabilities: server.server.getClientCapabilities() ?? null,
   elicitationSupport: getElicitationSupport(server),
-  managedElicitation: supportsManagedElicitation(server),
 });
 
 type ElicitInputParams =
@@ -260,20 +279,60 @@ const toMcpPausedResult = (formatted: ReturnType<typeof formatPausedExecution>):
   structuredContent: formatted.structured,
 });
 
-const formatFailureMessage = (value: unknown): string | null => {
-  if (typeof value === "object" && value !== null && "message" in value) {
-    const message = (value as { readonly message?: unknown }).message;
-    if (typeof message === "string" && message.length > 0) return message;
-  }
-  if (typeof value === "string" && value.length > 0) return value;
-  return null;
-};
+// `execute` failures reaching the MCP host are infra defects — domain
+// failures from tools are now expressed as `ToolResult` values (success
+// channel) and flow through `formatExecuteResult`. Emit an opaque
+// generic plus a fresh correlation id and log the cause out-of-band so
+// the model can't read internal context off `.message`.
+const newCorrelationId = (): string =>
+  Math.floor(Math.random() * 0x1_0000_0000)
+    .toString(16)
+    .padStart(8, "0");
+
+const defaultResumeApprovalUrl = (executionId: string): string =>
+  `/resume/${encodeURIComponent(executionId)}`;
+
+const browserApprovalReturnPrompt =
+  "Return text to the user telling them to approve the action at this approvalUrl. Only after you have prompted the user, call the `resume` tool with this executionId; `resume` will wait for the user's browser decision.";
+
+const formatResumeApprovalRequired = (input: {
+  readonly executionId: string;
+  readonly approvalUrl: string;
+}): McpToolResult => ({
+  content: [
+    {
+      type: "text",
+      text: [
+        "User approval required.",
+        "",
+        "Tell the user to open this URL while signed in and approve or decline the paused interaction:",
+        input.approvalUrl,
+        "",
+        "Required next steps for this agent:",
+        browserApprovalReturnPrompt,
+      ].join("\n"),
+    },
+  ],
+  structuredContent: {
+    status: "user_approval_required",
+    executionId: input.executionId,
+    approvalUrl: input.approvalUrl,
+    resumePrompt: browserApprovalReturnPrompt,
+  },
+});
 
 const toMcpFailureResult = (cause: Cause.Cause<unknown>): McpToolResult => {
-  const failure = cause.reasons.find(Cause.isFailReason);
-  const text = failure
-    ? (formatFailureMessage(failure.error) ?? "Tool execution failed")
-    : "Tool execution failed";
+  const correlationId = newCorrelationId();
+  // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: best-effort defect logging must tolerate non-serializable causes
+  try {
+    console.error(
+      `[executor:mcp] execute defect correlation_id=${correlationId}`,
+      Cause.pretty(cause),
+    );
+  } catch {
+    /* ignore logger failures */
+  }
+  const text = `Internal tool error [${correlationId}]`;
   return {
     content: [{ type: "text", text: `Error: ${text}` }],
     structuredContent: { status: "error", error: text },
@@ -317,6 +376,11 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         console.error(`[executor:mcp] ${event}`, data);
       }
     };
+    const elicitationMode =
+      config.elicitationMode ??
+      ({
+        mode: "model",
+      } as const);
 
     const resolveParentSpan = (): Tracer.AnySpan | undefined => {
       const ps = config.parentSpan;
@@ -347,12 +411,12 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
     const executeCode = (code: string): Effect.Effect<McpToolResult, E> =>
       Effect.gen(function* () {
         debugLog("execute.call", {
-          managedElicitation: supportsManagedElicitation(server),
+          elicitationMode: elicitationMode.mode,
           elicitationSupport: getElicitationSupport(server),
           clientCapabilities: server.server.getClientCapabilities() ?? null,
           codeLength: code.length,
         });
-        if (supportsManagedElicitation(server)) {
+        if (elicitationMode.mode === "native") {
           const result = yield* engine.execute(code, {
             onElicitation: makeMcpElicitationHandler(server, debugLog),
           });
@@ -369,7 +433,9 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         });
         return outcome.status === "completed"
           ? toMcpResult(formatExecuteResult(outcome.result))
-          : toMcpPausedResult(formatPausedExecution(outcome.execution));
+          : elicitationMode.mode === "browser"
+            ? yield* requireUserResumeApproval(outcome.execution.id)
+            : toMcpPausedResult(formatPausedExecution(outcome.execution));
       }).pipe(
         Effect.withSpan("mcp.host.tool.execute", {
           attributes: {
@@ -421,9 +487,74 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         }),
       );
 
+    const requireUserResumeApproval = (executionId: string): Effect.Effect<McpToolResult> =>
+      Effect.sync(() => {
+        const approvalUrl =
+          elicitationMode.mode === "browser"
+            ? elicitationMode.approvalUrl(executionId)
+            : defaultResumeApprovalUrl(executionId);
+        debugLog("resume.user_approval_required", {
+          executionId,
+          approvalUrl,
+          clientCapabilities: server.server.getClientCapabilities() ?? null,
+        });
+        return formatResumeApprovalRequired({ executionId, approvalUrl });
+      }).pipe(
+        Effect.withSpan("mcp.host.tool.resume.user_approval_required", {
+          attributes: {
+            "mcp.tool.name": "resume",
+            "mcp.execute.execution_id": executionId,
+          },
+        }),
+      );
+
+    const takeBrowserApprovalResponse = (
+      executionId: string,
+    ): Effect.Effect<ResumeResponse | null> => {
+      return config.browserApprovalStore?.takeResponse(executionId) ?? Effect.succeed(null);
+    };
+
+    const waitForBrowserApprovalResponse = (
+      executionId: string,
+    ): Effect.Effect<ResumeResponse | null> => {
+      const waitForResponse = config.browserApprovalStore?.waitForResponse;
+      if (!waitForResponse) return takeBrowserApprovalResponse(executionId);
+
+      return waitForResponse(executionId).pipe(
+        Effect.timeoutOrElse({
+          duration: "10 minutes",
+          orElse: () => Effect.succeed(null),
+        }),
+      );
+    };
+
+    const resumeAfterBrowserApproval = (executionId: string): Effect.Effect<McpToolResult, E> =>
+      Effect.gen(function* () {
+        const response = yield* waitForBrowserApprovalResponse(executionId);
+        if (!response) return yield* requireUserResumeApproval(executionId);
+
+        const outcome = yield* engine.resume(executionId, response);
+        if (!outcome) {
+          return {
+            content: [{ type: "text" as const, text: `No paused execution: ${executionId}` }],
+            isError: true,
+          } satisfies McpToolResult;
+        }
+        return outcome.status === "completed"
+          ? toMcpResult(formatExecuteResult(outcome.result))
+          : yield* requireUserResumeApproval(outcome.execution.id);
+      }).pipe(
+        Effect.withSpan("mcp.host.tool.resume.browser_approval", {
+          attributes: {
+            "mcp.tool.name": "resume",
+            "mcp.execute.execution_id": executionId,
+          },
+        }),
+      );
+
     // --- tools ---
 
-    const executeTool = yield* Effect.sync(() =>
+    yield* Effect.sync(() =>
       server.registerTool(
         "execute",
         {
@@ -438,61 +569,70 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
       }),
     );
 
-    const resumeTool = yield* Effect.sync(() =>
-      server.registerTool(
+    yield* Effect.sync(() => {
+      if (elicitationMode.mode === "native") {
+        return undefined;
+      }
+
+      if (elicitationMode.mode === "model") {
+        return server.registerTool(
+          "resume",
+          {
+            description: [
+              "Resume a paused execution using the executionId returned by execute.",
+              "This connection explicitly allows model-side resume via elicitation_mode=model.",
+            ].join("\n"),
+            inputSchema: {
+              executionId: z.string().describe("The execution ID from the paused result"),
+              action: z
+                .enum(["accept", "decline", "cancel"])
+                .describe("How to respond to the interaction"),
+              content: z
+                .string()
+                .describe("Optional JSON-encoded response content for form elicitations")
+                .default("{}"),
+            },
+          },
+          ({ executionId, action, content: rawContent }) =>
+            runToolEffect(resumeExecution(executionId, action, parseJsonContent(rawContent))),
+        );
+      }
+
+      return server.registerTool(
         "resume",
         {
           description: [
-            "Resume a paused execution using the executionId returned by execute.",
-            "Never call this without user approval unless they explicitly state otherwise.",
+            "Request user approval to resume a paused execution.",
+            "Call this with the executionId returned by execute. If the user has not approved in the browser yet, tell them to open the returned approval URL. If they have approved, this returns the resumed execution result.",
+            "This connection does not allow the model to choose accept, decline, cancel, or content.",
           ].join("\n"),
           inputSchema: {
             executionId: z.string().describe("The execution ID from the paused result"),
-            action: z
-              .enum(["accept", "decline", "cancel"])
-              .describe("How to respond to the interaction"),
-            content: z
-              .string()
-              .describe("Optional JSON-encoded response content for form elicitations")
-              .default("{}"),
           },
         },
-        ({ executionId, action, content: rawContent }) =>
-          runToolEffect(resumeExecution(executionId, action, parseJsonContent(rawContent))),
-      ),
-    ).pipe(
+        ({ executionId }) => runToolEffect(resumeAfterBrowserApproval(executionId)),
+      );
+    }).pipe(
       Effect.withSpan("mcp.host.register_tool", {
         attributes: { "mcp.tool.name": "resume" },
       }),
     );
 
-    // --- capability-based tool visibility ---
-
-    const syncToolAvailability = () => {
-      executeTool.enable();
-      if (supportsManagedElicitation(server)) {
-        resumeTool.disable();
-      } else {
-        resumeTool.enable();
-      }
+    yield* Effect.sync(() => {
       console.error(
-        "[executor] MCP capability snapshot",
+        "[executor] MCP session mode",
         JSON.stringify({
           ...capabilitySnapshot(server),
-          resumeEnabled: !supportsManagedElicitation(server),
+          elicitationMode: elicitationMode.mode,
+          resumeEnabled: elicitationMode.mode !== "native",
         }),
       );
       debugLog("tool.visibility", {
         clientCapabilities: server.server.getClientCapabilities() ?? null,
         elicitationSupport: getElicitationSupport(server),
-        managedElicitation: supportsManagedElicitation(server),
-        resumeEnabled: !supportsManagedElicitation(server),
+        elicitationMode: elicitationMode.mode,
+        resumeEnabled: elicitationMode.mode !== "native",
       });
-    };
-
-    yield* Effect.sync(() => {
-      syncToolAvailability();
-      server.server.oninitialized = syncToolAvailability;
     }).pipe(Effect.withSpan("mcp.host.sync_tool_availability"));
 
     return server;

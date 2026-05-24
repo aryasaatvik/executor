@@ -1,11 +1,16 @@
 import { Schema } from "effect";
+import { ScopedSecretCredentialInput, SecretBackedValue } from "@executor-js/sdk/shared";
 import {
-  ConnectionId,
-  ScopeId,
-  ScopedSecretCredentialInput,
-  SecretBackedValue,
-  SecretId,
-} from "@executor-js/sdk/core";
+  OAuth2Flow as HttpOAuth2Flow,
+  OAuth2SourceConfig as SharedOAuth2SourceConfig,
+  type OAuth2FlowType,
+  type OAuth2SourceConfigType,
+} from "@executor-js/sdk/http-source";
+
+export const OAuth2Flow = HttpOAuth2Flow;
+export type OAuth2Flow = OAuth2FlowType;
+export const OAuth2SourceConfig = SharedOAuth2SourceConfig;
+export type OAuth2SourceConfig = OAuth2SourceConfigType;
 
 // ---------------------------------------------------------------------------
 // Branded IDs
@@ -165,43 +170,6 @@ export const OpenApiCredentialInput = Schema.Union([
 ]);
 export type OpenApiCredentialInput = typeof OpenApiCredentialInput.Type;
 
-export const OpenApiSourceBindingValue = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("secret"),
-    secretId: SecretId,
-    secretScopeId: Schema.optional(ScopeId),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("connection"),
-    connectionId: ConnectionId,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("text"),
-    text: Schema.String,
-  }),
-]);
-export type OpenApiSourceBindingValue = typeof OpenApiSourceBindingValue.Type;
-
-export const OpenApiSourceBindingInput = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScope: ScopeId,
-  scope: ScopeId,
-  slot: Schema.String,
-  value: OpenApiSourceBindingValue,
-});
-export type OpenApiSourceBindingInput = typeof OpenApiSourceBindingInput.Type;
-
-export const OpenApiSourceBindingRef = Schema.Struct({
-  sourceId: Schema.String,
-  sourceScopeId: ScopeId,
-  scopeId: ScopeId,
-  slot: Schema.String,
-  value: OpenApiSourceBindingValue,
-  createdAt: Schema.Date,
-  updatedAt: Schema.Date,
-});
-export type OpenApiSourceBindingRef = typeof OpenApiSourceBindingRef.Type;
-
 // ---------------------------------------------------------------------------
 // OAuth2 source config — carries source-owned slots and API-level config to
 // kick off a fresh sign-in from the source detail UI without needing any
@@ -224,23 +192,6 @@ export type OpenApiSourceBindingRef = typeof OpenApiSourceBindingRef.Type;
 // connection providerState). The values are static per source so the two
 // copies can't drift under normal reconnect flows.
 // ---------------------------------------------------------------------------
-
-export const OAuth2Flow = Schema.Literals(["authorizationCode", "clientCredentials"]);
-export type OAuth2Flow = typeof OAuth2Flow.Type;
-
-export const OAuth2SourceConfig = Schema.Struct({
-  kind: Schema.Literal("oauth2"),
-  securitySchemeName: Schema.String,
-  flow: OAuth2Flow,
-  tokenUrl: Schema.String,
-  authorizationUrl: Schema.NullOr(Schema.String),
-  issuerUrl: Schema.optional(Schema.NullOr(Schema.String)),
-  clientIdSlot: Schema.String,
-  clientSecretSlot: Schema.NullOr(Schema.String),
-  connectionSlot: Schema.String,
-  scopes: Schema.Array(Schema.String),
-}).annotate({ identifier: "OpenApiOAuth2SourceConfig" });
-export type OAuth2SourceConfig = typeof OAuth2SourceConfig.Type;
 
 export const InvocationResult = Schema.Struct({
   status: Schema.Number,

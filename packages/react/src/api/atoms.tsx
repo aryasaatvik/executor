@@ -4,7 +4,7 @@ import {
   type ScopeId,
   type SecretId,
   type ToolId,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/shared";
 import * as Atom from "effect/unstable/reactivity/Atom";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 
@@ -112,6 +112,12 @@ export const policiesAtom = (scopeId: ScopeId) =>
     reactivityKeys: [ReactivityKey.policies],
   });
 
+export const pausedExecutionAtom = (executionId: string) =>
+  ExecutorApiClient.query("executions", "getPaused", {
+    params: { executionId },
+    timeToLive: "5 seconds",
+  });
+
 // ---------------------------------------------------------------------------
 // Mutation atoms — reactivityKeys must be passed at call site (effect-atom
 // does not accept them at definition time). See `reactivity-keys.tsx` for the
@@ -129,6 +135,23 @@ export const removeSource = ExecutorApiClient.mutation("sources", "remove");
 export const refreshSource = ExecutorApiClient.mutation("sources", "refresh");
 
 export const detectSource = ExecutorApiClient.mutation("sources", "detect");
+
+export const configureSource = ExecutorApiClient.mutation("sources", "configure");
+
+export const sourceCredentialBindingsAtom = (
+  scopeId: ScopeId,
+  sourceId: string,
+  sourceScopeId: ScopeId,
+) =>
+  ExecutorApiClient.query("sources", "listBindings", {
+    params: { scopeId, sourceId, sourceScopeId },
+    timeToLive: "15 seconds",
+    reactivityKeys: [ReactivityKey.sources, ReactivityKey.secrets, ReactivityKey.connections],
+  });
+
+export const setSourceCredentialBinding = ExecutorApiClient.mutation("sources", "setBinding");
+
+export const removeSourceCredentialBinding = ExecutorApiClient.mutation("sources", "removeBinding");
 
 // ---------------------------------------------------------------------------
 // OAuth — one atom pair drives sign-in for every plugin. The plugin's
@@ -151,6 +174,8 @@ export const createPolicy = ExecutorApiClient.mutation("policies", "create");
 export const updatePolicy = ExecutorApiClient.mutation("policies", "update");
 
 export const removePolicy = ExecutorApiClient.mutation("policies", "remove");
+
+export const resumeExecution = ExecutorApiClient.mutation("executions", "resume");
 
 // ---------------------------------------------------------------------------
 // Sources — optimistic surface.

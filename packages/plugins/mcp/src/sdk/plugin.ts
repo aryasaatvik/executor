@@ -8,27 +8,38 @@ import {
   Predicate,
   Result,
   Scope,
+  Schema,
   ScopedCache,
 } from "effect";
 import type { HttpClient } from "effect/unstable/http";
 
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import * as z from "zod/v4";
 
 import {
-  ConfiguredCredentialBinding,
-  ConnectionId,
   type CredentialBindingRef,
   type CredentialBindingValue,
   ScopeId,
-  SecretId,
   SourceDetectionResult,
+  ToolResult,
+  authToolFailure,
+  defaultSourceInstallScopeId,
   definePlugin,
+  tool,
   resolveSecretBackedMap as resolveSharedSecretBackedMap,
   type PluginCtx,
+  type StaticToolSchema,
   type StorageFailure,
   StorageError,
   type ToolAnnotations,
 } from "@executor-js/sdk/core";
+import {
+  compileHttpNamedCredentialMap,
+  OAuth2SourceConfig,
+  httpCredentialInputToBindingValue,
+  type HttpConfiguredValueInput,
+} from "@executor-js/sdk/http-source";
 
 import {
   makeMcpStore,
@@ -38,36 +49,42 @@ import {
 } from "./binding-store";
 import { createMcpConnector, type ConnectorInput, type McpConnection } from "./connection";
 import { discoverTools } from "./discover";
-import { McpConnectionError, McpInvocationError, McpToolDiscoveryError } from "./errors";
+import {
+  McpAuthRequiredError,
+  McpConnectionError,
+  McpInvocationError,
+  McpToolDiscoveryError,
+} from "./errors";
 import { invokeMcpTool } from "./invoke";
 import { deriveMcpNamespace, type McpToolManifest, type McpToolManifestEntry } from "./manifest";
+import { mcpPresets } from "./presets";
 import { probeMcpEndpointShape, type McpShapeProbeResult } from "./probe-shape";
 import {
-  MCP_HEADER_AUTH_SLOT,
   MCP_OAUTH_CLIENT_ID_SLOT,
   MCP_OAUTH_CLIENT_SECRET_SLOT,
   MCP_OAUTH_CONNECTION_SLOT,
+  McpConnectionAuthInput,
+  McpConfiguredValueInput,
+  McpCredentialInput,
+  McpRemoteTransport,
   McpToolBinding,
-  McpSourceBindingInput,
-  McpSourceBindingRef,
   mcpHeaderSlot,
   mcpQueryParamSlot,
   type McpConnectionAuth,
-  type McpConnectionAuthInput,
-  type McpCredentialInput,
-  type McpSourceBindingValue,
-  type SecretBackedValue,
+  type McpConfiguredValueInput as McpConfiguredValueInputType,
+  SecretBackedValue,
   type McpStoredSourceData,
   type ConfiguredMcpCredentialValue,
 } from "./types";
 
 import {
-  SECRET_REF_PREFIX,
   type ConfigFileSink,
+  type ConfigHeaderValue,
   type McpAuthConfig,
   type McpRemoteSourceConfig as McpRemoteConfigEntry,
   type McpStdioSourceConfig as McpStdioConfigEntry,
   type SourceConfig,
+  headerToConfigValue,
 } from "@executor-js/config";
 
 // ---------------------------------------------------------------------------
@@ -87,15 +104,11 @@ export interface McpRemoteSourceConfig extends McpSourceScopeField {
   readonly name: string;
   readonly endpoint: string;
   readonly remoteTransport?: "streamable-http" | "sse" | "auto";
-  readonly queryParams?: Record<string, McpCredentialInput>;
-  readonly headers?: Record<string, McpCredentialInput>;
+  readonly queryParams?: Record<string, McpConfiguredValueInputType>;
+  readonly headers?: Record<string, McpConfiguredValueInputType>;
   readonly namespace?: string;
-  readonly auth?: McpConnectionAuthInput;
-  /**
-   * Scope that owns any direct credentials supplied on this call. Required
-   * whenever headers/queryParams/auth carry direct secret or connection ids.
-   */
-  readonly credentialTargetScope?: string;
+  readonly oauth2?: OAuth2SourceConfig;
+  readonly credentials?: McpInitialCredentialsInput;
 }
 
 export interface McpStdioSourceConfig extends McpSourceScopeField {
@@ -109,6 +122,15 @@ export interface McpStdioSourceConfig extends McpSourceScopeField {
 }
 
 export type McpSourceConfig = McpRemoteSourceConfig | McpStdioSourceConfig;
+type McpConfigFileRemoteSourceConfig = Omit<
+  McpRemoteSourceConfig,
+  "headers" | "queryParams" | "oauth2"
+> & {
+  readonly headers?: Record<string, McpCredentialInput | McpConfiguredValueInputType>;
+  readonly queryParams?: Record<string, McpCredentialInput | McpConfiguredValueInputType>;
+  readonly auth?: McpConnectionAuthInput;
+};
+type McpConfigFileSourceConfig = McpConfigFileRemoteSourceConfig | McpStdioSourceConfig;
 
 // ---------------------------------------------------------------------------
 // Extension types
@@ -128,20 +150,167 @@ export interface McpProbeResult {
   readonly serverName: string | null;
 }
 
-export interface McpUpdateSourceInput {
-  readonly name?: string;
-  readonly endpoint?: string;
-  readonly headers?: Record<string, McpCredentialInput>;
-  readonly queryParams?: Record<string, McpCredentialInput>;
-  readonly credentialTargetScope?: string;
-  readonly auth?: McpConnectionAuthInput;
-}
+const McpConfigureSourcePayloadSchema = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  endpoint: Schema.optional(Schema.String),
+  headers: Schema.optional(Schema.Record(Schema.String, McpCredentialInput)),
+  queryParams: Schema.optional(Schema.Record(Schema.String, McpCredentialInput)),
+  auth: Schema.optional(McpConnectionAuthInput),
+});
+const McpConfigureSourceInputSchema = Schema.Struct({
+  scope: Schema.String,
+  ...McpConfigureSourcePayloadSchema.fields,
+});
+export type McpConfigureSourceInput = typeof McpConfigureSourceInputSchema.Type;
 
-export interface McpProbeEndpointInput {
-  readonly endpoint: string;
-  readonly headers?: Record<string, SecretBackedValue>;
-  readonly queryParams?: Record<string, SecretBackedValue>;
-}
+const McpInitialCredentialsInputSchema = Schema.Struct({
+  scope: Schema.String,
+  headers: Schema.optional(Schema.Record(Schema.String, McpCredentialInput)),
+  queryParams: Schema.optional(Schema.Record(Schema.String, McpCredentialInput)),
+  auth: Schema.optional(McpConnectionAuthInput),
+});
+type McpInitialCredentialsInput = typeof McpInitialCredentialsInputSchema.Type;
+
+const McpRemoteAddSourceInputSchema = Schema.Struct({
+  transport: Schema.Literal("remote"),
+  name: Schema.String,
+  endpoint: Schema.String,
+  remoteTransport: Schema.optional(McpRemoteTransport),
+  queryParams: Schema.optional(Schema.Record(Schema.String, McpConfiguredValueInput)),
+  headers: Schema.optional(Schema.Record(Schema.String, McpConfiguredValueInput)),
+  namespace: Schema.optional(Schema.String),
+  oauth2: Schema.optional(OAuth2SourceConfig),
+  credentials: Schema.optional(McpInitialCredentialsInputSchema),
+});
+
+const McpStdioAddSourceInputSchema = Schema.Struct({
+  transport: Schema.Literal("stdio"),
+  name: Schema.String,
+  command: Schema.String,
+  args: Schema.optional(Schema.Array(Schema.String)),
+  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  cwd: Schema.optional(Schema.String),
+  namespace: Schema.optional(Schema.String),
+});
+
+const McpAddSourceInputSchema = Schema.Union([
+  McpRemoteAddSourceInputSchema,
+  McpStdioAddSourceInputSchema,
+]);
+
+const McpAddSourceOutputSchema = Schema.Struct({
+  namespace: Schema.String,
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  toolCount: Schema.Number,
+  discovery: Schema.optional(
+    Schema.Struct({
+      status: Schema.Literals(["ok", "failed"]),
+      message: Schema.optional(Schema.String),
+      stage: Schema.optional(Schema.String),
+    }),
+  ),
+});
+
+const McpProbeEndpointInputSchema = Schema.Struct({
+  endpoint: Schema.String,
+  headers: Schema.optional(Schema.Record(Schema.String, SecretBackedValue)),
+  queryParams: Schema.optional(Schema.Record(Schema.String, SecretBackedValue)),
+});
+
+const McpProbeEndpointOutputSchema = Schema.Struct({
+  connected: Schema.Boolean,
+  requiresOAuth: Schema.Boolean,
+  supportsDynamicRegistration: Schema.Boolean,
+  name: Schema.String,
+  namespace: Schema.String,
+  toolCount: Schema.NullOr(Schema.Number),
+  serverName: Schema.NullOr(Schema.String),
+});
+
+const McpGetSourceInputSchema = Schema.Struct({
+  namespace: Schema.String,
+  scope: Schema.String,
+});
+
+const McpGetSourceOutputSchema = Schema.Struct({
+  source: Schema.NullOr(Schema.Unknown),
+});
+
+const McpStaticConfigureSourceInputSchema = Schema.Struct({
+  source: Schema.Struct({
+    id: Schema.String,
+    scope: Schema.String,
+  }),
+  scope: Schema.String,
+  ...McpConfigureSourcePayloadSchema.fields,
+});
+
+const McpStaticConfigureSourceOutputSchema = Schema.Struct({
+  configured: Schema.Boolean,
+});
+
+const schemaToStaticToolSchema = <A, I>(schema: Schema.Decoder<A, I>): StaticToolSchema<A, I> =>
+  Schema.toStandardSchemaV1(Schema.toStandardJSONSchemaV1(schema) as never) as StaticToolSchema<
+    A,
+    I
+  >;
+
+const mcpToolFailure = (code: string, message: string, details?: unknown) =>
+  ToolResult.fail({
+    code,
+    message,
+    ...(details === undefined ? {} : { details }),
+  });
+
+const mcpAuthToolFailure = (failure: McpAuthRequiredError) =>
+  authToolFailure({
+    code: failure.code,
+    message: failure.message,
+    source: { id: failure.sourceId, scope: failure.sourceScope },
+    credential: {
+      kind: failure.credentialKind,
+      ...(failure.credentialLabel ? { label: failure.credentialLabel } : {}),
+      ...(failure.slotKey ? { slotKey: failure.slotKey } : {}),
+      ...(failure.secretId ? { secretId: failure.secretId } : {}),
+      ...(failure.connectionId ? { connectionId: failure.connectionId } : {}),
+    },
+    ...(failure.status !== undefined ? { status: failure.status } : {}),
+    ...(failure.details !== undefined
+      ? {
+          upstream: {
+            ...(failure.status !== undefined ? { status: failure.status } : {}),
+            details: failure.details,
+          },
+        }
+      : {}),
+    recovery: { configureSourceTool: "executor.mcp.configureSource" },
+  });
+
+const McpAddSourceInputStandardSchema = schemaToStaticToolSchema(McpAddSourceInputSchema);
+const McpAddSourceOutputStandardSchema = schemaToStaticToolSchema(McpAddSourceOutputSchema);
+const McpProbeEndpointInputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointInputSchema);
+const McpProbeEndpointOutputStandardSchema = schemaToStaticToolSchema(McpProbeEndpointOutputSchema);
+const McpGetSourceInputStandardSchema = schemaToStaticToolSchema(McpGetSourceInputSchema);
+const McpGetSourceOutputStandardSchema = schemaToStaticToolSchema(McpGetSourceOutputSchema);
+const McpStaticConfigureSourceInputStandardSchema = schemaToStaticToolSchema(
+  McpStaticConfigureSourceInputSchema,
+);
+const McpStaticConfigureSourceOutputStandardSchema = schemaToStaticToolSchema(
+  McpStaticConfigureSourceOutputSchema,
+);
+
+export type McpProbeEndpointInput = typeof McpProbeEndpointInputSchema.Type;
+
+const resolveStaticScopeInput = (
+  ctx: { readonly scopes: readonly { readonly id: ScopeId; readonly name: string }[] },
+  value: string,
+): string =>
+  String(
+    ctx.scopes.find((scope) => scope.name === value || String(scope.id) === value)?.id ?? value,
+  );
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -182,6 +351,31 @@ const normalizeNamespace = (config: McpSourceConfig): string =>
     command: config.transport === "stdio" ? config.command : undefined,
   });
 
+type JsonSchemaObject = Record<string, unknown> & {
+  readonly properties?: Record<string, unknown>;
+};
+
+const McpCallToolResultJsonSchema = z.toJSONSchema(CallToolResultSchema) as JsonSchemaObject;
+
+const mcpCallToolResultOutputSchema = (structuredContentSchema?: unknown): JsonSchemaObject => {
+  const defaultStructuredContentSchema =
+    McpCallToolResultJsonSchema.properties?.structuredContent ?? {};
+
+  return {
+    ...McpCallToolResultJsonSchema,
+    properties: {
+      ...McpCallToolResultJsonSchema.properties,
+      structuredContent:
+        structuredContentSchema === undefined
+          ? defaultStructuredContentSchema
+          : structuredContentSchema,
+      isError: { const: false },
+    },
+    required:
+      structuredContentSchema === undefined ? ["content"] : ["content", "structuredContent"],
+  };
+};
+
 const toBinding = (entry: McpToolManifestEntry): McpToolBinding =>
   McpToolBinding.make({
     toolId: entry.toolId,
@@ -193,6 +387,24 @@ const toBinding = (entry: McpToolManifestEntry): McpToolBinding =>
   });
 
 const MCP_PLUGIN_ID = "mcp";
+const McpTextContent = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
+const McpToolCallEnvelope = Schema.Struct({
+  isError: Schema.optional(Schema.Boolean),
+  content: Schema.optional(Schema.Array(Schema.Unknown)),
+});
+
+const decodeMcpTextContent = Schema.decodeUnknownOption(McpTextContent);
+const decodeMcpToolCallEnvelope = Schema.decodeUnknownOption(McpToolCallEnvelope);
+
+const extractMcpErrorMessage = (content: unknown): string => {
+  if (Array.isArray(content)) {
+    for (const item of content) {
+      const decoded = Option.getOrUndefined(decodeMcpTextContent(item));
+      if (decoded !== undefined && decoded.text.length > 0) return decoded.text;
+    }
+  }
+  return "MCP tool returned an error";
+};
 
 /** Match `token` as a separator-bounded run inside a URL hostname or path,
  *  used as a low-confidence detection hint when wire-shape detection fails.
@@ -235,42 +447,12 @@ const scopeRanks = (ctx: PluginCtx<McpBindingStore>): ReadonlyMap<string, number
 const scopeRank = (ranks: ReadonlyMap<string, number>, scopeId: string): number =>
   ranks.get(scopeId) ?? Infinity;
 
-const coreBindingToMcpBinding = (binding: CredentialBindingRef): McpSourceBindingRef =>
-  McpSourceBindingRef.make({
-    sourceId: binding.sourceId,
-    sourceScopeId: binding.sourceScopeId,
-    scopeId: binding.scopeId,
-    slot: binding.slotKey,
-    value: binding.value,
-    createdAt: binding.createdAt,
-    updatedAt: binding.updatedAt,
-  });
-
-const listMcpSourceBindings = (
-  ctx: PluginCtx<McpBindingStore>,
-  sourceId: string,
-  sourceScope: string,
-): Effect.Effect<readonly McpSourceBindingRef[], StorageFailure> =>
-  Effect.gen(function* () {
-    const ranks = scopeRanks(ctx);
-    const sourceSourceRank = scopeRank(ranks, sourceScope);
-    if (sourceSourceRank === Infinity) return [];
-    const bindings = yield* ctx.credentialBindings.listForSource({
-      pluginId: MCP_PLUGIN_ID,
-      sourceId,
-      sourceScope: ScopeId.make(sourceScope),
-    });
-    return bindings
-      .filter((binding) => scopeRank(ranks, binding.scopeId) <= sourceSourceRank)
-      .map(coreBindingToMcpBinding);
-  });
-
 const resolveMcpSourceBinding = (
   ctx: PluginCtx<McpBindingStore>,
   sourceId: string,
   sourceScope: string,
   slot: string,
-): Effect.Effect<McpSourceBindingRef | null, StorageFailure> =>
+): Effect.Effect<CredentialBindingRef | null, StorageFailure> =>
   Effect.gen(function* () {
     const ranks = scopeRanks(ctx);
     const sourceSourceRank = scopeRank(ranks, sourceScope);
@@ -286,7 +468,7 @@ const resolveMcpSourceBinding = (
           candidate.slotKey === slot && scopeRank(ranks, candidate.scopeId) <= sourceSourceRank,
       )
       .sort((a, b) => scopeRank(ranks, a.scopeId) - scopeRank(ranks, b.scopeId))[0];
-    return binding ? coreBindingToMcpBinding(binding) : null;
+    return binding ?? null;
   });
 
 const validateMcpBindingTarget = (
@@ -329,76 +511,47 @@ const validateMcpBindingTarget = (
     }
   });
 
-const bindingTargetScope = (
-  targetScope: string | undefined,
-  bindings: readonly unknown[],
-): Effect.Effect<string | undefined, McpConnectionError> => {
-  if (bindings.length === 0) return Effect.succeed(undefined);
-  if (targetScope) return Effect.succeed(targetScope);
-  return Effect.fail(
-    new McpConnectionError({
-      transport: "remote",
-      message: "credentialTargetScope is required when adding direct MCP credentials",
-    }),
-  );
-};
+const canonicalizeCredentialMap = compileHttpNamedCredentialMap;
 
-const targetScopeForBinding = (
-  fallbackTargetScope: string | undefined,
-  binding: { readonly targetScope?: string },
-): Effect.Effect<string, McpConnectionError> => {
-  const targetScope = binding.targetScope ?? fallbackTargetScope;
-  if (targetScope) return Effect.succeed(targetScope);
-  return Effect.fail(
-    new McpConnectionError({
-      transport: "remote",
-      message: "credentialTargetScope is required when adding direct MCP credentials",
-    }),
-  );
-};
-
-const canonicalizeCredentialMap = (
-  values: Record<string, McpCredentialInput> | undefined,
+const canonicalizeConfiguredValueMap = (
+  values: Record<string, McpConfiguredValueInputType> | undefined,
   slotForName: (name: string) => string,
-): {
-  readonly values: Record<string, ConfiguredMcpCredentialValue>;
-  readonly bindings: ReadonlyArray<{
-    readonly slot: string;
-    readonly value: McpSourceBindingValue;
-    readonly targetScope?: string;
-  }>;
-} => {
-  const nextValues: Record<string, ConfiguredMcpCredentialValue> = {};
-  const bindings: Array<{ slot: string; value: McpSourceBindingValue; targetScope?: string }> = [];
+): Record<string, ConfiguredMcpCredentialValue> => {
+  const next: Record<string, ConfiguredMcpCredentialValue> = {};
   for (const [name, value] of Object.entries(values ?? {})) {
     if (typeof value === "string") {
-      nextValues[name] = value;
+      next[name] = value;
       continue;
     }
-    if ("kind" in value) {
-      nextValues[name] = value;
-      continue;
-    }
-    const slot = slotForName(name);
-    nextValues[name] = ConfiguredCredentialBinding.make({
+    next[name] = {
       kind: "binding",
-      slot,
+      slot: slotForName(name),
       prefix: value.prefix,
-    });
-    bindings.push({
-      slot,
-      targetScope: "targetScope" in value ? value.targetScope : undefined,
-      value: {
-        kind: "secret",
-        secretId: SecretId.make(value.secretId),
-        ...("secretScopeId" in value && value.secretScopeId
-          ? { secretScopeId: value.secretScopeId }
-          : {}),
-      },
-    });
+    };
   }
-  return { values: nextValues, bindings };
+  return next;
 };
+
+const resolveConfiguredValueMap = (
+  values: Record<string, HttpConfiguredValueInput> | undefined,
+): Record<string, string> | undefined => {
+  if (!values) return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [name, value] of Object.entries(values)) {
+    if (typeof value === "string") resolved[name] = value;
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+};
+
+const authFromOAuth2Source = (oauth2: OAuth2SourceConfig | undefined): McpConnectionAuth =>
+  oauth2
+    ? {
+        kind: "oauth2",
+        connectionSlot: oauth2.connectionSlot,
+        clientIdSlot: oauth2.clientIdSlot,
+        ...(oauth2.clientSecretSlot ? { clientSecretSlot: oauth2.clientSecretSlot } : {}),
+      }
+    : { kind: "none" };
 
 const canonicalizeAuth = (
   auth: McpConnectionAuthInput | undefined,
@@ -406,61 +559,37 @@ const canonicalizeAuth = (
   readonly auth: McpConnectionAuth;
   readonly bindings: ReadonlyArray<{
     readonly slot: string;
-    readonly value: McpSourceBindingValue;
+    readonly value: CredentialBindingValue;
     readonly targetScope?: string;
   }>;
 } => {
-  if (!auth || auth.kind === "none") return { auth: { kind: "none" }, bindings: [] };
-  if (auth.kind === "header") {
-    if ("secretSlot" in auth) return { auth, bindings: [] };
-    return {
-      auth: {
-        kind: "header",
-        headerName: auth.headerName,
-        secretSlot: MCP_HEADER_AUTH_SLOT,
-        prefix: auth.prefix,
-      },
-      bindings: [
-        {
-          slot: MCP_HEADER_AUTH_SLOT,
-          targetScope: auth.targetScope,
-          value: {
-            kind: "secret",
-            secretId: SecretId.make(auth.secretId),
-            ...(auth.secretScopeId ? { secretScopeId: auth.secretScopeId } : {}),
-          },
-        },
-      ],
-    };
-  }
-  if ("connectionSlot" in auth) return { auth, bindings: [] };
-  const bindings: Array<{ slot: string; value: McpSourceBindingValue; targetScope?: string }> = [
-    {
-      slot: MCP_OAUTH_CONNECTION_SLOT,
-      value: {
-        kind: "connection",
-        connectionId: ConnectionId.make(auth.connectionId),
-      },
-    },
-  ];
-  if (auth.clientIdSecretId) {
+  if (!auth || "kind" in auth || !auth.oauth2) return { auth: { kind: "none" }, bindings: [] };
+  const oauth = auth.oauth2;
+  const bindings: Array<{ slot: string; value: CredentialBindingValue; targetScope?: string }> = [];
+  if (oauth.connection) {
     bindings.push({
-      slot: MCP_OAUTH_CLIENT_ID_SLOT,
-      value: { kind: "secret", secretId: SecretId.make(auth.clientIdSecretId) },
+      slot: MCP_OAUTH_CONNECTION_SLOT,
+      value: httpCredentialInputToBindingValue(oauth.connection),
     });
   }
-  if (auth.clientSecretSecretId) {
+  if (oauth.clientId) {
+    bindings.push({
+      slot: MCP_OAUTH_CLIENT_ID_SLOT,
+      value: httpCredentialInputToBindingValue(oauth.clientId),
+    });
+  }
+  if (oauth.clientSecret) {
     bindings.push({
       slot: MCP_OAUTH_CLIENT_SECRET_SLOT,
-      value: { kind: "secret", secretId: SecretId.make(auth.clientSecretSecretId) },
+      value: httpCredentialInputToBindingValue(oauth.clientSecret),
     });
   }
   return {
     auth: {
       kind: "oauth2",
       connectionSlot: MCP_OAUTH_CONNECTION_SLOT,
-      ...(auth.clientIdSecretId ? { clientIdSlot: MCP_OAUTH_CLIENT_ID_SLOT } : {}),
-      ...(auth.clientSecretSecretId ? { clientSecretSlot: MCP_OAUTH_CLIENT_SECRET_SLOT } : {}),
+      ...(oauth.clientId ? { clientIdSlot: MCP_OAUTH_CLIENT_ID_SLOT } : {}),
+      ...(oauth.clientSecret ? { clientSecretSlot: MCP_OAUTH_CLIENT_SECRET_SLOT } : {}),
     },
     bindings,
   };
@@ -535,14 +664,25 @@ const resolveSecretBackedMap = (
     ),
   );
 
-const plainStringMap = (
-  values: Record<string, McpCredentialInput> | undefined,
-): Record<string, string> | undefined => {
+const credentialInputMapToConfigValues = (
+  values: Record<string, McpConfiguredValueInputType | McpCredentialInput> | undefined,
+): Record<string, ConfigHeaderValue> | undefined => {
   if (!values) return undefined;
-  const entries = Object.entries(values).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string",
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+  const out: Record<string, ConfigHeaderValue> = {};
+  for (const [name, value] of Object.entries(values)) {
+    if (typeof value === "string") {
+      out[name] = value;
+      continue;
+    }
+    if (value.kind === "secret" && "secretId" in value) {
+      out[name] = headerToConfigValue({ secretId: value.secretId, prefix: value.prefix });
+      continue;
+    }
+    if (value.kind === "text") {
+      out[name] = value.prefix ? `${value.prefix}${value.text}` : value.text;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 };
 
 const resolveMcpBindingValueMap = (
@@ -554,7 +694,7 @@ const resolveMcpBindingValueMap = (
     readonly targetScope?: string;
     readonly missingLabel: string;
   },
-): Effect.Effect<Record<string, string> | undefined, McpConnectionError | StorageFailure> =>
+): Effect.Effect<Record<string, string> | undefined, McpAuthRequiredError | StorageFailure> =>
   Effect.gen(function* () {
     if (!values) return undefined;
     const resolved: Record<string, string> = {};
@@ -570,20 +710,33 @@ const resolveMcpBindingValueMap = (
         value.slot,
       );
       if (binding?.value.kind === "secret") {
-        const secret = yield* ctx.secrets.getAtScope(binding.value.secretId, binding.scopeId).pipe(
+        const secretBinding = binding.value;
+        const secret = yield* ctx.secrets.getAtScope(secretBinding.secretId, binding.scopeId).pipe(
           Effect.catchTag("SecretOwnedByConnectionError", () =>
             Effect.fail(
-              new McpConnectionError({
-                transport: "remote",
+              new McpAuthRequiredError({
+                code: "credential_secret_missing",
+                sourceId: params.sourceId,
+                sourceScope: params.sourceScope,
+                credentialKind: "secret",
+                credentialLabel: name,
+                slotKey: value.slot,
+                secretId: String(secretBinding.secretId),
                 message: `Failed to resolve secret for ${params.missingLabel} "${name}"`,
               }),
             ),
           ),
         );
         if (secret === null) {
-          return yield* new McpConnectionError({
-            transport: "remote",
-            message: `Missing secret "${binding.value.secretId}" for ${params.missingLabel} "${name}"`,
+          return yield* new McpAuthRequiredError({
+            code: "credential_secret_missing",
+            sourceId: params.sourceId,
+            sourceScope: params.sourceScope,
+            credentialKind: "secret",
+            credentialLabel: name,
+            slotKey: value.slot,
+            secretId: String(secretBinding.secretId),
+            message: `Missing secret "${secretBinding.secretId}" for ${params.missingLabel} "${name}"`,
           });
         }
         resolved[name] = value.prefix ? `${value.prefix}${secret}` : secret;
@@ -593,127 +746,78 @@ const resolveMcpBindingValueMap = (
         resolved[name] = value.prefix ? `${value.prefix}${binding.value.text}` : binding.value.text;
         continue;
       }
-      return yield* new McpConnectionError({
-        transport: "remote",
+      return yield* new McpAuthRequiredError({
+        code: "credential_binding_missing",
+        sourceId: params.sourceId,
+        sourceScope: params.sourceScope,
+        credentialKind: "secret",
+        credentialLabel: name,
+        slotKey: value.slot,
         message: `Missing binding for ${params.missingLabel} "${name}"`,
       });
     }
     return Object.keys(resolved).length > 0 ? resolved : undefined;
   });
 
-const resolveMcpCredentialInputMap = (
+const resolveInitialMcpCredentialValueMap = (
   ctx: PluginCtx<McpBindingStore>,
-  values: Record<string, McpCredentialInput> | undefined,
-  params: {
-    readonly sourceId: string;
-    readonly sourceScope: string;
-    readonly targetScope?: string;
-    readonly missingLabel: string;
-  },
+  values: Record<string, ConfiguredMcpCredentialValue>,
+  bindings: ReadonlyArray<{ readonly slot: string; readonly value: CredentialBindingValue }>,
+  targetScope: string,
+  missingLabel: string,
 ): Effect.Effect<Record<string, string> | undefined, McpConnectionError | StorageFailure> =>
   Effect.gen(function* () {
-    if (!values) return undefined;
+    const bySlot = new Map(bindings.map((binding) => [binding.slot, binding.value] as const));
     const resolved: Record<string, string> = {};
     for (const [name, value] of Object.entries(values)) {
       if (typeof value === "string") {
         resolved[name] = value;
         continue;
       }
-      if ("kind" in value) {
-        const slotResolved = yield* resolveMcpBindingValueMap(
-          ctx,
-          { [name]: value },
-          {
-            sourceId: params.sourceId,
-            sourceScope: params.sourceScope,
-            missingLabel: params.missingLabel,
-          },
-        );
-        if (slotResolved?.[name] !== undefined) resolved[name] = slotResolved[name];
+      const binding = bySlot.get(value.slot);
+      if (binding?.kind === "secret") {
+        const secret = yield* ctx.secrets
+          .getAtScope(binding.secretId, binding.secretScopeId ?? ScopeId.make(targetScope))
+          .pipe(
+            Effect.catchTag("SecretOwnedByConnectionError", () =>
+              Effect.fail(
+                new McpConnectionError({
+                  transport: "remote",
+                  message: `Failed to resolve secret for ${missingLabel} "${name}"`,
+                }),
+              ),
+            ),
+          );
+        if (secret === null) {
+          return yield* new McpConnectionError({
+            transport: "remote",
+            message: `Missing secret "${binding.secretId}" for ${missingLabel} "${name}"`,
+          });
+        }
+        resolved[name] = value.prefix ? `${value.prefix}${secret}` : secret;
         continue;
       }
-      const secretScope =
-        "secretScopeId" in value
-          ? (value.secretScopeId ?? value.targetScope)
-          : (params.targetScope ?? params.sourceScope);
-      const secret = yield* ctx.secrets.getAtScope(SecretId.make(value.secretId), secretScope).pipe(
-        Effect.catchTag("SecretOwnedByConnectionError", () =>
-          Effect.fail(
-            new McpConnectionError({
-              transport: "remote",
-              message: `Failed to resolve secret for ${params.missingLabel} "${name}"`,
-            }),
-          ),
-        ),
-      );
-      if (secret === null) {
-        return yield* new McpConnectionError({
-          transport: "remote",
-          message: `Missing secret "${value.secretId}" for ${params.missingLabel} "${name}"`,
-        });
+      if (binding?.kind === "text") {
+        resolved[name] = value.prefix ? `${value.prefix}${binding.text}` : binding.text;
       }
-      resolved[name] = value.prefix ? `${value.prefix}${secret}` : secret;
     }
     return Object.keys(resolved).length > 0 ? resolved : undefined;
   });
 
-const resolveMcpHeaderAuth = (
+const resolveInitialMcpOauthProvider = (
   ctx: PluginCtx<McpBindingStore>,
-  sourceId: string,
-  sourceScope: string,
-  auth: McpConnectionAuth,
-): Effect.Effect<Record<string, string>, McpConnectionError | StorageFailure> =>
-  Effect.gen(function* () {
-    if (auth.kind !== "header") return {};
-    const binding = yield* resolveMcpSourceBinding(ctx, sourceId, sourceScope, auth.secretSlot);
-    if (binding?.value.kind === "secret") {
-      const secret = yield* ctx.secrets.getAtScope(binding.value.secretId, binding.scopeId).pipe(
-        Effect.catchTag("SecretOwnedByConnectionError", () =>
-          Effect.fail(
-            new McpConnectionError({
-              transport: "remote",
-              message: `Failed to resolve header auth binding "${auth.secretSlot}"`,
-            }),
-          ),
-        ),
-      );
-      if (secret === null) {
-        return yield* new McpConnectionError({
-          transport: "remote",
-          message: `Missing secret for header auth binding "${auth.secretSlot}"`,
-        });
-      }
-      return { [auth.headerName]: auth.prefix ? `${auth.prefix}${secret}` : secret };
-    }
-    if (binding?.value.kind === "text") {
-      return {
-        [auth.headerName]: auth.prefix ? `${auth.prefix}${binding.value.text}` : binding.value.text,
-      };
-    }
-    return yield* new McpConnectionError({
-      transport: "remote",
-      message: `Missing header auth binding "${auth.secretSlot}"`,
-    });
-  });
-
-const resolveMcpStoredOauthProvider = (
-  ctx: PluginCtx<McpBindingStore>,
-  sourceId: string,
-  sourceScope: string,
-  auth: McpConnectionAuth,
+  bindings: ReadonlyArray<{ readonly slot: string; readonly value: CredentialBindingValue }>,
+  targetScope: string,
 ): Effect.Effect<OAuthClientProvider | undefined, McpConnectionError | StorageFailure> =>
   Effect.gen(function* () {
-    if (auth.kind !== "oauth2") return undefined;
-    const binding = yield* resolveMcpSourceBinding(ctx, sourceId, sourceScope, auth.connectionSlot);
-    if (binding?.value.kind !== "connection") {
-      return yield* new McpConnectionError({
-        transport: "remote",
-        message: `Missing OAuth connection binding for MCP source "${sourceId}"`,
-      });
-    }
-    const connectionId = binding.value.connectionId;
+    const connection = bindings.find(
+      (binding) =>
+        binding.slot === MCP_OAUTH_CONNECTION_SLOT && binding.value.kind === "connection",
+    );
+    if (!connection || connection.value.kind !== "connection") return undefined;
+    const connectionId = connection.value.connectionId;
     const accessToken = yield* ctx.connections
-      .accessTokenAtScope(connectionId, binding.scopeId)
+      .accessTokenAtScope(connectionId, ScopeId.make(targetScope))
       .pipe(
         Effect.mapError(
           ({ message }) =>
@@ -726,76 +830,156 @@ const resolveMcpStoredOauthProvider = (
     return makeOAuthProvider(accessToken);
   });
 
-const resolveMcpInputAuth = (
+const resolveMcpHeaderAuth = (
   ctx: PluginCtx<McpBindingStore>,
   sourceId: string,
   sourceScope: string,
-  targetScope: string | undefined,
-  auth: McpConnectionAuthInput | undefined,
-): Effect.Effect<
-  { readonly headers: Record<string, string>; readonly authProvider?: OAuthClientProvider },
-  McpConnectionError | StorageFailure
-> =>
+  auth: McpConnectionAuth,
+): Effect.Effect<Record<string, string>, McpAuthRequiredError | StorageFailure> =>
   Effect.gen(function* () {
-    if (!auth || auth.kind === "none") return { headers: {} };
-    if (auth.kind === "header") {
-      if ("secretSlot" in auth) {
-        const headers = yield* resolveMcpHeaderAuth(ctx, sourceId, sourceScope, auth);
-        return { headers };
-      }
-      const secretScope = auth.secretScopeId ?? auth.targetScope ?? targetScope ?? sourceScope;
-      const secret = yield* ctx.secrets.getAtScope(SecretId.make(auth.secretId), secretScope).pipe(
+    if (auth.kind !== "header") return {};
+    const binding = yield* resolveMcpSourceBinding(ctx, sourceId, sourceScope, auth.secretSlot);
+    if (binding?.value.kind === "secret") {
+      const secretBinding = binding.value;
+      const secret = yield* ctx.secrets.getAtScope(secretBinding.secretId, binding.scopeId).pipe(
         Effect.catchTag("SecretOwnedByConnectionError", () =>
           Effect.fail(
-            new McpConnectionError({
-              transport: "remote",
-              message: `Failed to resolve secret "${auth.secretId}"`,
+            new McpAuthRequiredError({
+              code: "credential_secret_missing",
+              sourceId,
+              sourceScope,
+              credentialKind: "secret",
+              credentialLabel: auth.headerName,
+              slotKey: auth.secretSlot,
+              secretId: String(secretBinding.secretId),
+              message: `Failed to resolve header auth binding "${auth.secretSlot}"`,
             }),
           ),
         ),
       );
       if (secret === null) {
-        return yield* new McpConnectionError({
-          transport: "remote",
-          message: `Failed to resolve secret "${auth.secretId}"`,
+        return yield* new McpAuthRequiredError({
+          code: "credential_secret_missing",
+          sourceId,
+          sourceScope,
+          credentialKind: "secret",
+          credentialLabel: auth.headerName,
+          slotKey: auth.secretSlot,
+          secretId: String(secretBinding.secretId),
+          message: `Missing secret for header auth binding "${auth.secretSlot}"`,
         });
       }
+      return { [auth.headerName]: auth.prefix ? `${auth.prefix}${secret}` : secret };
+    }
+    if (binding?.value.kind === "text") {
       return {
-        headers: { [auth.headerName]: auth.prefix ? `${auth.prefix}${secret}` : secret },
+        [auth.headerName]: auth.prefix ? `${auth.prefix}${binding.value.text}` : binding.value.text,
       };
     }
-    const connection =
-      "connectionId" in auth
-        ? { id: ConnectionId.make(auth.connectionId), scope: targetScope ?? sourceScope }
-        : yield* Effect.gen(function* () {
-            const binding = yield* resolveMcpSourceBinding(
-              ctx,
-              sourceId,
-              sourceScope,
-              auth.connectionSlot,
-            );
-            return binding?.value.kind === "connection"
-              ? { id: binding.value.connectionId, scope: binding.scopeId }
-              : null;
-          });
-    if (connection === null) {
-      return yield* new McpConnectionError({
-        transport: "remote",
+    return yield* new McpAuthRequiredError({
+      code: "credential_binding_missing",
+      sourceId,
+      sourceScope,
+      credentialKind: "secret",
+      credentialLabel: auth.headerName,
+      slotKey: auth.secretSlot,
+      message: `Missing header auth binding "${auth.secretSlot}"`,
+    });
+  });
+
+const resolveMcpStoredOauthProvider = (
+  ctx: PluginCtx<McpBindingStore>,
+  sourceId: string,
+  sourceScope: string,
+  auth: McpConnectionAuth,
+): Effect.Effect<OAuthClientProvider | undefined, McpAuthRequiredError | StorageFailure> =>
+  Effect.gen(function* () {
+    if (auth.kind !== "oauth2") return undefined;
+    const binding = yield* resolveMcpSourceBinding(ctx, sourceId, sourceScope, auth.connectionSlot);
+    if (binding?.value.kind !== "connection") {
+      return yield* new McpAuthRequiredError({
+        code: "oauth_connection_missing",
+        sourceId,
+        sourceScope,
+        credentialKind: "connection",
+        credentialLabel: "OAuth sign-in",
+        slotKey: auth.connectionSlot,
         message: `Missing OAuth connection binding for MCP source "${sourceId}"`,
       });
     }
+    const connectionId = binding.value.connectionId;
     const accessToken = yield* ctx.connections
-      .accessTokenAtScope(connection.id, connection.scope)
+      .accessTokenAtScope(connectionId, binding.scopeId)
       .pipe(
-        Effect.mapError(
-          ({ message }) =>
-            new McpConnectionError({
-              transport: "remote",
-              message: `Failed to resolve OAuth connection "${connection.id}": ${message}`,
-            }),
-        ),
+        Effect.catchTags({
+          ConnectionReauthRequiredError: ({ message, connectionId: failedConnectionId }) =>
+            Effect.fail(
+              new McpAuthRequiredError({
+                code: "oauth_reauth_required",
+                sourceId,
+                sourceScope,
+                credentialKind: "oauth",
+                credentialLabel: "OAuth sign-in",
+                slotKey: auth.connectionSlot,
+                connectionId: String(failedConnectionId),
+                message: `OAuth connection "${failedConnectionId}" needs re-authentication: ${message}`,
+              }),
+            ),
+          ConnectionNotFoundError: ({ connectionId: failedConnectionId }) =>
+            Effect.fail(
+              new McpAuthRequiredError({
+                code: "oauth_connection_missing",
+                sourceId,
+                sourceScope,
+                credentialKind: "connection",
+                credentialLabel: "OAuth sign-in",
+                slotKey: auth.connectionSlot,
+                connectionId: String(failedConnectionId),
+                message: `OAuth connection "${failedConnectionId}" was not found for MCP source "${sourceId}"`,
+              }),
+            ),
+          ConnectionProviderNotRegisteredError: ({ provider }) =>
+            Effect.fail(
+              new McpAuthRequiredError({
+                code: "oauth_connection_failed",
+                sourceId,
+                sourceScope,
+                credentialKind: "oauth",
+                credentialLabel: "OAuth sign-in",
+                slotKey: auth.connectionSlot,
+                connectionId: String(connectionId),
+                message: `OAuth provider "${provider}" is not registered`,
+              }),
+            ),
+          ConnectionRefreshNotSupportedError: ({ provider, connectionId: failedConnectionId }) =>
+            Effect.fail(
+              new McpAuthRequiredError({
+                code: "oauth_connection_failed",
+                sourceId,
+                sourceScope,
+                credentialKind: "oauth",
+                credentialLabel: "OAuth sign-in",
+                slotKey: auth.connectionSlot,
+                connectionId: String(failedConnectionId),
+                message: `OAuth provider "${provider}" cannot refresh connection "${failedConnectionId}"`,
+              }),
+            ),
+          ConnectionRefreshError: ({ message, connectionId: failedConnectionId }) =>
+            Effect.fail(
+              new McpAuthRequiredError({
+                code: "oauth_connection_failed",
+                sourceId,
+                sourceScope,
+                credentialKind: "oauth",
+                credentialLabel: "OAuth sign-in",
+                slotKey: auth.connectionSlot,
+                connectionId: String(failedConnectionId),
+                message: `OAuth connection "${failedConnectionId}" refresh failed: ${message}`,
+              }),
+            ),
+        }),
       );
-    return { headers: {}, authProvider: makeOAuthProvider(accessToken) };
+    return makeOAuthProvider(accessToken);
   });
 
 // ---------------------------------------------------------------------------
@@ -808,7 +992,7 @@ const resolveConnectorInput = (
   sd: McpStoredSourceData,
   ctx: PluginCtx<McpBindingStore>,
   allowStdio: boolean,
-): Effect.Effect<ConnectorInput, McpConnectionError | StorageFailure> => {
+): Effect.Effect<ConnectorInput, McpAuthRequiredError | McpConnectionError | StorageFailure> => {
   if (sd.transport === "stdio") {
     if (!allowStdio) {
       return Effect.fail(
@@ -865,15 +1049,25 @@ const resolveConnectorInput = (
 // ---------------------------------------------------------------------------
 
 interface McpRuntime {
-  readonly connectionCache: ScopedCache.ScopedCache<string, McpConnection, McpConnectionError>;
-  readonly pendingConnectors: Map<string, Effect.Effect<McpConnection, McpConnectionError>>;
+  readonly connectionCache: ScopedCache.ScopedCache<
+    string,
+    McpConnection,
+    McpAuthRequiredError | McpConnectionError
+  >;
+  readonly pendingConnectors: Map<
+    string,
+    Effect.Effect<McpConnection, McpAuthRequiredError | McpConnectionError>
+  >;
   readonly cacheScope: Scope.Closeable;
 }
 
 const makeRuntime = (): Effect.Effect<McpRuntime, never> =>
   Effect.gen(function* () {
     const cacheScope = yield* Scope.make();
-    const pendingConnectors = new Map<string, Effect.Effect<McpConnection, McpConnectionError>>();
+    const pendingConnectors = new Map<
+      string,
+      Effect.Effect<McpConnection, McpAuthRequiredError | McpConnectionError>
+    >();
     const connectionCache = yield* ScopedCache.make({
       lookup: (key: string) =>
         Effect.acquireRelease(
@@ -926,24 +1120,16 @@ export interface McpPluginOptions {
   readonly configFile?: ConfigFileSink;
 }
 
-const secretRef = (id: string): string => `${SECRET_REF_PREFIX}${id}`;
-
 const authToConfig = (auth: McpConnectionAuthInput | undefined): McpAuthConfig | undefined => {
   if (!auth) return undefined;
-  if (auth.kind === "none") return { kind: "none" };
-  if (auth.kind === "header") {
-    if (!("secretId" in auth)) return undefined;
-    return {
-      kind: "header",
-      headerName: auth.headerName,
-      secret: secretRef(auth.secretId),
-      prefix: auth.prefix,
-    };
+  if ("kind" in auth) return { kind: "none" };
+  const connection = auth.oauth2?.connection;
+  if (!connection || typeof connection === "string" || connection.kind !== "connection") {
+    return undefined;
   }
-  if (!("connectionId" in auth)) return undefined;
   return {
     kind: "oauth2",
-    connectionId: auth.connectionId,
+    connectionId: connection.connectionId,
   };
 };
 
@@ -951,8 +1137,8 @@ const authToConfig = (auth: McpConnectionAuthInput | undefined): McpAuthConfig |
 // Storage-form → input-form reconstruction
 //
 // `toMcpConfigEntry` consumes the `McpSourceConfig` *input* shape — the
-// legacy form with `secretId` / `connectionId`, which `authToConfig` and
-// `plainStringMap` know how to render into the file. Stored remote data
+// configure form, which `authToConfig` and `credentialInputMapToConfigValues`
+// know how to render into the file. Stored remote data
 // is in slot form (`secretSlot`, `{kind: "binding", slot}`), so writing
 // the file from a stored row needs the slot → secret/connection lookups
 // realized first. Walk the source's `credential_binding` rows and rebuild
@@ -968,7 +1154,9 @@ const toCredentialInput = (
   if (!value) return undefined;
   if (value.kind === "secret") {
     return {
+      kind: "secret",
       secretId: value.secretId,
+      ...(value.secretScopeId ? { secretScope: value.secretScopeId } : {}),
       ...(configured.prefix ? { prefix: configured.prefix } : {}),
     };
   }
@@ -999,15 +1187,17 @@ const toAuthInput = (
     const value = bySlot.get(auth.secretSlot);
     if (value?.kind !== "secret") return undefined;
     return {
-      kind: "header",
-      headerName: auth.headerName,
-      secretId: value.secretId,
-      prefix: auth.prefix,
+      kind: "none",
     };
   }
   const connection = bySlot.get(auth.connectionSlot);
-  if (connection?.kind !== "connection") return undefined;
-  return { kind: "oauth2", connectionId: connection.connectionId };
+  return {
+    oauth2: {
+      ...(connection?.kind === "connection"
+        ? { connection: { kind: "connection" as const, connectionId: connection.connectionId } }
+        : {}),
+    },
+  };
 };
 
 const inputFormFromStored = (
@@ -1016,7 +1206,7 @@ const inputFormFromStored = (
   scope: string,
   sourceName: string,
   namespace: string,
-): McpSourceConfig => {
+): McpConfigFileSourceConfig => {
   if (stored.transport === "stdio") {
     return {
       transport: "stdio",
@@ -1046,7 +1236,7 @@ const inputFormFromStored = (
 const toMcpConfigEntry = (
   namespace: string,
   sourceName: string,
-  config: McpSourceConfig,
+  config: McpConfigFileSourceConfig,
 ): SourceConfig => {
   if (config.transport === "stdio") {
     const entry: McpStdioConfigEntry = {
@@ -1067,8 +1257,8 @@ const toMcpConfigEntry = (
     name: sourceName,
     endpoint: config.endpoint,
     remoteTransport: config.remoteTransport,
-    queryParams: plainStringMap(config.queryParams),
-    headers: plainStringMap(config.headers),
+    queryParams: credentialInputMapToConfigValues(config.queryParams),
+    headers: credentialInputMapToConfigValues(config.headers),
     namespace,
     auth: authToConfig(config.auth),
   };
@@ -1096,6 +1286,17 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
   return {
     id: "mcp" as const,
     packageName: "@executor-js/plugin-mcp",
+    sourcePresets: allowStdio
+      ? mcpPresets.map((preset) => ({
+          ...preset,
+          transport: "transport" in preset ? preset.transport : "remote",
+        }))
+      : mcpPresets
+          .filter((preset) => !("transport" in preset && preset.transport === "stdio"))
+          .map((preset) => ({
+            ...preset,
+            transport: "remote" as const,
+          })),
     // Surfaced to the client bundle via the Vite plugin (see
     // `@executor-js/vite-plugin`). The MCP `./client` factory reads
     // `allowStdio` and gates the stdio tab + presets in AddMcpSource —
@@ -1219,43 +1420,58 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           const canonicalRemote =
             config.transport === "remote"
               ? {
-                  headers: canonicalizeCredentialMap(config.headers, mcpHeaderSlot),
-                  queryParams: canonicalizeCredentialMap(config.queryParams, mcpQueryParamSlot),
-                  auth: canonicalizeAuth(config.auth),
+                  headers: canonicalizeConfiguredValueMap(config.headers, mcpHeaderSlot),
+                  queryParams: canonicalizeConfiguredValueMap(
+                    config.queryParams,
+                    mcpQueryParamSlot,
+                  ),
                 }
               : null;
-          const directBindings = canonicalRemote
-            ? [
-                ...canonicalRemote.headers.bindings,
-                ...canonicalRemote.queryParams.bindings,
-                ...canonicalRemote.auth.bindings,
-              ]
-            : [];
-          for (const binding of directBindings) {
-            const bindingTargetScope = yield* targetScopeForBinding(
-              config.transport === "remote" ? config.credentialTargetScope : undefined,
-              binding,
-            );
+          const initialRemote =
+            config.transport === "remote" && config.credentials
+              ? {
+                  scope: config.credentials.scope,
+                  headers:
+                    config.credentials.headers !== undefined
+                      ? canonicalizeCredentialMap(config.credentials.headers, mcpHeaderSlot)
+                      : null,
+                  queryParams:
+                    config.credentials.queryParams !== undefined
+                      ? canonicalizeCredentialMap(config.credentials.queryParams, mcpQueryParamSlot)
+                      : null,
+                  auth:
+                    config.credentials.auth !== undefined
+                      ? canonicalizeAuth(config.credentials.auth)
+                      : null,
+                }
+              : null;
+          const remoteAuth =
+            config.transport === "remote"
+              ? config.oauth2
+                ? authFromOAuth2Source(config.oauth2)
+                : (initialRemote?.auth?.auth ?? ({ kind: "none" } as McpConnectionAuth))
+              : null;
+          const remoteCredentials =
+            canonicalRemote && remoteAuth
+              ? {
+                  headers: canonicalRemote.headers,
+                  queryParams: canonicalRemote.queryParams,
+                  auth: remoteAuth,
+                }
+              : undefined;
+          const initialBindings = [
+            ...(initialRemote?.headers?.bindings ?? []),
+            ...(initialRemote?.queryParams?.bindings ?? []),
+            ...(initialRemote?.auth?.bindings ?? []),
+          ];
+          if (initialRemote && initialBindings.length > 0) {
             yield* validateMcpBindingTarget(ctx, {
               sourceId: namespace,
               sourceScope: config.scope,
-              targetScope: bindingTargetScope,
+              targetScope: initialRemote.scope,
             });
           }
-          const targetScope =
-            config.transport === "remote" && directBindings[0]
-              ? yield* targetScopeForBinding(config.credentialTargetScope, directBindings[0])
-              : undefined;
-          const sd = toStoredSourceData(
-            config,
-            canonicalRemote
-              ? {
-                  headers: canonicalRemote.headers.values,
-                  queryParams: canonicalRemote.queryParams.values,
-                  auth: canonicalRemote.auth.auth,
-                }
-              : undefined,
-          );
+          const sd = toStoredSourceData(config, remoteCredentials);
 
           // Stdio sources are gated — a resolver failure there is a
           // config error the admin must fix before the source makes
@@ -1264,57 +1480,75 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           // connection awaiting per-user sign-in, header secret
           // awaiting upload) but the source row should still land so
           // it shows up in the list and exposes a Sign-in affordance.
-          const resolved = yield* (
+          const initialQueryParams =
+            initialRemote?.queryParams &&
+            (yield* resolveInitialMcpCredentialValueMap(
+              ctx,
+              canonicalRemote?.queryParams ?? initialRemote.queryParams.values,
+              initialRemote.queryParams.bindings,
+              initialRemote.scope,
+              "query parameter",
+            ));
+          const initialHeaders =
+            initialRemote?.headers &&
+            (yield* resolveInitialMcpCredentialValueMap(
+              ctx,
+              canonicalRemote?.headers ?? initialRemote.headers.values,
+              initialRemote.headers.bindings,
+              initialRemote.scope,
+              "header",
+            ));
+          const remoteQueryParams = {
+            ...(config.transport === "remote"
+              ? (resolveConfiguredValueMap(config.queryParams) ?? {})
+              : {}),
+            ...(initialQueryParams || {}),
+          };
+          const remoteHeaders = {
+            ...(config.transport === "remote"
+              ? (resolveConfiguredValueMap(config.headers) ?? {})
+              : {}),
+            ...(initialHeaders || {}),
+          };
+          const initialAuthProvider =
+            initialRemote?.auth !== null && initialRemote?.auth !== undefined
+              ? yield* resolveInitialMcpOauthProvider(
+                  ctx,
+                  initialRemote.auth.bindings,
+                  initialRemote.scope,
+                )
+              : undefined;
+          const resolved: Result.Result<
+            ConnectorInput,
+            McpAuthRequiredError | McpConnectionError | StorageFailure
+          > =
             config.transport === "remote"
-              ? Effect.gen(function* () {
-                  const resolvedHeaders = yield* resolveMcpCredentialInputMap(ctx, config.headers, {
-                    sourceId: namespace,
-                    sourceScope: config.scope,
-                    targetScope,
-                    missingLabel: "header",
-                  });
-                  const resolvedQueryParams = yield* resolveMcpCredentialInputMap(
-                    ctx,
-                    config.queryParams,
-                    {
-                      sourceId: namespace,
-                      sourceScope: config.scope,
-                      targetScope,
-                      missingLabel: "query parameter",
-                    },
-                  );
-                  const resolvedAuth = yield* resolveMcpInputAuth(
-                    ctx,
-                    namespace,
-                    config.scope,
-                    targetScope,
-                    config.auth,
-                  );
-                  const headers = {
-                    ...(resolvedHeaders ?? {}),
-                    ...resolvedAuth.headers,
-                  };
-                  return {
-                    transport: "remote" as const,
-                    endpoint: config.endpoint,
-                    remoteTransport: config.remoteTransport ?? "auto",
-                    queryParams: resolvedQueryParams,
-                    headers: Object.keys(headers).length > 0 ? headers : undefined,
-                    authProvider: resolvedAuth.authProvider,
-                  };
+              ? Result.succeed({
+                  transport: "remote" as const,
+                  endpoint: config.endpoint,
+                  remoteTransport: config.remoteTransport ?? "auto",
+                  queryParams:
+                    Object.keys(remoteQueryParams).length > 0 ? remoteQueryParams : undefined,
+                  headers: Object.keys(remoteHeaders).length > 0 ? remoteHeaders : undefined,
+                  authProvider: initialAuthProvider,
                 })
-              : resolveConnectorInput(namespace, config.scope, sd, ctx, allowStdio)
-          ).pipe(
-            Effect.result,
-            Effect.withSpan("mcp.plugin.resolve_connector", {
-              attributes: {
-                "mcp.source.namespace": namespace,
-                "mcp.source.transport": sd.transport,
-              },
-            }),
-          );
+              : yield* resolveConnectorInput(namespace, config.scope, sd, ctx, allowStdio).pipe(
+                  Effect.result,
+                  Effect.withSpan("mcp.plugin.resolve_connector", {
+                    attributes: {
+                      "mcp.source.namespace": namespace,
+                      "mcp.source.transport": sd.transport,
+                    },
+                  }),
+                );
 
           if (Result.isFailure(resolved) && sd.transport === "stdio") {
+            if (Predicate.isTagged(resolved.failure, "McpAuthRequiredError")) {
+              return yield* new McpConnectionError({
+                transport: sd.transport,
+                message: resolved.failure.message,
+              });
+            }
             return yield* Effect.fail(resolved.failure);
           }
 
@@ -1324,7 +1558,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           // the caller at the end.
           const discovery: Result.Result<
             McpToolManifest,
-            McpToolDiscoveryError | McpConnectionError | StorageFailure
+            McpAuthRequiredError | McpToolDiscoveryError | McpConnectionError | StorageFailure
           > = Result.isSuccess(resolved)
             ? yield* discoverTools(createMcpConnector(resolved.success)).pipe(
                 Effect.mapError(
@@ -1370,7 +1604,6 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
                     binding: toBinding(e),
                   })),
                 );
-
                 yield* ctx.core.sources.register({
                   id: namespace,
                   scope: config.scope,
@@ -1384,25 +1617,25 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
                     name: e.toolId,
                     description: e.description ?? `MCP tool: ${e.toolName}`,
                     inputSchema: e.inputSchema,
-                    outputSchema: e.outputSchema,
+                    outputSchema: mcpCallToolResultOutputSchema(e.outputSchema),
                   })),
                 });
-
-                if (directBindings.length > 0) {
-                  for (const binding of directBindings) {
-                    const bindingTargetScope = yield* targetScopeForBinding(
-                      config.transport === "remote" ? config.credentialTargetScope : undefined,
-                      binding,
-                    );
-                    yield* ctx.credentialBindings.set({
-                      targetScope: ScopeId.make(bindingTargetScope),
-                      pluginId: MCP_PLUGIN_ID,
-                      sourceId: namespace,
-                      sourceScope: ScopeId.make(config.scope),
+                if (initialRemote && initialBindings.length > 0) {
+                  yield* ctx.credentialBindings.replaceForSource({
+                    targetScope: ScopeId.make(initialRemote.scope),
+                    pluginId: MCP_PLUGIN_ID,
+                    sourceId: namespace,
+                    sourceScope: ScopeId.make(config.scope),
+                    slotPrefixes: [
+                      ...(initialRemote.headers !== null ? ["header:"] : []),
+                      ...(initialRemote.queryParams !== null ? ["query_param:"] : []),
+                      ...(initialRemote.auth !== null ? ["auth:"] : []),
+                    ],
+                    bindings: initialBindings.map((binding) => ({
                       slotKey: binding.slot,
                       value: binding.value,
-                    });
-                  }
+                    })),
+                  });
                 }
               }),
             )
@@ -1422,6 +1655,12 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           }
 
           if (Result.isFailure(discovery)) {
+            if (Predicate.isTagged(discovery.failure, "McpAuthRequiredError")) {
+              return yield* new McpConnectionError({
+                transport: sd.transport,
+                message: discovery.failure.message,
+              });
+            }
             return yield* Effect.fail(discovery.failure);
           }
           return { toolCount: manifest.tools.length, namespace };
@@ -1476,6 +1715,9 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           }
 
           const ci = yield* resolveConnectorInput(namespace, scope, sd, ctx, allowStdio).pipe(
+            Effect.catchTag("McpAuthRequiredError", ({ message }) =>
+              Effect.fail(new McpConnectionError({ transport: sd.transport, message })),
+            ),
             Effect.withSpan("mcp.plugin.resolve_connector", {
               attributes: {
                 "mcp.source.namespace": namespace,
@@ -1526,7 +1768,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
                     name: e.toolId,
                     description: e.description ?? `MCP tool: ${e.toolName}`,
                     inputSchema: e.inputSchema,
-                    outputSchema: e.outputSchema,
+                    outputSchema: mcpCallToolResultOutputSchema(e.outputSchema),
                   })),
                 });
               }),
@@ -1547,9 +1789,29 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           }),
         );
 
-      const updateSource = (namespace: string, scope: string, input: McpUpdateSourceInput) =>
+      const getSource = (namespace: string, scope: string) =>
+        ctx.storage.getSource(namespace, scope).pipe(
+          Effect.withSpan("mcp.plugin.get_source", {
+            attributes: { "mcp.source.namespace": namespace },
+          }),
+        );
+
+      return {
+        probeEndpoint,
+        addSource,
+        removeSource,
+        refreshSource,
+        getSource,
+      };
+    },
+
+    sourceConfigure: {
+      type: "mcp",
+      schema: McpConfigureSourcePayloadSchema,
+      configure: ({ ctx, sourceId, sourceScope, targetScope, config }) =>
         Effect.gen(function* () {
-          const existing = yield* ctx.storage.getSource(namespace, scope);
+          const input = config as Omit<McpConfigureSourceInput, "scope">;
+          const existing = yield* ctx.storage.getSource(sourceId, sourceScope);
           if (!existing || existing.config.transport !== "remote") return;
 
           const canonicalHeaders =
@@ -1566,48 +1828,42 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
             ...(canonicalQueryParams?.bindings ?? []),
             ...(canonicalAuth?.bindings ?? []),
           ];
-          const targetScope = yield* bindingTargetScope(
-            input.credentialTargetScope,
-            directBindings,
-          );
-          if (targetScope) {
+          if (directBindings.length > 0) {
             yield* validateMcpBindingTarget(ctx, {
-              sourceId: namespace,
-              sourceScope: scope,
+              sourceId,
+              sourceScope,
               targetScope,
             });
           }
 
-          const remote = existing.config;
           const updatedConfig: McpStoredSourceData = {
-            ...remote,
+            ...existing.config,
             ...(input.endpoint !== undefined ? { endpoint: input.endpoint } : {}),
             ...(canonicalHeaders ? { headers: canonicalHeaders.values } : {}),
             ...(canonicalAuth ? { auth: canonicalAuth.auth } : {}),
             ...(canonicalQueryParams ? { queryParams: canonicalQueryParams.values } : {}),
           };
-          const sourceName = input.name?.trim() || existing.name;
-
           const affectedPrefixes = [
             ...(input.headers !== undefined ? ["header:"] : []),
             ...(input.queryParams !== undefined ? ["query_param:"] : []),
             ...(input.auth !== undefined ? ["auth:"] : []),
           ];
-          const replacementTargetScope = targetScope ?? input.credentialTargetScope ?? scope;
+
+          const sourceName = input.name?.trim() || existing.name;
           yield* ctx.transaction(
             Effect.gen(function* () {
               yield* ctx.storage.putSource({
-                namespace,
-                scope,
+                namespace: sourceId,
+                scope: sourceScope,
                 name: sourceName,
                 config: updatedConfig,
               });
               if (affectedPrefixes.length > 0 || directBindings.length > 0) {
                 yield* ctx.credentialBindings.replaceForSource({
-                  targetScope: ScopeId.make(replacementTargetScope),
+                  targetScope: ScopeId.make(targetScope),
                   pluginId: MCP_PLUGIN_ID,
-                  sourceId: namespace,
-                  sourceScope: ScopeId.make(scope),
+                  sourceId,
+                  sourceScope: ScopeId.make(sourceScope),
                   slotPrefixes: affectedPrefixes,
                   bindings: directBindings.map((binding) => ({
                     slotKey: binding.slot,
@@ -1617,80 +1873,194 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
               }
             }),
           );
-
-          if (configFile) {
+          if (options?.configFile) {
             const bindings = yield* ctx.credentialBindings.listForSource({
               pluginId: MCP_PLUGIN_ID,
-              sourceId: namespace,
-              sourceScope: ScopeId.make(scope),
+              sourceId,
+              sourceScope: ScopeId.make(sourceScope),
             });
             const inputForm = inputFormFromStored(
               bindings,
               updatedConfig,
-              scope,
+              sourceScope,
               sourceName,
-              namespace,
+              sourceId,
             );
-            yield* configFile
-              .upsertSource(toMcpConfigEntry(namespace, sourceName, inputForm))
+            yield* options.configFile
+              .upsertSource(toMcpConfigEntry(sourceId, sourceName, inputForm))
               .pipe(Effect.withSpan("mcp.plugin.config_file.upsert"));
           }
-        }).pipe(
-          Effect.withSpan("mcp.plugin.update_source", {
-            attributes: { "mcp.source.namespace": namespace },
-          }),
-        );
-
-      const getSource = (namespace: string, scope: string) =>
-        ctx.storage.getSource(namespace, scope).pipe(
-          Effect.withSpan("mcp.plugin.get_source", {
-            attributes: { "mcp.source.namespace": namespace },
-          }),
-        );
-
-      return {
-        probeEndpoint,
-        addSource,
-        removeSource,
-        refreshSource,
-        getSource,
-        updateSource,
-        listSourceBindings: (sourceId: string, sourceScope: string) =>
-          listMcpSourceBindings(ctx, sourceId, sourceScope),
-        setSourceBinding: (input: McpSourceBindingInput) =>
-          Effect.gen(function* () {
-            yield* validateMcpBindingTarget(ctx, {
-              sourceId: input.sourceId,
-              sourceScope: input.sourceScope,
-              targetScope: input.scope,
-            });
-            const binding = yield* ctx.credentialBindings.set({
-              targetScope: input.scope,
-              pluginId: MCP_PLUGIN_ID,
-              sourceId: input.sourceId,
-              sourceScope: input.sourceScope,
-              slotKey: input.slot,
-              value: input.value,
-            });
-            return coreBindingToMcpBinding(binding);
-          }),
-        removeSourceBinding: (sourceId: string, sourceScope: string, slot: string, scope: string) =>
-          Effect.gen(function* () {
-            yield* validateMcpBindingTarget(ctx, {
-              sourceId,
-              sourceScope,
-              targetScope: scope,
-            });
-            yield* ctx.credentialBindings.remove({
-              targetScope: ScopeId.make(scope),
-              pluginId: MCP_PLUGIN_ID,
-              sourceId,
-              sourceScope: ScopeId.make(sourceScope),
-              slotKey: slot,
-            });
-          }),
-      };
+        }),
     },
+
+    staticSources: (self) => [
+      {
+        id: "mcp",
+        kind: "executor",
+        name: "MCP",
+        tools: [
+          tool({
+            name: "probeEndpoint",
+            description:
+              "Probe a remote MCP endpoint before adding it. If the result requires OAuth, call `executor.coreTools.oauth.probe` and `executor.coreTools.oauth.start` with `credentialScope` set to the user's chosen personal or organization credential scope first, then pass the resulting connection through `addSource` credentials or `mcp.configureSource`.",
+            inputSchema: McpProbeEndpointInputStandardSchema,
+            outputSchema: McpProbeEndpointOutputStandardSchema,
+            execute: (input) =>
+              self.probeEndpoint(input).pipe(
+                Effect.map(ToolResult.ok),
+                Effect.catchTag("McpConnectionError", ({ message, transport }) =>
+                  Effect.succeed(mcpToolFailure("mcp_connection_failed", message, { transport })),
+                ),
+              ),
+          }),
+          tool({
+            name: "getSource",
+            description:
+              "Inspect an existing MCP source, including transport, endpoint/command, auth mode, configured headers/query params, and credential slots. Use this before repairing an existing source with `mcp.configureSource`, `secrets.create`, or `oauth.start`.",
+            inputSchema: McpGetSourceInputStandardSchema,
+            outputSchema: McpGetSourceOutputStandardSchema,
+            execute: (input, { ctx }) => {
+              const args = input as typeof McpGetSourceInputSchema.Type;
+              return Effect.map(
+                self.getSource(args.namespace, resolveStaticScopeInput(ctx, args.scope)),
+                (source) => ToolResult.ok({ source }),
+              );
+            },
+          }),
+          tool({
+            name: "addSource",
+            description:
+              "Add an MCP source and register its tools. Executor chooses the source install scope (local scope locally, organization scope in cloud) and returns it as `source`. For remote OAuth-protected servers, first use `probeEndpoint` and the core OAuth browser handoff (`oauth.probe`, `oauth.start` with the user's chosen `credentialScope`), then bind the completed connection with `mcp.configureSource` if needed. For header/API-key auth, first call `secrets.create` at the user's chosen credential scope so the value is entered in the browser, then pass the secret reference in `credentials`. Remote sources are still saved if discovery fails; inspect the returned `discovery` field and use `sources.refresh` after credentials or network access are fixed.",
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Add an MCP source",
+            },
+            inputSchema: McpAddSourceInputStandardSchema,
+            outputSchema: McpAddSourceOutputStandardSchema,
+            execute: (rawInput, { ctx }) => {
+              const input = rawInput as typeof McpAddSourceInputSchema.Type;
+              const sourceScope = defaultSourceInstallScopeId(ctx.scopes);
+              if (sourceScope === null) {
+                return Effect.succeed(
+                  mcpToolFailure(
+                    "source_scope_unavailable",
+                    "Cannot add an MCP source because this executor has no source install scope.",
+                  ),
+                );
+              }
+              const normalizedInput = {
+                ...input,
+                scope: sourceScope,
+              } as McpSourceConfig;
+              const added = self.addSource(normalizedInput).pipe(
+                Effect.map((result) =>
+                  ToolResult.ok({
+                    ...result,
+                    source: { id: result.namespace, scope: sourceScope },
+                    discovery: { status: "ok" },
+                  }),
+                ),
+              );
+              if (normalizedInput.transport !== "remote") return added;
+
+              const savedWithDiscoveryFailure = (failure: {
+                readonly message: string;
+                readonly stage?: string;
+              }) =>
+                Effect.succeed(
+                  ToolResult.ok({
+                    namespace:
+                      normalizedInput.namespace ??
+                      deriveMcpNamespace({
+                        name: normalizedInput.name,
+                        endpoint: normalizedInput.endpoint,
+                      }),
+                    source: {
+                      id:
+                        normalizedInput.namespace ??
+                        deriveMcpNamespace({
+                          name: normalizedInput.name,
+                          endpoint: normalizedInput.endpoint,
+                        }),
+                      scope: sourceScope,
+                    },
+                    toolCount: 0,
+                    discovery: {
+                      status: "failed" as const,
+                      message: failure.message,
+                      ...(failure.stage ? { stage: failure.stage } : {}),
+                    },
+                  }),
+                );
+
+              return added.pipe(
+                Effect.catchTags({
+                  McpToolDiscoveryError: savedWithDiscoveryFailure,
+                  McpConnectionError: ({ message }) =>
+                    Effect.succeed(
+                      ToolResult.ok({
+                        namespace:
+                          normalizedInput.namespace ??
+                          deriveMcpNamespace({
+                            name: normalizedInput.name,
+                            endpoint: normalizedInput.endpoint,
+                          }),
+                        source: {
+                          id:
+                            normalizedInput.namespace ??
+                            deriveMcpNamespace({
+                              name: normalizedInput.name,
+                              endpoint: normalizedInput.endpoint,
+                            }),
+                          scope: sourceScope,
+                        },
+                        toolCount: 0,
+                        discovery: {
+                          status: "failed" as const,
+                          message,
+                        },
+                      }),
+                    ),
+                }),
+              );
+            },
+          }),
+          tool({
+            name: "configureSource",
+            description:
+              'Configure an existing remote MCP source with concrete fields. Use `source` returned by `mcp.addSource` or `sources.list`. The top-level `scope` is the credential target scope for bindings; in cloud, choose the user or organization credential scope deliberately. Pass secret refs as `{kind:"secret", secretId}` and OAuth connections as `{kind:"connection", connectionId}`.',
+            annotations: {
+              requiresApproval: true,
+              approvalDescription: "Configure an MCP source",
+            },
+            inputSchema: McpStaticConfigureSourceInputStandardSchema,
+            outputSchema: McpStaticConfigureSourceOutputStandardSchema,
+            execute: (rawInput, { ctx }) =>
+              Effect.gen(function* () {
+                const { source, ...config } =
+                  rawInput as typeof McpStaticConfigureSourceInputSchema.Type;
+                const sourceScope = resolveStaticScopeInput(ctx, source.scope);
+                const targetScope = resolveStaticScopeInput(ctx, config.scope);
+                yield* ctx.core.sources.configure({
+                  source: { id: source.id, scope: sourceScope },
+                  scope: targetScope,
+                  type: "mcp",
+                  config: {
+                    ...(config.name !== undefined ? { name: config.name } : {}),
+                    ...(config.endpoint !== undefined ? { endpoint: config.endpoint } : {}),
+                    ...(config.headers !== undefined ? { headers: config.headers } : {}),
+                    ...(config.queryParams !== undefined
+                      ? { queryParams: config.queryParams }
+                      : {}),
+                    ...(config.auth !== undefined ? { auth: config.auth } : {}),
+                  },
+                });
+                return ToolResult.ok({ configured: true });
+              }),
+          }),
+        ],
+      },
+    ],
 
     invokeTool: ({ ctx, toolRow, args, elicit }) =>
       Effect.gen(function* () {
@@ -1698,9 +2068,9 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
 
         // toolRow.scope_id is the resolved owning scope of the tool
         // (innermost-wins from the executor's stack). The matching
-        // mcp_binding + mcp_source rows live at the same scope, so
-        // pin every store lookup to it instead of relying on the
-        // scoped adapter's stack-wide fall-through.
+        // MCP binding + source plugin-storage rows live at the same scope, so
+        // pin every store lookup to it instead of relying on stack-wide
+        // scope fall-through.
         const toolScope = toolRow.scope_id;
         const entry = yield* ctx.storage.getBinding(toolRow.id, toolScope).pipe(
           Effect.withSpan("mcp.plugin.load_binding", {
@@ -1726,7 +2096,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           });
         }
 
-        return yield* invokeMcpTool({
+        const raw = yield* invokeMcpTool({
           toolId: toolRow.id,
           toolName: entry.binding.toolName,
           args,
@@ -1764,7 +2134,20 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           pendingConnectors: runtime.pendingConnectors,
           elicit,
         });
+
+        const envelope = Option.getOrUndefined(decodeMcpToolCallEnvelope(raw));
+        if (envelope?.isError === true) {
+          return ToolResult.fail({
+            code: "mcp_tool_error",
+            message: extractMcpErrorMessage(envelope.content),
+            details: { content: envelope.content },
+          });
+        }
+        return ToolResult.ok(raw);
       }).pipe(
+        Effect.catchTag("McpAuthRequiredError", (error) =>
+          Effect.succeed(mcpAuthToolFailure(error)),
+        ),
         Effect.withSpan("mcp.plugin.invoke_tool", {
           attributes: {
             "mcp.tool.name": toolRow.id,
@@ -1854,8 +2237,8 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
     // Honor upstream destructiveHint from MCP ToolAnnotations.
     // Bindings are fetched per scope so shadowed sources (e.g. an org-level
     // source overridden per-user) each resolve against their own scope's
-    // row rather than collapsing onto whichever row the scoped adapter
-    // sees first.
+    // row rather than collapsing onto whichever visible row would otherwise
+    // win first.
     resolveAnnotations: ({ ctx, sourceId, toolRows }) =>
       Effect.gen(function* () {
         const scopes = new Set(toolRows.map((row) => row.scope_id));
@@ -1972,22 +2355,4 @@ export interface McpPluginExtension {
     namespace: string,
     scope: string,
   ) => Effect.Effect<McpStoredSource | null, McpExtensionFailure>;
-  readonly updateSource: (
-    namespace: string,
-    scope: string,
-    input: McpUpdateSourceInput,
-  ) => Effect.Effect<void, McpExtensionFailure>;
-  readonly listSourceBindings: (
-    sourceId: string,
-    sourceScope: string,
-  ) => Effect.Effect<readonly McpSourceBindingRef[], StorageFailure>;
-  readonly setSourceBinding: (
-    input: McpSourceBindingInput,
-  ) => Effect.Effect<McpSourceBindingRef, StorageFailure>;
-  readonly removeSourceBinding: (
-    sourceId: string,
-    sourceScope: string,
-    slot: string,
-    scope: string,
-  ) => Effect.Effect<void, StorageFailure>;
 }

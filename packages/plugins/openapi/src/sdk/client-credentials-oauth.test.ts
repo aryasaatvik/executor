@@ -6,42 +6,32 @@
 // then resolves the bearer at invoke time.
 // ---------------------------------------------------------------------------
 
-import { expect, layer } from "@effect/vitest";
-import { Effect, Layer, Ref, Schema } from "effect";
-import {
-  HttpApi,
-  HttpApiBuilder,
-  HttpApiEndpoint,
-  HttpApiGroup,
-  OpenApi,
-} from "effect/unstable/httpapi";
-import {
-  FetchHttpClient,
-  HttpRouter,
-  HttpServer,
-  HttpServerRequest,
-  HttpServerResponse,
-} from "effect/unstable/http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Schema } from "effect";
+import { HttpApi, HttpApiBuilder, HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
+import { FetchHttpClient, HttpServerRequest } from "effect/unstable/http";
 
 import {
-  collectSchemas,
   ConnectionId,
   createExecutor,
   definePlugin,
-  makeInMemoryBlobStore,
   Scope,
   ScopeId,
   SecretId,
   SetSecretInput,
+  SetSourceCredentialBindingInput,
   type InvokeOptions,
   type SecretProvider,
 } from "@executor-js/sdk";
-import { serveTestHttpApp } from "@executor-js/sdk/testing";
-import { makeMemoryAdapter } from "@executor-js/storage-core/testing/memory";
+import { makeTestConfig, serveOAuthTestServer } from "@executor-js/sdk/testing";
+import {
+  addOpenApiTestSource,
+  serveOpenApiHttpApiTestServer,
+  unwrapInvocation,
+} from "@executor-js/plugin-openapi/testing";
 
 import { openApiPlugin } from "./plugin";
-import { OAuth2SourceConfig, OpenApiSourceBindingInput } from "./types";
+import { OAuth2SourceConfig } from "./types";
 
 const autoApprove: InvokeOptions = { onElicitation: "accept-all" };
 
@@ -66,7 +56,6 @@ const ItemsGroup = HttpApiGroup.make("items").add(
 );
 
 const TestApi = HttpApi.make("testApi").add(ItemsGroup);
-const specJson = JSON.stringify(OpenApi.fromApi(TestApi));
 
 const ItemsGroupLive = HttpApiBuilder.group(TestApi, "items", (handlers) =>
   handlers.handle("echoHeaders", () =>
@@ -79,65 +68,18 @@ const ItemsGroupLive = HttpApiBuilder.group(TestApi, "items", (handlers) =>
   ),
 );
 
-const ApiLive = HttpApiBuilder.layer(TestApi).pipe(Layer.provide(ItemsGroupLive));
-
-const TestLayer = HttpRouter.serve(ApiLive, { disableListenLog: true, disableLogger: true }).pipe(
-  Layer.provideMerge(NodeHttpServer.layerTest),
-);
-
-type TokenCall = {
-  readonly grantType: string | null;
-  readonly clientId: string | null;
-  readonly clientSecret: string | null;
-  readonly scope: string | null;
-};
-
-const serveClientCredentialsTokenEndpoint = (args: {
-  readonly accessTokens: readonly string[];
-  readonly expiresIn?: number;
-}) =>
-  Effect.gen(function* () {
-    const calls = yield* Ref.make<readonly TokenCall[]>([]);
-    let callIndex = 0;
-    const server = yield* serveTestHttpApp((request) =>
-      Effect.gen(function* () {
-        const params = new URLSearchParams(yield* request.text);
-        yield* Ref.update(calls, (all) => [
-          ...all,
-          {
-            grantType: params.get("grant_type"),
-            clientId: params.get("client_id"),
-            clientSecret: params.get("client_secret"),
-            scope: params.get("scope"),
-          },
-        ]);
-        const token =
-          args.accessTokens[Math.min(callIndex, args.accessTokens.length - 1)] ?? "unknown";
-        callIndex += 1;
-        const body: Record<string, unknown> = {
-          access_token: token,
-          token_type: "Bearer",
-        };
-        if (typeof args.expiresIn === "number") body.expires_in = args.expiresIn;
-        return HttpServerResponse.jsonUnsafe(body);
-      }).pipe(
-        Effect.catch(() =>
-          Effect.succeed(HttpServerResponse.text("token fixture request failed", { status: 500 })),
-        ),
-      ),
-    );
-
-    return {
-      tokenUrl: server.url("/token"),
-      calls: Ref.get(calls),
-    } as const;
-  });
+const tokenEndpointRequests = (
+  requests: readonly { readonly path: string; readonly body: string }[],
+) =>
+  requests
+    .filter((request) => request.path === "/token")
+    .map((request) => new URLSearchParams(request.body));
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
+describe("OpenAPI client_credentials OAuth", () => {
   it.effect("startOAuth exchanges tokens inline and makes them usable at invoke time", () =>
     Effect.gen(function* () {
       const secretStore = new Map<string, string>();
@@ -158,22 +100,14 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
         secretProviders: [memoryProvider],
       }));
       const clientLayer = FetchHttpClient.layer;
-      const server = yield* HttpServer.HttpServer;
-      const address = server.address;
-      if (!("port" in address)) {
-        return yield* new OpenApiClientCredentialsTestSetupError({
-          message: "Test server must bind to TCP",
-        });
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}`;
+      const openApiServer = yield* serveOpenApiHttpApiTestServer({
+        api: TestApi,
+        handlersLayer: ItemsGroupLive,
+      });
       const plugins = [
         openApiPlugin({ httpClientLayer: clientLayer }),
         memorySecretsPlugin(),
       ] as const;
-
-      const schema = collectSchemas(plugins);
-      const adapter = makeMemoryAdapter({ schema });
-      const blobs = makeInMemoryBlobStore();
 
       const now = new Date();
       const orgScope = Scope.make({
@@ -186,18 +120,17 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
         name: "alice",
         createdAt: now,
       });
+      const config = makeTestConfig({ plugins, scopes: [userScope, orgScope] });
 
       const adminExec = yield* createExecutor({
+        ...config,
         scopes: [orgScope],
-        adapter,
-        blobs,
         plugins,
         onElicitation: "accept-all",
       });
       const userExec = yield* createExecutor({
+        ...config,
         scopes: [userScope, orgScope],
-        adapter,
-        blobs,
         plugins,
         onElicitation: "accept-all",
       });
@@ -220,8 +153,9 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
         }),
       );
 
-      const tokenEndpoint = yield* serveClientCredentialsTokenEndpoint({
-        accessTokens: ["alice-token-1"],
+      const oauth = yield* serveOAuthTestServer({
+        defaultClientId: "client-abc",
+        defaultClientSecret: "secret-xyz",
       });
 
       // ------------------------------------------------------------
@@ -231,15 +165,15 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
       // ------------------------------------------------------------
       const connectionId = "openapi-oauth2-app-petstore";
       const started = yield* userExec.oauth.start({
-        endpoint: tokenEndpoint.tokenUrl,
-        redirectUrl: tokenEndpoint.tokenUrl,
+        endpoint: oauth.tokenEndpoint,
+        redirectUrl: oauth.tokenEndpoint,
         connectionId,
         tokenScope: String(userScope.id),
         pluginId: "openapi",
         identityLabel: "Petstore OAuth",
         strategy: {
           kind: "client-credentials",
-          tokenEndpoint: tokenEndpoint.tokenUrl,
+          tokenEndpoint: oauth.tokenEndpoint,
           clientIdSecretId: "petstore_client_id",
           clientSecretSecretId: "petstore_client_secret",
           scopes: ["data"],
@@ -256,7 +190,7 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
         kind: "oauth2",
         securitySchemeName: "oauth2",
         flow: "clientCredentials",
-        tokenUrl: tokenEndpoint.tokenUrl,
+        tokenUrl: oauth.tokenEndpoint,
         authorizationUrl: null,
         clientIdSlot: "oauth2:oauth2:client-id",
         clientSecretSlot: "oauth2:oauth2:client-secret",
@@ -266,28 +200,81 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
       expect(completedConnection.connectionId).toBe(connectionId);
 
       // Token endpoint call is RFC 6749 §4.4 compliant.
-      const calls = yield* tokenEndpoint.calls;
+      const calls = tokenEndpointRequests(yield* oauth.requests);
       expect(calls).toHaveLength(1);
-      expect(calls[0]!.grantType).toBe("client_credentials");
-      expect(calls[0]!.clientId).toBe("client-abc");
-      expect(calls[0]!.clientSecret).toBe("secret-xyz");
-      expect(calls[0]!.scope).toBe("data");
+      expect(calls[0]!.get("grant_type")).toBe("client_credentials");
+      expect(calls[0]!.get("client_id")).toBe("client-abc");
+      expect(calls[0]!.get("client_secret")).toBe("secret-xyz");
+      expect(calls[0]!.get("scope")).toBe("data");
 
       // Add the source with source-owned OAuth structure, then bind the
       // per-user connection into the configured slot.
-      yield* userExec.openapi.addSpec({
-        spec: specJson,
+      yield* addOpenApiTestSource(userExec, openApiServer, {
         scope: userScope.id,
         namespace: "petstore",
-        baseUrl,
         oauth2,
       });
-      yield* userExec.openapi.setSourceBinding(
-        OpenApiSourceBindingInput.make({
-          sourceId: "petstore",
-          sourceScope: userScope.id,
+      const storedSourceRow = yield* Effect.promise(() =>
+        config.db.findFirst("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("scope_id", "=", String(userScope.id)),
+              b("plugin_id", "=", "openapi"),
+              b("collection", "=", "source"),
+              b("key", "=", "petstore"),
+            ),
+        }),
+      );
+      const storedData = storedSourceRow?.data as
+        | {
+            readonly config?: Record<string, unknown>;
+          }
+        | undefined;
+      const storedOAuth2 = storedData?.config?.oauth2;
+      if (
+        !storedSourceRow ||
+        !storedData?.config ||
+        typeof storedOAuth2 !== "object" ||
+        storedOAuth2 === null ||
+        Array.isArray(storedOAuth2)
+      ) {
+        return yield* new OpenApiClientCredentialsTestSetupError({
+          message: "Expected stored OpenAPI source OAuth config",
+        });
+      }
+      const { authorizationUrl: _authorizationUrl, ...oauth2WithoutAuthorizationUrl } =
+        storedOAuth2 as Record<string, unknown>;
+      yield* Effect.promise(() =>
+        config.db.updateMany("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("scope_id", "=", String(userScope.id)),
+              b("plugin_id", "=", "openapi"),
+              b("collection", "=", "source"),
+              b("key", "=", "petstore"),
+            ),
+          set: {
+            data: {
+              ...storedData,
+              config: {
+                ...storedData.config,
+                oauth2: oauth2WithoutAuthorizationUrl,
+              },
+            },
+          },
+        }),
+      );
+      const sourceAfterLegacyShape = yield* userExec.openapi.getSource(
+        "petstore",
+        String(userScope.id),
+      );
+      expect(sourceAfterLegacyShape?.config.oauth2?.authorizationUrl).toBeNull();
+
+      yield* userExec.sources.setBinding(
+        SetSourceCredentialBindingInput.make({
+          source: { id: "petstore", scope: userScope.id },
           scope: userScope.id,
-          slot: oauth2.connectionSlot,
+          slotKey: oauth2.connectionSlot,
           value: {
             kind: "connection",
             connectionId: ConnectionId.make(completedConnection.connectionId),
@@ -296,23 +283,21 @@ layer(TestLayer)("OpenAPI client_credentials OAuth", (it) => {
       );
       // Invoking the tool injects the freshly-minted bearer via
       // ctx.connections.accessToken.
-      const result = (yield* userExec.tools.invoke(
-        "petstore.items.echoHeaders",
-        {},
-        autoApprove,
-      )) as {
-        data: { authorization?: string } | null;
-        error: unknown;
-      };
+      const result = unwrapInvocation(
+        yield* userExec.tools.invoke("petstore.items.echoHeaders", {}, autoApprove),
+      );
       expect(result.error).toBeNull();
-      expect(result.data?.authorization).toBe("Bearer alice-token-1");
+      const data = result.data as EchoHeaders | null;
+      const bearer = data?.authorization?.replace(/^Bearer\s+/i, "");
+      expect(bearer).toBeDefined();
+      expect(yield* oauth.acceptsAccessToken(bearer!)).toBe(true);
 
       // The connection lives at the innermost (user) scope, which
       // preserves per-user credential resolution: if each user has
-      // their own `dealcloud_client_id`/`dealcloud_client_secret`
-      // shadowed at their user scope, each user mints their own
-      // token. A single shared connection slot still lets every caller
-      // reach the right physical row through scoped credential bindings.
+      // their own OAuth client credentials shadowed at their user
+      // scope, each user mints their own token. A single shared
+      // connection slot still lets every caller reach the right
+      // physical row through scoped credential bindings.
       const userConnections = yield* userExec.connections.list();
       const connection = userConnections.find((c) => c.id === completedConnection.connectionId);
       expect(connection).toBeDefined();

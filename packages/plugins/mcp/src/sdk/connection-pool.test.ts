@@ -23,32 +23,24 @@
 
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import * as http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { z } from "zod";
+import z from "zod";
 
-import { createExecutor, makeTestConfig } from "@executor-js/sdk";
+import { createExecutor } from "@executor-js/sdk";
+import { makeTestConfig } from "@executor-js/sdk/testing";
 
 import { mcpPlugin } from "./plugin";
+import { makeEchoMcpServer, serveMcpServer } from "../testing";
 
 // ---------------------------------------------------------------------------
 // Test MCP server — counts session connects (each = one cold handshake)
 // ---------------------------------------------------------------------------
 
 function createTestMcpServer() {
-  const server = new McpServer(
-    { name: "pool-test-server", version: "1.0.0" },
-    { capabilities: {} },
-  );
-
-  server.registerTool(
-    "echo",
-    { description: "Echo a value", inputSchema: { value: z.string() } },
-    async ({ value }: { value: string }) => ({
-      content: [{ type: "text" as const, text: value }],
-    }),
-  );
+  const server = makeEchoMcpServer({
+    name: "pool-test-server",
+    toolName: "echo",
+    toolDescription: "Echo a value",
+  });
 
   server.registerTool(
     "echo2",
@@ -61,63 +53,7 @@ function createTestMcpServer() {
   return server;
 }
 
-type TestServer = {
-  readonly url: string;
-  readonly httpServer: http.Server;
-  /** Number of MCP sessions created (1 per cold transport handshake). */
-  readonly sessionCount: () => number;
-};
-
-const serveMcpServer = Effect.acquireRelease(
-  Effect.callback<TestServer, Error>((resume) => {
-    const transports = new Map<string, StreamableHTTPServerTransport>();
-    let sessions = 0;
-
-    const httpServer = http.createServer(async (req, res) => {
-      const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
-      if (sessionId) {
-        const transport = transports.get(sessionId);
-        if (!transport) {
-          res.writeHead(404);
-          res.end("Session not found");
-          return;
-        }
-        await transport.handleRequest(req, res);
-        return;
-      }
-
-      const mcpServer = createTestMcpServer();
-      sessions++;
-
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (sid) => {
-          transports.set(sid, transport);
-        },
-      });
-
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res);
-    });
-
-    httpServer.listen(0, () => {
-      const addr = httpServer.address();
-      const port = typeof addr === "object" && addr ? addr.port : 0;
-      resume(
-        Effect.succeed({
-          url: `http://127.0.0.1:${port}`,
-          httpServer,
-          sessionCount: () => sessions,
-        }),
-      );
-    });
-  }),
-  ({ httpServer }) =>
-    Effect.sync(() => {
-      httpServer.close();
-    }),
-);
+const servePoolMcpServer = serveMcpServer(createTestMcpServer);
 
 // ---------------------------------------------------------------------------
 // Helper — one executor, one mcp source pointed at the test server
@@ -149,7 +85,7 @@ describe("MCP connection pooling (regression)", () => {
     "five sequential invokes against the same source perform exactly one transport handshake",
     () =>
       Effect.gen(function* () {
-        const server = yield* serveMcpServer;
+        const server = yield* servePoolMcpServer;
         const executor = yield* makeTestExecutor(server.url);
         const tools = yield* executor.tools.list();
         const echo = tools.find((t) => t.name === "echo")!;
@@ -184,7 +120,7 @@ describe("MCP connection pooling (regression)", () => {
 
   it.effect("different tools on the same source share the cached connection", () =>
     Effect.gen(function* () {
-      const server = yield* serveMcpServer;
+      const server = yield* servePoolMcpServer;
       const executor = yield* makeTestExecutor(server.url);
       const tools = yield* executor.tools.list();
       const echo = tools.find((t) => t.name === "echo")!;
@@ -211,7 +147,7 @@ describe("MCP connection pooling (regression)", () => {
 
   it.effect("different sources with the same endpoint use separate cached connections", () =>
     Effect.gen(function* () {
-      const server = yield* serveMcpServer;
+      const server = yield* servePoolMcpServer;
       const executor = yield* createExecutor(
         makeTestConfig({
           plugins: [mcpPlugin()] as const,

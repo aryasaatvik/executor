@@ -4,16 +4,21 @@
 
 import { DurableObject, env } from "cloudflare:workers";
 import { createTraceState } from "@opentelemetry/api";
-import { Cause, Data, Effect, Layer } from "effect";
+import { Cause, Data, Deferred, Effect, Layer } from "effect";
 import * as OtelTracer from "@effect/opentelemetry/Tracer";
 import type * as Tracer from "effect/Tracer";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { TransportState } from "agents/mcp";
 import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import postgres, { type Sql } from "postgres";
 
 import { createExecutorMcpServer } from "@executor-js/host-mcp";
-import { buildExecuteDescription } from "@executor-js/execution";
+import {
+  buildExecuteDescription,
+  formatPausedExecution,
+  type ExecutionEngine,
+  type ResumeResponse,
+} from "@executor-js/execution";
 import type { DrizzleDb, DbServiceShape } from "./services/db";
 
 // Import directly from core-shared-services, NOT from ./api/layers.ts.
@@ -37,12 +42,65 @@ import { captureCause } from "./observability";
 export type McpSessionInit = {
   organizationId: string;
   userId: string;
+  elicitationMode?: "browser" | "model" | "native";
+  allowModelResume?: boolean;
 };
 
 export type IncomingTraceHeaders = {
   readonly traceparent?: string;
   readonly tracestate?: string;
   readonly baggage?: string;
+};
+
+export type McpSessionApprovalIdentity = {
+  readonly accountId: string;
+  readonly organizationId: string;
+};
+
+type McpSessionApprovalErrorResult =
+  | { readonly status: "not_found" }
+  | { readonly status: "forbidden" };
+
+export type McpSessionApprovalResult =
+  | {
+      readonly status: "ok";
+      readonly text: string;
+      readonly structured: Record<string, unknown>;
+    }
+  | McpSessionApprovalErrorResult;
+
+export type McpSessionResumeApprovalResult =
+  | {
+      readonly status: "ok";
+      readonly executionStatus: "completed" | "paused";
+      readonly text: string;
+      readonly structured: Record<string, unknown>;
+      readonly isError?: boolean;
+    }
+  | McpSessionApprovalErrorResult;
+
+const resumeApprovalResult = (
+  executionId: string,
+  response: ResumeResponse,
+): Extract<McpSessionResumeApprovalResult, { readonly status: "ok" }> => {
+  const textByAction = {
+    accept: "I've approved it",
+    decline: "I've denied it",
+    cancel: "I've canceled it",
+  } satisfies Record<ResumeResponse["action"], string>;
+  const statusByAction = {
+    accept: "approved",
+    decline: "denied",
+    cancel: "canceled",
+  } satisfies Record<ResumeResponse["action"], string>;
+
+  return {
+    status: "ok",
+    executionStatus: "completed",
+    text: textByAction[response.action],
+    structured: { status: statusByAction[response.action], executionId },
+    isError: false,
+  };
 };
 
 const HEARTBEAT_MS = 30 * 1000;
@@ -52,6 +110,7 @@ const LONG_LIVED_DB_MAX_LIFETIME_SECONDS = 120;
 const TRANSPORT_STATE_KEY = "transport";
 const SESSION_META_KEY = "session-meta";
 const LAST_ACTIVITY_KEY = "last-activity-ms";
+const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
 const INTERNAL_ACCOUNT_ID_HEADER = "x-executor-mcp-account-id";
 const INTERNAL_ORGANIZATION_ID_HEADER = "x-executor-mcp-organization-id";
 
@@ -114,11 +173,13 @@ const withIncomingParent = <A, E, R>(
   return parsed ? OtelTracer.withSpanContext(effect, parsed) : effect;
 };
 
-type DbHandle = DbServiceShape & { end: () => Promise<void> };
+type DbHandle = DbServiceShape & { readonly sql: Sql; end: () => Promise<void> };
 type SessionMeta = {
   readonly organizationId: string;
   readonly organizationName: string;
   readonly userId: string;
+  readonly elicitationMode?: "browser" | "model" | "native";
+  readonly allowModelResume?: boolean;
 };
 
 /**
@@ -174,6 +235,7 @@ const makeSessionServices = (dbHandle: DbHandle) => makeResolveOrganizationServi
 const resolveSessionMeta = Effect.fn("McpSessionDO.resolveSessionMeta")(function* (
   organizationId: string,
   userId: string,
+  elicitationMode: "browser" | "model" | "native",
 ) {
   const org = yield* resolveOrganization(organizationId);
   if (!org) {
@@ -183,6 +245,7 @@ const resolveSessionMeta = Effect.fn("McpSessionDO.resolveSessionMeta")(function
     organizationId: org.id,
     organizationName: org.name,
     userId,
+    elicitationMode,
   } satisfies SessionMeta;
 });
 
@@ -194,11 +257,14 @@ export class McpSessionDO extends DurableObject {
   private readonly instanceCreatedAt = Date.now();
   private mcpServer: McpServer | null = null;
   private transport: McpWorkerTransport | null = null;
+  private engine: ExecutionEngine<Cause.YieldableError> | null = null;
   private initialized = false;
   private lastActivityMs = 0;
   private dbHandle: DbHandle | null = null;
   private sessionMeta: SessionMeta | null = null;
   private transportJsonResponseMode: boolean | null = null;
+  private approvalResponses = new Map<string, ResumeResponse>();
+  private approvalWaiters = new Map<string, Deferred.Deferred<ResumeResponse>>();
   // Updated at the start of each `handleRequest` so the host-mcp server's
   // `parentSpan` getter — invoked by the MCP SDK's deferred tool callbacks
   // after `transport.handleRequest()` has already returned its streaming
@@ -298,11 +364,28 @@ export class McpSessionDO extends DurableObject {
       // `Effect.runPromise(engine.getDescription)` at its async
       // MCP-SDK boundary and orphan the sub-span.
       const description = yield* buildExecuteDescription(executor);
+      const sessionElicitationMode = sessionMeta.elicitationMode ?? "model";
       const mcpServer = yield* createExecutorMcpServer({
         engine,
         description,
         parentSpan: () => self.currentRequestSpan ?? undefined,
         debug: env.EXECUTOR_MCP_DEBUG === "true",
+        browserApprovalStore: {
+          takeResponse: (executionId) => self.takeApprovalResponse(executionId),
+          waitForResponse: (executionId) => self.waitForApprovalResponse(executionId),
+        },
+        elicitationMode:
+          sessionElicitationMode === "browser"
+            ? {
+                mode: "browser" as const,
+                approvalUrl: (executionId) => {
+                  const origin = env.VITE_PUBLIC_SITE_URL ?? "https://executor.sh";
+                  const url = new URL(`/resume/${encodeURIComponent(executionId)}`, origin);
+                  url.searchParams.set("mcp_session_id", self.ctx.id.toString());
+                  return url.toString();
+                },
+              }
+            : { mode: sessionElicitationMode },
       }).pipe(Effect.withSpan("McpSessionDO.createExecutorMcpServer"));
       const transport = yield* makeMcpWorkerTransport({
         sessionIdGenerator: () => self.ctx.id.toString(),
@@ -311,7 +394,7 @@ export class McpSessionDO extends DurableObject {
       });
       self.transportJsonResponseMode = options.enableJsonResponse ?? false;
       yield* transport.connect(mcpServer);
-      return { mcpServer, transport };
+      return { mcpServer, transport, engine };
     }).pipe(
       Effect.withSpan("McpSessionDO.createRuntime"),
       Effect.provide(makeSessionServices(options.dbHandle)),
@@ -331,6 +414,7 @@ export class McpSessionDO extends DurableObject {
         yield* Effect.promise(() => mcpServer.close().catch(() => undefined));
         self.mcpServer = null;
       }
+      self.engine = null;
       if (self.dbHandle) {
         const dbHandle = self.dbHandle;
         yield* Effect.promise(() => dbHandle.end());
@@ -357,8 +441,54 @@ export class McpSessionDO extends DurableObject {
       self.dbHandle = options.dbHandle;
       self.mcpServer = runtime.mcpServer;
       self.transport = runtime.transport;
+      self.engine = runtime.engine;
       self.initialized = true;
     });
+  }
+
+  private ensureRuntimeForApproval(): Effect.Effect<boolean> {
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.initialized && self.engine) return true;
+
+      const sessionMeta = yield* self.loadSessionMeta();
+      if (!sessionMeta) return false;
+
+      yield* self.closeRuntime();
+      const dbHandle = makeLongLivedDb();
+      yield* self.installRuntime(sessionMeta, {
+        dbHandle,
+        enableJsonResponse: true,
+      });
+      yield* Effect.promise(() => self.markActivity()).pipe(
+        Effect.withSpan("McpSessionDO.markActivity"),
+      );
+      return true;
+    }).pipe(
+      Effect.withSpan("McpSessionDO.ensure_runtime_for_approval"),
+      // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: DO RPC has no typed Effect channel
+      Effect.orDie,
+    );
+  }
+
+  private validateApprovalIdentity(
+    identity: McpSessionApprovalIdentity,
+  ): Effect.Effect<"ok" | "not_found" | "forbidden"> {
+    const self = this;
+    return Effect.gen(function* () {
+      const sessionMeta = yield* self.loadSessionMeta();
+      if (!sessionMeta) return "not_found" as const;
+
+      const matches =
+        identity.accountId === sessionMeta.userId &&
+        identity.organizationId === sessionMeta.organizationId;
+
+      yield* Effect.annotateCurrentSpan({
+        "mcp.session.owner_match": matches,
+      });
+
+      return matches ? ("ok" as const) : ("forbidden" as const);
+    }).pipe(Effect.withSpan("mcp.session.validate_approval_identity"));
   }
 
   private restoreRuntimeFromStorage(request: Request): Effect.Effect<"restored" | "missing_meta"> {
@@ -449,7 +579,11 @@ export class McpSessionDO extends DurableObject {
     const self = this;
     return Effect.gen(function* () {
       const dbHandle = makeEphemeralDb();
-      return yield* resolveSessionMeta(token.organizationId, token.userId).pipe(
+      return yield* resolveSessionMeta(
+        token.organizationId,
+        token.userId,
+        token.elicitationMode ?? "model",
+      ).pipe(
         Effect.provide(makeResolveOrganizationServices(dbHandle)),
         Effect.tap((sessionMeta) =>
           Effect.promise(() => self.saveSessionMeta(sessionMeta)).pipe(
@@ -507,6 +641,7 @@ export class McpSessionDO extends DurableObject {
       });
       self.mcpServer = runtime.mcpServer;
       self.transport = runtime.transport;
+      self.engine = runtime.engine;
 
       self.initialized = true;
       yield* Effect.promise(() => self.markActivity()).pipe(
@@ -577,6 +712,116 @@ export class McpSessionDO extends DurableObject {
       Effect.provide(DoTelemetryLive),
     );
     return Effect.runPromise(program);
+  }
+
+  async getPausedExecutionForApproval(
+    executionId: string,
+    identity: McpSessionApprovalIdentity,
+    incoming?: IncomingTraceHeaders,
+  ): Promise<McpSessionApprovalResult> {
+    const self = this;
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = yield* self.validateApprovalIdentity(identity);
+        if (owner !== "ok") return { status: owner } as const;
+
+        const restored = yield* self.ensureRuntimeForApproval();
+        if (!restored || !self.engine) return { status: "not_found" } as const;
+
+        const paused = yield* self.engine.getPausedExecution(executionId);
+        if (!paused) return { status: "not_found" } as const;
+
+        const formatted = formatPausedExecution(paused);
+        return {
+          status: "ok" as const,
+          text: formatted.text,
+          structured: formatted.structured,
+        };
+      }).pipe(
+        Effect.withSpan("McpSessionDO.getPausedExecutionForApproval", {
+          attributes: { "mcp.execution.id": executionId },
+        }),
+        (eff) => withIncomingParent(incoming, eff),
+        Effect.provide(DoTelemetryLive),
+        // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: DO RPC exposes Promise results
+        Effect.orDie,
+      ),
+    );
+  }
+
+  private takeApprovalResponse(executionId: string): Effect.Effect<ResumeResponse | null> {
+    const self = this;
+    return Effect.promise(async () => {
+      const memoryResponse = self.approvalResponses.get(executionId);
+      if (memoryResponse) {
+        self.approvalResponses.delete(executionId);
+        await self.ctx.storage.delete(approvalResponseKey(executionId));
+        return memoryResponse;
+      }
+      const stored = await self.ctx.storage.get<ResumeResponse>(approvalResponseKey(executionId));
+      if (!stored) return null;
+      await self.ctx.storage.delete(approvalResponseKey(executionId));
+      return stored;
+    });
+  }
+
+  private waitForApprovalResponse(executionId: string): Effect.Effect<ResumeResponse | null> {
+    const self = this;
+    return Effect.gen(function* () {
+      const existing = yield* self.takeApprovalResponse(executionId);
+      if (existing) return existing;
+
+      const waiter =
+        self.approvalWaiters.get(executionId) ?? (yield* Deferred.make<ResumeResponse>());
+      self.approvalWaiters.set(executionId, waiter);
+      yield* Deferred.await(waiter).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (self.approvalWaiters.get(executionId) === waiter) {
+              self.approvalWaiters.delete(executionId);
+            }
+          }),
+        ),
+      );
+      return yield* self.takeApprovalResponse(executionId);
+    });
+  }
+
+  async resumeExecutionForApproval(
+    executionId: string,
+    identity: McpSessionApprovalIdentity,
+    response: ResumeResponse,
+    incoming?: IncomingTraceHeaders,
+  ): Promise<McpSessionResumeApprovalResult> {
+    const self = this;
+    return Effect.runPromise(
+      Effect.gen(function* () {
+        const owner = yield* self.validateApprovalIdentity(identity);
+        if (owner !== "ok") return { status: owner } as const;
+
+        const restored = yield* self.ensureRuntimeForApproval();
+        if (!restored || !self.engine) return { status: "not_found" } as const;
+
+        const paused = yield* self.engine.getPausedExecution(executionId);
+        if (!paused) return { status: "not_found" } as const;
+
+        self.approvalResponses.set(executionId, response);
+        yield* Effect.promise(() =>
+          self.ctx.storage.put(approvalResponseKey(executionId), response),
+        );
+        const waiter = self.approvalWaiters.get(executionId);
+        if (waiter) yield* Deferred.succeed(waiter, response);
+        return resumeApprovalResult(executionId, response);
+      }).pipe(
+        Effect.withSpan("McpSessionDO.resumeExecutionForApproval", {
+          attributes: { "mcp.execution.id": executionId },
+        }),
+        (eff) => withIncomingParent(incoming, eff),
+        Effect.provide(DoTelemetryLive),
+        // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: DO RPC exposes Promise results
+        Effect.orDie,
+      ),
+    );
   }
 
   private dispatchRequest(request: Request): Effect.Effect<Response> {
@@ -668,7 +913,8 @@ export class McpSessionDO extends DurableObject {
     const lastActivityMs = await this.loadLastActivity();
     const idleMs = Date.now() - lastActivityMs;
     if (idleMs >= SESSION_TIMEOUT_MS) {
-      await this.cleanup();
+      await Effect.runPromise(this.closeRuntime());
+      await this.ctx.storage.deleteAlarm();
       return;
     }
     await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);

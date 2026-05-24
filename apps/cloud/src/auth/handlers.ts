@@ -1,9 +1,15 @@
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpServerResponse } from "effect/unstable/http";
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Predicate } from "effect";
 import { setCookie, deleteCookie } from "@tanstack/react-start/server";
 
-import { AUTH_PATHS, CloudAuthApi, CloudAuthPublicApi } from "./api";
+import {
+  AUTH_PATHS,
+  CloudAuthApi,
+  CloudAuthPublicApi,
+  McpExecutionNotFoundError,
+  McpSessionForbiddenError,
+} from "./api";
 import { NoOrganization, SessionContext } from "./middleware";
 import { UserStoreService } from "./context";
 import { authorizeOrganization } from "./authorize-organization";
@@ -12,6 +18,13 @@ import { ApiKeyManagementError } from "./api-key-errors";
 import { WorkOSError } from "./errors";
 import { WorkOSAuth } from "./workos";
 import { ApiKeyService } from "./api-keys";
+import { AutumnService } from "../services/autumn";
+import {
+  hasPaidOrganizationSubscription,
+  isOverFreeOrganizationLimit,
+  shouldApplyFreeOrganizationLimit,
+} from "./organization-limits";
+import type { McpSessionApprovalResult, McpSessionResumeApprovalResult } from "../mcp-session";
 
 const COOKIE_OPTIONS = {
   path: "/",
@@ -49,7 +62,6 @@ const DELETE_COOKIE_OPTIONS = {
   secure: true,
 };
 
-const MAX_ORGANIZATIONS_PER_USER = 3;
 const MAX_API_KEY_NAME_LENGTH = 80;
 
 const randomState = (): string => {
@@ -76,6 +88,45 @@ const requireSessionOrganization = Effect.gen(function* () {
   if (!org) return yield* new NoOrganization();
   return { session, org };
 });
+
+const requireSessionOrganizationId = Effect.gen(function* () {
+  const session = yield* SessionContext;
+  if (!session.organizationId) {
+    return yield* new NoOrganization();
+  }
+  return {
+    ...session,
+    organizationId: session.organizationId,
+  };
+});
+
+const getMcpSessionStub = (mcpSessionId: string) =>
+  Effect.try({
+    try: () => {
+      const ns = env.MCP_SESSION;
+      return ns.get(ns.idFromString(mcpSessionId));
+    },
+    catch: () => undefined,
+  }).pipe(Effect.orElseSucceed(() => null));
+
+const requireMcpSessionStub = (mcpSessionId: string, executionId: string) =>
+  Effect.gen(function* () {
+    const stub = yield* getMcpSessionStub(mcpSessionId);
+    if (!stub) {
+      return yield* new McpExecutionNotFoundError({ executionId });
+    }
+    return stub;
+  });
+
+const failMcpApprovalResult = (
+  result: { readonly status: "not_found" | "forbidden" },
+  params: { readonly mcpSessionId: string; readonly executionId: string },
+) => {
+  if (result.status === "forbidden") {
+    return Effect.fail(new McpSessionForbiddenError({ mcpSessionId: params.mcpSessionId }));
+  }
+  return Effect.fail(new McpExecutionNotFoundError({ executionId: params.executionId }));
+};
 
 const setResponseCookie = (
   response: HttpServerResponse.HttpServerResponse,
@@ -232,9 +283,7 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
           );
 
           return {
-            organizations: organizations.filter(
-              (org): org is NonNullable<typeof org> => org !== null,
-            ),
+            organizations: organizations.filter(Predicate.isNotNull),
             activeOrganizationId: session.organizationId,
           };
         }),
@@ -258,11 +307,38 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
           const workos = yield* WorkOSAuth;
           const users = yield* UserStoreService;
           const session = yield* SessionContext;
+          const autumn = yield* AutumnService;
 
           const name = payload.name.trim();
           const memberships = yield* workos.listUserMemberships(session.accountId);
-          if (memberships.data.length >= MAX_ORGANIZATIONS_PER_USER) {
-            return yield* new WorkOSError();
+          const activeMemberships = memberships.data.filter(
+            (membership) => membership.status === "active",
+          );
+
+          if (isOverFreeOrganizationLimit(activeMemberships)) {
+            const paidOrganizationIds = yield* Effect.all(
+              activeMemberships.map((membership) =>
+                autumn
+                  .use((client) =>
+                    client.customers.getOrCreate({ customerId: membership.organizationId }),
+                  )
+                  .pipe(
+                    Effect.map((customer) =>
+                      hasPaidOrganizationSubscription(customer.subscriptions)
+                        ? membership.organizationId
+                        : null,
+                    ),
+                  ),
+              ),
+              { concurrency: 3 },
+            ).pipe(
+              Effect.catchTag("AutumnError", () => Effect.fail(new WorkOSError())),
+              Effect.map((ids) => new Set(ids.filter(Predicate.isNotNull))),
+            );
+
+            if (shouldApplyFreeOrganizationLimit(activeMemberships, paidOrganizationIds)) {
+              return yield* new WorkOSError();
+            }
           }
 
           const org = yield* workos.createOrganization(name);
@@ -342,7 +418,7 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
           );
 
           return {
-            invitations: enriched.filter((i): i is NonNullable<typeof i> => i !== null),
+            invitations: enriched.filter(Predicate.isNotNull),
           };
         }),
       )
@@ -415,6 +491,67 @@ export const CloudSessionAuthHandlers = HttpApiBuilder.group(
             organizationId: org.id,
             name,
           });
+        }),
+      )
+      .handle("getMcpPaused", ({ params }) =>
+        Effect.gen(function* () {
+          const owner = yield* requireSessionOrganizationId;
+          const stub = yield* requireMcpSessionStub(params.mcpSessionId, params.executionId);
+          const result = yield* Effect.promise(
+            () =>
+              stub.getPausedExecutionForApproval(params.executionId, {
+                accountId: owner.accountId,
+                organizationId: owner.organizationId,
+              }) as Promise<McpSessionApprovalResult>,
+          );
+
+          if (result.status !== "ok") {
+            return yield* failMcpApprovalResult(result, params);
+          }
+
+          return {
+            text: result.text,
+            structured: result.structured,
+          };
+        }),
+      )
+      .handle("resumeMcpExecution", ({ params, payload }) =>
+        Effect.gen(function* () {
+          const owner = yield* requireSessionOrganizationId;
+          const stub = yield* requireMcpSessionStub(params.mcpSessionId, params.executionId);
+          const result = yield* Effect.promise(
+            () =>
+              stub.resumeExecutionForApproval(
+                params.executionId,
+                {
+                  accountId: owner.accountId,
+                  organizationId: owner.organizationId,
+                },
+                {
+                  action: payload.action,
+                  content: payload.content as Record<string, unknown> | undefined,
+                },
+              ) as Promise<McpSessionResumeApprovalResult>,
+          );
+
+          if (result.status !== "ok") {
+            return yield* failMcpApprovalResult(result, params);
+          }
+
+          if (result.executionStatus === "paused") {
+            return {
+              status: "paused" as const,
+              text: result.text,
+              structured: result.structured,
+            };
+          }
+
+          return {
+            status: "completed" as const,
+            text: result.text,
+            structured: result.structured,
+            isError: result.isError ?? false,
+          };
         }),
       )
       .handle("revokeApiKey", ({ params }) =>
