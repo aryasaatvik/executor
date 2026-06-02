@@ -30,18 +30,41 @@ const PUBLIC_PACKAGE_DIRS = [
   "packages/core/fumadb",
   "packages/kernel/core",
   "packages/kernel/runtime-quickjs",
+  "packages/kernel/runtime-dynamic-worker",
   "packages/core/sdk",
+  "packages/core/api",
   "packages/core/config",
   "packages/core/execution",
+  "packages/core/vite-plugin",
   "packages/core/cli",
+  "packages/hosts/mcp",
   "packages/plugins/example",
+  "packages/plugins/encrypted-secrets",
   "packages/plugins/file-secrets",
   "packages/plugins/graphql",
   "packages/plugins/keychain",
   "packages/plugins/mcp",
   "packages/plugins/onepassword",
   "packages/plugins/openapi",
+  "packages/react",
+  "packages/app",
 ] as const;
+
+/**
+ * Ship-source packages publish their `src/` directly (Vite bundles the
+ * `.tsx` source in the consumer build) instead of a compiled `dist/`.
+ * Two consequences for the publish flow:
+ *   1. They have no `dist/` to check for — skip the dist guard.
+ *   2. Their workspace `@executor-js/*` deps must NOT be stripped: with
+ *      src as the published artifact those imports are real runtime
+ *      imports, so as long as the target is itself publishable it must
+ *      stay resolved to a concrete version.
+ *
+ * `@executor-js/app` still precompiles its one Vite plugin entry to
+ * `vite.js` (Node can't type-strip a `.ts` from node_modules), but the
+ * rest of the package — and all of `@executor-js/react` — ships source.
+ */
+const SHIP_SOURCE_PACKAGE_DIRS: ReadonlySet<string> = new Set(["packages/react", "packages/app"]);
 
 const parseArgs = (argv: ReadonlyArray<string>): { dryRun: boolean; prepareOnly: boolean } => {
   let dryRun = false;
@@ -113,23 +136,40 @@ const applyWorkspaceVersions = async (
   pkgDir: string,
   publishable: ReadonlySet<string>,
   publishableVersions: ReadonlyMap<string, string>,
+  isShipSource: boolean,
 ): Promise<() => Promise<void>> => {
   const isInternalScope = (key: string): boolean => key.startsWith(`${PACKAGE_SCOPE}/`);
+
+  const isWorkspaceSpecifier = (value: string): boolean =>
+    value.startsWith("workspace:") || value.startsWith("catalog:");
 
   const renameDepBlock = (block: DependencyBlock | undefined): DependencyBlock | undefined => {
     if (!block) return block;
     const next: DependencyBlock = {};
     let mutated = false;
     for (const [key, value] of Object.entries(block)) {
-      if (publishable.has(key) && value.startsWith("workspace:")) {
+      if (publishable.has(key) && isWorkspaceSpecifier(value)) {
+        // Publishable `@executor-js/*` dep referenced by a workspace
+        // specifier (`workspace:*`/`catalog:`). Resolve it to the concrete
+        // published version so the packed manifest installs from npm. This
+        // applies to both compiled and ship-source packages — ship-source
+        // packages ship `src/`, so these are real runtime imports that must
+        // resolve to a concrete version, NOT stay as `workspace:*`.
         next[key] = publishableVersions.get(key) ?? value;
         mutated = true;
-      } else if (isInternalScope(key) && !publishable.has(key)) {
+      } else if (isInternalScope(key) && !publishable.has(key) && !isShipSource) {
         // Workspace-only `@executor-js/*` regular dep that we don't
-        // publish (e.g. `@executor-js/api`). Strip it: it's not in the
-        // shipped runtime entries (those imports live in
-        // `src/api/*` / `src/react/*` which don't make it into the
-        // packed dist), and leaving it in would 404 at install time.
+        // publish. Strip it: for compiled (`dist/`) packages it's not in
+        // the shipped runtime entries (those imports live in `src/api/*` /
+        // `src/react/*` which don't make it into the packed dist), and
+        // leaving it in would 404 at install time.
+        //
+        // Ship-source packages are the exception: their `src/` IS the
+        // published artifact, so any `@executor-js/*` import is a real
+        // runtime import. Such targets are expected to be publishable (and
+        // are resolved by the branch above); a non-publishable internal dep
+        // on a ship-source package is a packaging error, so we pass it
+        // through unchanged rather than silently strip a real import.
         mutated = true;
       } else {
         next[key] = value;
@@ -274,15 +314,19 @@ const applyPublishConfig = async (pkgDir: string): Promise<() => Promise<void>> 
 };
 
 const publishPackage = async (
-  pkgDir: string,
+  relDir: string,
   dryRun: boolean,
   publishable: ReadonlySet<string>,
   publishableVersions: ReadonlyMap<string, string>,
 ) => {
+  const pkgDir = join(repoRoot, relDir);
+  const isShipSource = SHIP_SOURCE_PACKAGE_DIRS.has(relDir);
   const { name, version } = await readPackageMeta(pkgDir);
   const channel = resolveChannel(version);
 
-  if (!existsSync(join(pkgDir, "dist"))) {
+  // Ship-source packages publish their `src/` directly and have no `dist/`,
+  // so the dist guard only applies to compiled packages.
+  if (!isShipSource && !existsSync(join(pkgDir, "dist"))) {
     throw new Error(`Missing dist/ in ${pkgDir}. Did you run 'bun run build:packages'?`);
   }
 
@@ -299,6 +343,7 @@ const publishPackage = async (
     pkgDir,
     publishable,
     publishableVersions,
+    isShipSource,
   );
   const restorePublishConfig = await applyPublishConfig(pkgDir);
   try {
@@ -345,16 +390,19 @@ const publishPackage = async (
  * the workflow tears down right after pkg-pr-new finishes.
  */
 const prepareOnePackage = async (
-  pkgDir: string,
+  relDir: string,
   publishable: ReadonlySet<string>,
   publishableVersions: ReadonlyMap<string, string>,
 ) => {
+  const pkgDir = join(repoRoot, relDir);
+  const isShipSource = SHIP_SOURCE_PACKAGE_DIRS.has(relDir);
   const { name, version } = await readPackageMeta(pkgDir);
-  if (!existsSync(join(pkgDir, "dist"))) {
+  // Ship-source packages publish their `src/` directly and have no `dist/`.
+  if (!isShipSource && !existsSync(join(pkgDir, "dist"))) {
     throw new Error(`Missing dist/ in ${pkgDir}. Did you run 'bun run build:packages'?`);
   }
   console.log(`[prepare] ${name}@${version}`);
-  await applyWorkspaceVersions(pkgDir, publishable, publishableVersions);
+  await applyWorkspaceVersions(pkgDir, publishable, publishableVersions, isShipSource);
   await applyPublishConfig(pkgDir);
 };
 
@@ -381,13 +429,13 @@ const main = async () => {
 
   if (prepareOnly) {
     for (const relDir of PUBLIC_PACKAGE_DIRS) {
-      await prepareOnePackage(join(repoRoot, relDir), publishable, publishableVersions);
+      await prepareOnePackage(relDir, publishable, publishableVersions);
     }
     return;
   }
 
   for (const relDir of PUBLIC_PACKAGE_DIRS) {
-    await publishPackage(join(repoRoot, relDir), dryRun, publishable, publishableVersions);
+    await publishPackage(relDir, dryRun, publishable, publishableVersions);
   }
 };
 

@@ -36,17 +36,24 @@ const PUBLIC_PACKAGE_DIRS = [
   "packages/core/fumadb",
   "packages/kernel/core",
   "packages/kernel/runtime-quickjs",
+  "packages/kernel/runtime-dynamic-worker",
   "packages/core/sdk",
+  "packages/core/api",
   "packages/core/config",
   "packages/core/execution",
+  "packages/core/vite-plugin",
   "packages/core/cli",
+  "packages/hosts/mcp",
   "packages/plugins/example",
+  "packages/plugins/encrypted-secrets",
   "packages/plugins/file-secrets",
   "packages/plugins/graphql",
   "packages/plugins/keychain",
   "packages/plugins/mcp",
   "packages/plugins/onepassword",
   "packages/plugins/openapi",
+  "packages/react",
+  "packages/app",
 ] as const;
 
 type PackageJson = {
@@ -173,7 +180,17 @@ const smokeTestPackage = async (
       const stderr = probe.stderr.toString();
       const privateMatch = stderr.match(PRIVATE_PACKAGE_RE);
       if (privateMatch) {
-        const offending = privateMatch[1];
+        const offending = privateMatch[1]!;
+        // A missing `@executor-js/*` package is only a hard failure when the
+        // package is NOT publishable — that's a private workspace package
+        // leaking into a published bundle. A publishable `@executor-js/*`
+        // that's missing is just an un-installed peer of the package under
+        // test (npm doesn't install peerDependencies under
+        // `--legacy-peer-deps`); a real consumer provides it, so it's a skip.
+        if (tarballs.has(offending)) {
+          console.log(`  skip ${spec} — missing publishable peer '${offending}'`);
+          continue;
+        }
         failures.push({
           pkg: pkg.name,
           subpath,
