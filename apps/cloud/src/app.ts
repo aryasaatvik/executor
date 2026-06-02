@@ -33,8 +33,8 @@ import { WorkerTelemetryLive } from "./observability/telemetry";
 // session store (the DO surfaced via `config.mcpExport`), console+Sentry error
 // capture — and Autumn BILLING entering ONLY as extensions: the engine
 // metering decorator, the account seat-gate, the `/api/billing/*` proxy route,
-// and the createOrganization free-limit gate. `diff` against
-// `apps/host-selfhost/src/app.ts` is the entire product difference.
+// and the createOrganization free-limit gate. These extensions are the entire
+// product difference from the self-host target.
 //
 // `ExecutorApp.make` owns the assembly (the execution-stack middleware wrapping
 // the protected API, the MCP envelope, the account API on the /api-prefixed

@@ -6,7 +6,7 @@
 // alarm, owner validation, the JSON-response-mode transport upgrade, the
 // per-request→per-session span bridge, the browser-approval store). A host
 // supplies only the seams: openSessionDb / resolveSessionMeta / buildMcpServer,
-// and optionally withTelemetry / captureCause. cloud and host-cloudflare each
+// and optionally withTelemetry / captureCause. cloud and self-hosted Cloudflare workers each
 // become a ~100-line subclass binding their injected dependencies.
 // ---------------------------------------------------------------------------
 
@@ -121,7 +121,7 @@ const sessionOwnerMismatch = () =>
 /**
  * A host's per-session DB handle. The base only disposes it during runtime
  * teardown; the host's `buildMcpServer` reads its concrete shape (postgres.js
- * for cloud, the D1 `ExecutorDbHandle` for host-cloudflare).
+ * for cloud, the D1 `ExecutorDbHandle` for the self-hosted Cloudflare worker).
  */
 export interface SessionDbHandle {
   readonly end: () => Promise<void> | void;
@@ -192,8 +192,8 @@ export abstract class McpSessionDOBase<
   // -------------------------------------------------------------------------
 
   /** Open the per-session DB handle the runtime holds for this session's
-   *  lifetime (postgres.js for cloud, the D1 handle for host-cloudflare). May be
-   *  async — host-cloudflare runs an idempotent schema bring-up when it opens. */
+   *  lifetime (postgres.js for cloud, the D1 handle for the self-hosted Cloudflare worker). May be
+   *  async — this host runs an idempotent schema bring-up when it opens. */
   protected abstract openSessionDb(): TDbHandle | Promise<TDbHandle>;
 
   /** Resolve `openSessionDb` (sync or async) into the Effect chain. */

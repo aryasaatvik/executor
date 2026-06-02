@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The Durable-Object-backed McpSessionStore — the cross-isolate variant of the
 // shared host-mcp session seam. Shared by every Cloudflare host (cloud +
-// host-cloudflare); a host supplies ONLY its DO namespace accessors (newStub
+// self-hosted Cloudflare worker); a host supplies ONLY its DO namespace accessors (newStub
 // for create, getStub for forward, addressed by the session-id == DO-id) and an
 // optional internal-error reporter. Everything else — identity-header stamping,
 // W3C trace propagation, response peeking, the verbatim DO error passthrough —
@@ -149,7 +149,7 @@ const clearExistingSession = (
 
 /**
  * Build the `McpSessionStore` seam over a host's DO namespace. Cloud and
- * host-cloudflare each pass their `getStub`/`newStub` (over `env.MCP_SESSION`);
+ * self-hosted Cloudflare workers each pass their `getStub`/`newStub` (over `env.MCP_SESSION`);
  * the dispatch logic is identical.
  */
 export const makeDurableObjectMcpSessionStore = (

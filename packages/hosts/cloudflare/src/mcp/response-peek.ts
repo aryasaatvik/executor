@@ -5,7 +5,7 @@ import { jsonRpcErrorBody } from "@executor-js/host-mcp";
 const DEFAULT_SSE_PEEK_TIMEOUT_MS = 10_000;
 
 /** Observe a JSON-RPC internal error (-32603) seen on a peeked response. The
- *  host injects this (cloud: Sentry capture; host-cloudflare: console / omit). */
+ *  host injects this (cloud: Sentry capture; the self-hosted Cloudflare worker: console / omit). */
 export type OnInternalJsonRpcError = (message: string) => void;
 
 class ResponseBodyTimeoutError extends Data.TaggedError("ResponseBodyTimeoutError")<{

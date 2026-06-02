@@ -2,7 +2,7 @@ import type { IncomingPropagationHeaders, McpElicitationMode } from "./do-header
 
 // ---------------------------------------------------------------------------
 // The injection seams shared between the worker-side DO dispatcher and the
-// DO-side base class. A host (cloud / host-cloudflare) supplies its own DO
+// DO-side base class. A host (cloud or self-hosted Cloudflare worker) supplies its own DO
 // namespace + runtime builder; everything else is platform-generic.
 // ---------------------------------------------------------------------------
 

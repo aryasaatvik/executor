@@ -9,7 +9,7 @@
 //   - buildMcpServer    → the cloud execution stack + MCP tool server
 //   - withTelemetry     → the WebSdk tracer + W3C parent-span stitching
 //   - captureCause      → Sentry error capture
-// host-cloudflare binds the same base to D1 instead; the two stay byte-identical
+// the self-hosted Cloudflare worker binds the same base to D1 instead; the two stay byte-identical
 // except for these seams.
 // ---------------------------------------------------------------------------
 

@@ -21,10 +21,9 @@ import { ErrorCaptureLive } from "./observability";
 // Principal) over a SINGLE boot-built executor scoped to the working directory
 // (`<basename>-<hash>`, with `oauthEndpointUrlPolicy: { allowHttp: true }`),
 // QuickJS in-process code execution, console error capture, Swagger at /docs —
-// and NO account API, NO usage metering. `diff` against
-// `apps/host-selfhost/src/app.ts` is the whole product difference: local serves
-// its ONE cwd executor directly (the `fixedExecution` seam) instead of building
-// a per-request `[user-org:…, org]` scoped executor from identity.
+// and NO account API, NO usage metering. The whole product difference: local
+// serves its ONE cwd executor directly (the `fixedExecution` seam) instead of
+// building a per-request `[user-org:…, org]` scoped executor from identity.
 //
 // `ExecutorApp.make` owns the assembly (the fixed-execution middleware wrapping
 // the protected API, the extension routes, provideMerge(boot)). This file's job

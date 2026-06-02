@@ -3,7 +3,7 @@
 // (@executor-js/cloudflare) over cloud's `env.MCP_SESSION` namespace. Cloud
 // supplies only the stub accessors + the Sentry capture for internal errors;
 // all dispatch/identity/trace/peek logic is in the shared package, identical to
-// host-cloudflare.
+// the self-hosted Cloudflare worker.
 // ---------------------------------------------------------------------------
 
 import * as Sentry from "@sentry/cloudflare";

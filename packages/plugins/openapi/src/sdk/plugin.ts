@@ -1218,7 +1218,7 @@ const toOpenApiSourceConfig = (
     // a relational row. For `kind: "url"` sources the spec is also re-fetchable,
     // so we could store just the URL + a content hash and rehydrate on refresh.
     // (The Cloudflare host currently works around this with an R2 offload wrapper
-    // in apps/host-cloudflare/src/db; this is the proper plugin-level fix.)
+    // in the Cloudflare host's db layer; this is the proper plugin-level fix.)
     spec: specInputToConfigString(config.spec),
     baseUrl: config.baseUrl,
     namespace,
