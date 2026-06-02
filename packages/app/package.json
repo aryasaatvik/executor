@@ -1,8 +1,25 @@
 {
   "name": "@executor-js/app",
   "version": "1.4.4",
-  "private": true,
+  "private": false,
   "type": "module",
+  "license": "MIT",
+  "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/app",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git",
+    "directory": "packages/app"
+  },
+  "files": [
+    "src",
+    "vite.ts",
+    "vite.js",
+    "index.html",
+    "public"
+  ],
   "exports": {
     ".": "./src/entry-client.tsx",
     "./vite": "./vite.ts",
@@ -10,9 +27,23 @@
     "./routeTree": "./src/routeTree.gen.ts",
     "./index.html": "./index.html"
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": "./src/entry-client.tsx",
+      "./vite": {
+        "types": "./vite.ts",
+        "default": "./vite.js"
+      },
+      "./router": "./src/router.tsx",
+      "./routeTree": "./src/routeTree.gen.ts",
+      "./index.html": "./index.html"
+    }
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsup",
+    "build:web": "vite build",
     "preview": "vite preview",
     "typecheck": "tsgo --noEmit",
     "typecheck:slow": "tsc --noEmit"
@@ -35,6 +66,7 @@
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "react-grab": "^0.1.31",
+    "tsup": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:"
   }

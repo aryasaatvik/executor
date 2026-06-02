@@ -2,11 +2,9 @@ import { defineConfig } from "tsup";
 
 export default defineConfig({
   entry: {
-    index: "src/promise.ts",
-    core: "src/sdk/index.ts",
-    api: "src/api/index.ts",
-    client: "src/react/plugin-client.tsx",
-    testing: "src/testing/index.ts",
+    index: "src/index.ts",
+    client: "src/client.ts",
+    server: "src/server.ts",
   },
   format: ["esm"],
   dts: false,

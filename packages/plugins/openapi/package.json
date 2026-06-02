@@ -39,6 +39,12 @@
           "default": "./dist/core.js"
         }
       },
+      "./api": {
+        "import": {
+          "types": "./dist/api/index.d.ts",
+          "default": "./dist/api.js"
+        }
+      },
       "./client": {
         "import": {
           "types": "./dist/react/plugin-client.d.ts",

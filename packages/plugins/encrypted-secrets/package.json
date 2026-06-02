@@ -1,10 +1,34 @@
 {
   "name": "@executor-js/plugin-encrypted-secrets",
   "version": "0.0.0",
-  "private": true,
+  "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/plugins/encrypted-secrets",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git",
+    "directory": "packages/plugins/encrypted-secrets"
+  },
+  "files": [
+    "dist"
+  ],
+  "private": false,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        }
+      }
+    }
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",

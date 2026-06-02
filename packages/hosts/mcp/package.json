@@ -1,8 +1,11 @@
 {
   "name": "@executor-js/host-mcp",
   "version": "1.4.4",
-  "private": true,
+  "private": false,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "exports": {
     ".": {
       "types": "./src/index.ts",
@@ -17,7 +20,31 @@
       "default": "./src/in-memory-session-store.ts"
     }
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        }
+      },
+      "./tool-server": {
+        "import": {
+          "types": "./dist/tool-server.d.ts",
+          "default": "./dist/tool-server.js"
+        }
+      },
+      "./in-memory-session-store": {
+        "import": {
+          "types": "./dist/in-memory-session-store.d.ts",
+          "default": "./dist/in-memory-session-store.js"
+        }
+      }
+    }
+  },
   "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -35,6 +62,7 @@
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "bun-types": "catalog:",
+    "tsup": "catalog:",
     "vitest": "catalog:"
   }
 }

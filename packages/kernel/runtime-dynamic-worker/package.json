@@ -1,12 +1,37 @@
 {
   "name": "@executor-js/runtime-dynamic-worker",
   "version": "1.4.4",
-  "private": true,
+  "private": false,
+  "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/kernel/runtime-dynamic-worker",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git",
+    "directory": "packages/kernel/runtime-dynamic-worker"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/index.d.ts",
+          "default": "./dist/index.js"
+        }
+      }
+    }
+  },
   "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --noEmit false --outDir dist --rootDir src || true)",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -26,9 +51,12 @@
     "@executor-js/plugin-openapi": "workspace:*",
     "@executor-js/sdk": "workspace:*",
     "@types/node": "catalog:",
+    "bun-types": "catalog:",
     "drizzle-orm": "catalog:",
     "fumadb": "workspace:*",
     "postgres": "^3.4.9",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
     "vitest": "catalog:",
     "wrangler": "^4.81.0"
   }
