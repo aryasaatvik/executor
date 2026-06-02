@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "types": ["@cloudflare/workers-types", "node"],
+    "noUnusedLocals": true,
+    "noImplicitOverride": true,
+    "paths": {
+      "@executor-js/cloudflare": ["./src/cloudflare/index.ts"],
+      "@executor-js/cloudflare/mcp/worker-transport": [
+        "./src/cloudflare/mcp/worker-transport.ts"
+      ],
+      "@executor-js/cloudflare/mcp/do-headers": ["./src/cloudflare/mcp/do-headers.ts"],
+      "@executor-js/cloudflare/mcp/response-peek": ["./src/cloudflare/mcp/response-peek.ts"],
+      "@executor-js/cloudflare/mcp/session-store": ["./src/cloudflare/mcp/session-store.ts"],
+      "@executor-js/cloudflare/mcp/durable-object": [
+        "./src/cloudflare/mcp/session-durable-object.ts"
+      ]
+    },
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "ignoreEffectSuggestionsInTscExitCode": true,
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          "preferSchemaOverJson": "off"
+        }
+      }
+    ]
+  },
+  "include": ["src/**/*.ts"]
+}

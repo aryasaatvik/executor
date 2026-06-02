@@ -1,0 +1,53 @@
+{
+  "name": "executor-selfhost-host",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./serve": "./src/serve.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "bunx --bun vite dev",
+    "start": "bun run src/serve.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@better-auth/api-key": "^1.6.11",
+    "@effect/atom-react": "latest",
+    "@effect/platform-bun": "latest",
+    "@executor-js/api": "latest",
+    "@executor-js/app": "latest",
+    "@executor-js/execution": "latest",
+    "@executor-js/host-mcp": "latest",
+    "@executor-js/plugin-encrypted-secrets": "latest",
+    "@executor-js/plugin-graphql": "latest",
+    "@executor-js/plugin-mcp": "latest",
+    "@executor-js/plugin-openapi": "latest",
+    "@executor-js/react": "latest",
+    "@executor-js/runtime-quickjs": "latest",
+    "@executor-js/sdk": "latest",
+    "@libsql/client": "latest",
+    "@libsql/kysely-libsql": "latest",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@tanstack/react-router": "latest",
+    "better-auth": "^1.6.11",
+    "drizzle-orm": "latest",
+    "effect": "latest",
+    "fumadb": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@executor-js/vite-plugin": "latest",
+    "@tailwindcss/vite": "latest",
+    "@tanstack/router-plugin": "^1.167.12",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "bun-types": "latest",
+    "typescript": "latest",
+    "vite": "latest"
+  }
+}

@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# local env / secrets (never commit)
+.env
+.env.local
+
+# local data dir + sqlite/libsql
+.executor/
+*.db
+*.sqlite
+*.sqlite3
+
+# logs
+*.log
+
+# os
+.DS_Store

@@ -1,0 +1,49 @@
+{
+  "name": "executor-cloudflare-host",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "dev": "wrangler dev",
+    "dev:web": "vite dev",
+    "typecheck": "tsc --noEmit",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "@effect/atom-react": "latest",
+    "@executor-js/api": "latest",
+    "@executor-js/app": "latest",
+    "@executor-js/execution": "latest",
+    "@executor-js/host-mcp": "latest",
+    "@executor-js/plugin-encrypted-secrets": "latest",
+    "@executor-js/plugin-graphql": "latest",
+    "@executor-js/plugin-mcp": "latest",
+    "@executor-js/plugin-openapi": "latest",
+    "@executor-js/react": "latest",
+    "@executor-js/runtime-dynamic-worker": "latest",
+    "@executor-js/sdk": "latest",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@tanstack/react-router": "latest",
+    "agents": "^0.10.0",
+    "drizzle-orm": "latest",
+    "effect": "latest",
+    "fumadb": "latest",
+    "jose": "^5.9.6",
+    "react": "latest",
+    "react-dom": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "@executor-js/vite-plugin": "latest",
+    "@tailwindcss/vite": "latest",
+    "@tanstack/router-plugin": "^1.167.12",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest",
+    "wrangler": "^4.95.0"
+  }
+}

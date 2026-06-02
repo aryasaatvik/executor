@@ -1,0 +1,312 @@
+{
+  "version": 1,
+  "source": {
+    "repo": "RhysSullivan/executor",
+    "ref": "main",
+    "templatesDir": "templates"
+  },
+  "targets": {
+    "cloudflare": {
+      "base": {
+        "dir": "cloudflare/base",
+        "dependencies": {
+          "@executor-js/api": "latest",
+          "@executor-js/app": "latest",
+          "@executor-js/execution": "latest",
+          "@executor-js/host-mcp": "latest",
+          "@executor-js/react": "latest",
+          "@executor-js/sdk": "latest",
+          "@executor-js/plugin-encrypted-secrets": "latest",
+          "@executor-js/plugin-graphql": "latest",
+          "@executor-js/plugin-mcp": "latest",
+          "@executor-js/plugin-openapi": "latest",
+          "fumadb": "latest",
+          "effect": "4.0.0-beta.59",
+          "drizzle-orm": "^0.45.0",
+          "jose": "^5.9.6",
+          "@modelcontextprotocol/sdk": "^1.29.0",
+          "agents": "^0.10.0",
+          "@effect/atom-react": "4.0.0-beta.59",
+          "@tanstack/react-router": "^1.168.10",
+          "react": "^19.1.0",
+          "react-dom": "^19.1.0"
+        },
+        "devDependencies": {
+          "@cloudflare/workers-types": "^4.20250410.0",
+          "@executor-js/vite-plugin": "latest",
+          "@tailwindcss/vite": "^4.2.2",
+          "@tanstack/router-plugin": "^1.167.12",
+          "@types/node": "^24.3.1",
+          "@types/react": "^19.1.0",
+          "@types/react-dom": "^19.1.0",
+          "@vitejs/plugin-react": "^6.0.1",
+          "typescript": "^5.9.3",
+          "vite": "^8.0.0",
+          "wrangler": "^4.95.0"
+        },
+        "envVars": {
+          "EXECUTOR_SECRET_KEY": "",
+          "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",
+          "ACCESS_AUD": "",
+          "ADMIN_EMAILS": "",
+          "SELF_HOSTED_ORG_ID": "default",
+          "SELF_HOSTED_ORG_NAME": "Default"
+        }
+      },
+      "overlays": [
+        {
+          "dir": "cloudflare/adapter",
+          "dependencies": {
+            "@executor-js/api": "latest",
+            "@executor-js/execution": "latest",
+            "@executor-js/host-mcp": "latest",
+            "@modelcontextprotocol/sdk": "^1.29.0",
+            "agents": "^0.10.0",
+            "effect": "4.0.0-beta.59"
+          }
+        }
+      ],
+      "engines": {
+        "default": "dynamic-worker",
+        "choices": {
+          "dynamic-worker": {
+            "dir": "cloudflare/engine-dynamic-worker",
+            "dependencies": {
+              "@executor-js/runtime-dynamic-worker": "latest"
+            }
+          },
+          "quickjs": {
+            "dir": "cloudflare/engine-quickjs",
+            "dependencies": {
+              "@executor-js/runtime-quickjs": "latest",
+              "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
+              "quickjs-emscripten-core": "0.31.0"
+            }
+          }
+        }
+      },
+      "plugins": [
+        "openapi",
+        "mcp",
+        "graphql"
+      ],
+      "pluginRegistry": {
+        "openapi": {
+          "dependencies": {
+            "@executor-js/plugin-openapi": "latest"
+          }
+        },
+        "mcp": {
+          "dependencies": {
+            "@executor-js/plugin-mcp": "latest"
+          }
+        },
+        "graphql": {
+          "dependencies": {
+            "@executor-js/plugin-graphql": "latest"
+          }
+        }
+      },
+      "packageJsonFrom": "base"
+    },
+    "selfhost": {
+      "base": {
+        "dir": "selfhost/base",
+        "dependencies": {
+          "@executor-js/api": "latest",
+          "@executor-js/app": "latest",
+          "@executor-js/execution": "latest",
+          "@executor-js/host-mcp": "latest",
+          "@executor-js/react": "latest",
+          "@executor-js/runtime-quickjs": "latest",
+          "@executor-js/sdk": "latest",
+          "@executor-js/plugin-encrypted-secrets": "latest",
+          "@executor-js/plugin-graphql": "latest",
+          "@executor-js/plugin-mcp": "latest",
+          "@executor-js/plugin-openapi": "latest",
+          "@effect/atom-react": "4.0.0-beta.59",
+          "@effect/platform-bun": "4.0.0-beta.59",
+          "@better-auth/api-key": "^1.6.11",
+          "better-auth": "^1.6.11",
+          "@libsql/client": "^0.17.3",
+          "@libsql/kysely-libsql": "^0.4.1",
+          "@modelcontextprotocol/sdk": "^1.29.0",
+          "@tanstack/react-router": "^1.168.10",
+          "drizzle-orm": "^0.45.0",
+          "effect": "4.0.0-beta.59",
+          "fumadb": "latest",
+          "react": "^19.1.0",
+          "react-dom": "^19.1.0"
+        },
+        "devDependencies": {
+          "@executor-js/vite-plugin": "latest",
+          "@tailwindcss/vite": "^4.2.2",
+          "@tanstack/router-plugin": "^1.167.12",
+          "@types/node": "^24.3.1",
+          "@types/react": "^19.1.0",
+          "@types/react-dom": "^19.1.0",
+          "@vitejs/plugin-react": "^6.0.1",
+          "bun-types": "^1.2.22",
+          "typescript": "^5.9.3",
+          "vite": "^8.0.0"
+        },
+        "envVars": {
+          "EXECUTOR_WEB_BASE_URL": "http://localhost:4788",
+          "BETTER_AUTH_SECRET": "",
+          "EXECUTOR_BOOTSTRAP_ADMIN_EMAIL": "",
+          "EXECUTOR_BOOTSTRAP_ADMIN_PASSWORD": "",
+          "EXECUTOR_BOOTSTRAP_ADMIN_NAME": "Admin",
+          "EXECUTOR_ORG_NAME": "Default",
+          "EXECUTOR_ORG_SLUG": "default",
+          "EXECUTOR_ALLOW_LOCAL_NETWORK": "false"
+        }
+      },
+      "overlays": [],
+      "engines": {
+        "default": "quickjs",
+        "choices": {
+          "quickjs": {
+            "dir": "selfhost/engine-quickjs",
+            "dependencies": {
+              "@executor-js/runtime-quickjs": "latest"
+            }
+          }
+        }
+      },
+      "auth": {
+        "default": "better-auth",
+        "choices": {
+          "better-auth": {
+            "dir": "selfhost/auth-better-auth",
+            "dependencies": {
+              "@executor-js/api": "latest",
+              "better-auth": "^1.6.11",
+              "@better-auth/api-key": "^1.6.11",
+              "@libsql/client": "^0.17.3",
+              "@libsql/kysely-libsql": "^0.4.1",
+              "effect": "4.0.0-beta.59"
+            }
+          }
+        }
+      },
+      "plugins": [
+        "openapi",
+        "mcp",
+        "graphql"
+      ],
+      "pluginRegistry": {
+        "openapi": {
+          "dependencies": {
+            "@executor-js/plugin-openapi": "latest"
+          }
+        },
+        "mcp": {
+          "dependencies": {
+            "@executor-js/plugin-mcp": "latest"
+          }
+        },
+        "graphql": {
+          "dependencies": {
+            "@executor-js/plugin-graphql": "latest"
+          }
+        }
+      },
+      "packageJsonFrom": "base"
+    },
+    "local": {
+      "base": {
+        "dir": "local/base",
+        "dependencies": {
+          "@executor-js/api": "latest",
+          "@executor-js/app": "latest",
+          "@executor-js/config": "latest",
+          "@executor-js/execution": "latest",
+          "@executor-js/host-mcp": "latest",
+          "@executor-js/react": "latest",
+          "@executor-js/sdk": "latest",
+          "@executor-js/plugin-file-secrets": "latest",
+          "@executor-js/plugin-graphql": "latest",
+          "@executor-js/plugin-keychain": "latest",
+          "@executor-js/plugin-mcp": "latest",
+          "@executor-js/plugin-openapi": "latest",
+          "@libsql/client": "^0.17.3",
+          "@modelcontextprotocol/sdk": "^1.29.0",
+          "fumadb": "latest",
+          "effect": "4.0.0-beta.59",
+          "drizzle-orm": "^0.45.0",
+          "@effect/atom-react": "4.0.0-beta.59",
+          "@tanstack/react-router": "^1.168.10",
+          "react": "^19.1.0",
+          "react-dom": "^19.1.0"
+        },
+        "devDependencies": {
+          "@executor-js/vite-plugin": "latest",
+          "@tailwindcss/vite": "^4.2.2",
+          "@tanstack/router-plugin": "^1.167.12",
+          "@types/node": "^24.3.1",
+          "@types/react": "^19.1.0",
+          "@types/react-dom": "^19.1.0",
+          "@vitejs/plugin-react": "^6.0.1",
+          "bun-types": "^1.2.22",
+          "typescript": "^5.9.3",
+          "vite": "^8.0.0"
+        },
+        "envVars": {
+          "PORT": "4788",
+          "EXECUTOR_DATA_DIR": "",
+          "EXECUTOR_HOST": "127.0.0.1",
+          "EXECUTOR_AUTH_TOKEN": "",
+          "EXECUTOR_AUTH_PASSWORD": "",
+          "EXECUTOR_WEB_BASE_URL": ""
+        }
+      },
+      "overlays": [],
+      "engines": {
+        "default": "quickjs",
+        "choices": {
+          "quickjs": {
+            "dir": "local/engine-quickjs",
+            "dependencies": {
+              "@executor-js/runtime-quickjs": "latest"
+            }
+          }
+        }
+      },
+      "auth": {
+        "default": "local",
+        "choices": {
+          "local": {
+            "dir": "local/auth",
+            "dependencies": {
+              "@executor-js/api": "latest",
+              "effect": "4.0.0-beta.59"
+            }
+          }
+        }
+      },
+      "plugins": [
+        "openapi",
+        "mcp",
+        "graphql"
+      ],
+      "pluginRegistry": {
+        "openapi": {
+          "dependencies": {
+            "@executor-js/plugin-openapi": "latest"
+          }
+        },
+        "mcp": {
+          "dependencies": {
+            "@executor-js/plugin-mcp": "latest"
+          }
+        },
+        "graphql": {
+          "dependencies": {
+            "@executor-js/plugin-graphql": "latest"
+          }
+        }
+      },
+      "packageJsonFrom": "base"
+    }
+  }
+}
