@@ -1,7 +1,7 @@
 import { Data, Duration, Effect, Exit, Option, Predicate, Schema, type Layer } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 
-import { OAUTH2_PROVIDER_KEY, OAuthProviderStateSchema, type Executor } from "@executor-js/sdk";
+import { OAUTH2_PROVIDER_KEY, OAuthProviderStateSchema, type Executor } from "@executor-js/sdk/core";
 import {
   OAUTH2_DEFAULT_TIMEOUT_MS,
   assertSupportedOAuthEndpointUrl,

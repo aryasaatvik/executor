@@ -1,6 +1,6 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { Effect } from "effect";
-import type { ToolPolicy } from "@executor-js/sdk";
+import type { ToolPolicy } from "@executor-js/sdk/core";
 
 import { ExecutorApi } from "../api";
 import { ExecutorService } from "../services";

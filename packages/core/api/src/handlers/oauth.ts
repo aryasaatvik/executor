@@ -19,7 +19,7 @@ import {
   type Executor,
   type OAuthStrategy,
   type SecretBackedValue,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/core";
 
 import { ExecutorApi } from "../api";
 import { capture } from "../observability";

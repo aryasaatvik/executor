@@ -34,7 +34,7 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { HttpRouter, HttpServer } from "effect/unstable/http";
 import { Layer } from "effect";
-import type { AnyPlugin } from "@executor-js/sdk";
+import type { AnyPlugin } from "@executor-js/sdk/core";
 
 import { observabilityMiddleware, type ErrorCapture } from "../observability";
 import { AccountHttpApi } from "../account/api";

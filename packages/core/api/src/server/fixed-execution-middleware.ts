@@ -30,8 +30,13 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { Context, Effect } from "effect";
 import type * as Cause from "effect/Cause";
 
-import type { AnyPlugin, Executor, PluginExtensions } from "@executor-js/sdk";
-import type { ExecutionEngine } from "@executor-js/execution";
+// Host-surface types come from `@executor-js/sdk/core` (not the bare `.` entry,
+// which is the promise/consumer surface). In-repo both resolve to the same
+// `src/index.ts`, but in a PUBLISHED consumer the bare entry maps to the promise
+// surface — so a host that hands `FixedExecutionProvider` a real `createExecutor`
+// result (the core Executor) would otherwise mismatch this field's type.
+import type { AnyPlugin, Executor, PluginExtensions } from "@executor-js/sdk/core";
+import type { ExecutionEngine } from "@executor-js/execution/core";
 
 import { ExecutionEngineService, ExecutorService } from "../services";
 import { providePluginExtensions, type PluginExtensionServices } from "../plugin-routes";

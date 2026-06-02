@@ -1,6 +1,6 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { Effect } from "effect";
-import { ToolId, ToolNotFoundError } from "@executor-js/sdk";
+import { ToolId, ToolNotFoundError } from "@executor-js/sdk/core";
 
 import { ExecutorApi } from "../api";
 import { ExecutorService } from "../services";

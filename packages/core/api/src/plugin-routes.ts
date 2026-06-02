@@ -21,7 +21,7 @@
 import { Effect, Layer } from "effect";
 import type { Context } from "effect";
 import type { HttpApi, HttpApiGroup } from "effect/unstable/httpapi";
-import type { AnyPlugin, PluginExtensions } from "@executor-js/sdk";
+import type { AnyPlugin, PluginExtensions } from "@executor-js/sdk/core";
 
 import { CoreExecutorApi } from "./api";
 

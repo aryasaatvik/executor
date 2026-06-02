@@ -58,7 +58,7 @@ export {
   type PluginsProviderShape,
   type RequestWebOriginShape,
 } from "./server/scoped-executor";
-export { collectTables } from "@executor-js/sdk";
+export { collectTables } from "@executor-js/sdk/core";
 export {
   IdentityProvider,
   AuthContext,

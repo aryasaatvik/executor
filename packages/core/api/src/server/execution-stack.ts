@@ -26,12 +26,12 @@
 import { Context, Effect, Layer } from "effect";
 import type * as Cause from "effect/Cause";
 
-import type { AnyPlugin, Executor, StorageFailure } from "@executor-js/sdk";
+import type { AnyPlugin, Executor, StorageFailure } from "@executor-js/sdk/core";
 import {
   createExecutionEngine,
   type ExecutionEngine,
   type ExecutionEngineConfig,
-} from "@executor-js/execution";
+} from "@executor-js/execution/core";
 
 import { DbProvider } from "./executor-fuma-db";
 import { HostConfig, PluginsProvider, makeScopedExecutor } from "./scoped-executor";

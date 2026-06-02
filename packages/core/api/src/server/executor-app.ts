@@ -42,7 +42,7 @@
 import { HttpRouter } from "effect/unstable/http";
 import { Effect, Layer } from "effect";
 
-import type { AnyPlugin } from "@executor-js/sdk";
+import type { AnyPlugin } from "@executor-js/sdk/core";
 import type { DbProvider } from "./executor-fuma-db";
 import type { HostConfig, PluginsProvider } from "./scoped-executor";
 import { requestScopedMiddleware } from "./request-scoped";

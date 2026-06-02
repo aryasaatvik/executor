@@ -34,7 +34,7 @@ import {
   type AnyPlugin,
   type Executor,
   type StorageFailure,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/core";
 import { makeHostedHttpClientLayer } from "@executor-js/sdk/host-internal";
 
 import { DbProvider } from "./executor-fuma-db";

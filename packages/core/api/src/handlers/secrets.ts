@@ -1,6 +1,6 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 import { Effect } from "effect";
-import { RemoveSecretInput, SetSecretInput, type SecretRef } from "@executor-js/sdk";
+import { RemoveSecretInput, SetSecretInput, type SecretRef } from "@executor-js/sdk/core";
 
 import { ExecutorApi } from "../api";
 import { ExecutorService } from "../services";

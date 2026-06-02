@@ -12,10 +12,10 @@
 
 import { Cause, Effect } from "effect";
 
-import { OAUTH_POPUP_MESSAGE_TYPE, type OAuthPopupResult } from "@executor-js/sdk";
+import { OAUTH_POPUP_MESSAGE_TYPE, type OAuthPopupResult } from "@executor-js/sdk/core";
 
-export { OAUTH_POPUP_MESSAGE_TYPE, isOAuthPopupResult } from "@executor-js/sdk";
-export type { OAuthPopupResult } from "@executor-js/sdk";
+export { OAUTH_POPUP_MESSAGE_TYPE, isOAuthPopupResult } from "@executor-js/sdk/core";
+export type { OAuthPopupResult } from "@executor-js/sdk/core";
 
 // ---------------------------------------------------------------------------
 // Completion listener — optional process-wide hook called every time an

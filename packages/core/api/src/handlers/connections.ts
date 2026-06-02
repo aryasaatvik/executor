@@ -6,7 +6,7 @@ import {
   RemoveConnectionInput,
   UpdateConnectionIdentityInput,
   type ConnectionRef,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/core";
 
 import { ExecutorApi } from "../api";
 import { ExecutorService } from "../services";

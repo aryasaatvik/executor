@@ -14,7 +14,7 @@ import {
   createExecutor,
   definePlugin,
   type Executor,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/core";
 import { makeTestConfig } from "@executor-js/sdk/testing";
 import { memorySecretsPlugin } from "@executor-js/sdk/testing";
 

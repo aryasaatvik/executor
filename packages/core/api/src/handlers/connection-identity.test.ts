@@ -7,7 +7,7 @@ import {
   OAUTH2_PROVIDER_KEY,
   TokenMaterial,
   createExecutor,
-} from "@executor-js/sdk";
+} from "@executor-js/sdk/core";
 import { ConnectionId, ScopeId, SecretId } from "@executor-js/sdk/shared";
 import { makeTestConfig, memorySecretsPlugin, serveTestHttpApp } from "@executor-js/sdk/testing";
 

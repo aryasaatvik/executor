@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import { Schema } from "effect";
 
 import { ExecutorApi } from "../api";
-import { formatExecuteResult, formatPausedExecution } from "@executor-js/execution";
+import { formatExecuteResult, formatPausedExecution } from "@executor-js/execution/core";
 import { ExecutionEngineService } from "../services";
 import { capture, captureEngineError } from "@executor-js/api";
 

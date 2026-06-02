@@ -37,7 +37,7 @@
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { Context, Effect, Layer } from "effect";
 
-import type { AnyPlugin } from "@executor-js/sdk";
+import type { AnyPlugin } from "@executor-js/sdk/core";
 
 import type { DbProvider } from "./executor-fuma-db";
 import { RequestWebOrigin, type HostConfig, type PluginsProvider } from "./scoped-executor";
