@@ -1,0 +1,60 @@
+{
+  "name": "create-executor",
+  "version": "0.0.0",
+  "description": "Scaffold a self-hosted Executor Cloudflare host from the Executor registry.",
+  "homepage": "https://github.com/RhysSullivan/executor/tree/main/packages/create-executor",
+  "bugs": {
+    "url": "https://github.com/RhysSullivan/executor/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RhysSullivan/executor.git",
+    "directory": "packages/create-executor"
+  },
+  "private": false,
+  "type": "module",
+  "bin": {
+    "create-executor": "./src/main.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "bin": {
+      "create-executor": "./dist/main.js"
+    },
+    "exports": {
+      ".": {
+        "import": {
+          "types": "./dist/main.d.ts",
+          "default": "./dist/main.js"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "bun run src/main.ts",
+    "lint": "oxlint -c ../../.oxlintrc.jsonc src --deny-warnings",
+    "typecheck": "tsgo --noEmit",
+    "test": "bun --bun vitest run",
+    "test:watch": "bun --bun vitest"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "catalog:",
+    "effect": "catalog:",
+    "giget": "^3.2.0"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

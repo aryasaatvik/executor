@@ -22,6 +22,7 @@
   },
   "workspaces": [
     "packages/*/*",
+    "packages/create-executor",
     "packages/react",
     "packages/app",
     "apps/*",
