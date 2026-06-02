@@ -11,10 +11,13 @@ admin account in the browser.
 
 ## Quick start
 
-From a clone of the repository:
+Scaffold your own thin host repo with `create-executor`, then bring it up. You
+own the generated repo — it depends on the published `@executor-js` packages and
+is yours to customize; there is no monorepo to fork.
 
 ```bash
-cd apps/host-selfhost
+npm create executor@latest -- --target selfhost --dir my-executor
+cd my-executor
 docker compose up -d --build
 ```
 
@@ -27,11 +30,13 @@ upgrades.
 
 ### Without compose
 
-The compose file just wraps the Dockerfile. To build and run it directly:
+The compose file just wraps the Dockerfile. From inside the scaffolded repo, to
+build and run it directly:
 
 ```bash
-# Build context is the repo root (the Bun workspace install needs every member).
-docker build -f apps/host-selfhost/Dockerfile -t executor-selfhost .
+# Build context is the scaffolded repo (the Dockerfile installs the published
+# @executor-js packages and builds the SPA from here).
+docker build -t executor-selfhost .
 
 docker run -d -p 4788:4788 -v executor-data:/data executor-selfhost
 ```
@@ -64,9 +69,9 @@ From the same Admin page you can change a member's role or remove them.
 
 ## Configuration
 
-Every setting is optional. Put overrides in `apps/host-selfhost/.env` (compose
-loads it automatically) or pass them as `-e` flags to `docker run`. See
-`.env.example` for the full list.
+Every setting is optional. Put overrides in a `.env` file at the root of your
+scaffolded repo (compose loads it automatically) or pass them as `-e` flags to
+`docker run`. See the generated `.env.example` for the full list.
 
 | Variable                                                               | Default                           | Purpose                                                                                                                                                                   |
 | ---------------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -107,11 +112,15 @@ keys as well as your data.
 
 ## Upgrading
 
+The scaffold depends on the published `@executor-js` packages, so upgrading is
+just pulling the newest images of those packages and rebuilding — no `git pull`
+of a monorepo:
+
 ```bash
-cd apps/host-selfhost
-git pull
 docker compose up -d --build
 ```
 
-The data volume is reused, so your database and accounts carry over. Schema
-migrations run idempotently at boot.
+The build re-installs the latest `@executor-js` packages and rebuilds the SPA.
+The data volume is reused, so your database and accounts carry over, and schema
+migrations run idempotently at boot. (To re-scaffold against the newest template
+itself, re-run `create-executor` into a fresh directory and copy your `.env` over.)
