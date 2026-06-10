@@ -19,26 +19,32 @@
     "routes:gen": "bun scripts/gen-routes.ts"
   },
   "dependencies": {
-    "@effect/atom-react": "catalog:",
     "@executor-js/react": "workspace:*",
     "@executor-js/sdk": "workspace:*",
     "@executor-js/vite-plugin": "workspace:*",
     "@sentry/browser": "^10.57.0",
     "@tanstack/react-router": "catalog:",
-    "effect": "catalog:",
-    "lucide-react": "^1.7.0",
-    "react": "catalog:",
-    "react-dom": "catalog:"
+    "lucide-react": "^1.7.0"
   },
   "devDependencies": {
+    "@effect/atom-react": "catalog:",
     "@tailwindcss/vite": "catalog:",
     "@tanstack/router-plugin": "^1.167.12",
     "@tanstack/virtual-file-routes": "^1.162.0",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "react-grab": "^0.1.31",
     "typescript": "catalog:",
     "vite": "catalog:"
+  },
+  "peerDependencies": {
+    "@effect/atom-react": "catalog:",
+    "effect": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
   }
 }

@@ -36,13 +36,16 @@
     "@executor-js/execution": "workspace:*",
     "@executor-js/sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "effect": "catalog:",
     "zod": "4.3.6"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "bun-types": "catalog:",
+    "effect": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }
