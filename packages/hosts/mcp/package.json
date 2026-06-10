@@ -52,7 +52,6 @@
     "@executor-js/sdk": "workspace:*",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "effect": "catalog:",
     "zod": "4.3.6"
   },
   "devDependencies": {
@@ -61,6 +60,10 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "catalog:",
     "bun-types": "catalog:",
+    "effect": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }
