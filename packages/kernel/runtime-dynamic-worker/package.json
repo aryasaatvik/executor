@@ -13,8 +13,7 @@
     "typecheck:slow": "bunx tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@executor-js/codemode-core": "workspace:*",
-    "effect": "catalog:"
+    "@executor-js/codemode-core": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.15.0",
@@ -28,8 +27,12 @@
     "@executor-js/sdk": "workspace:*",
     "@types/node": "catalog:",
     "drizzle-orm": "catalog:",
+    "effect": "catalog:",
     "postgres": "^3.4.9",
     "vitest": "catalog:",
     "wrangler": "^4.81.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }
