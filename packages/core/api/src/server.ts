@@ -69,6 +69,7 @@ export {
 // `createExecutor`'s mechanics) and is re-exported here for hosts/tooling.
 export {
   createExecutorFumaDb,
+  readOrgPluginStorageData,
   dbProviderLayer,
   DbProvider,
   type CreateExecutorFumaDbOptions,
