@@ -13,14 +13,17 @@
     "test:watch": "bunx --bun vitest"
   },
   "dependencies": {
-    "@executor-js/sdk": "workspace:*",
-    "effect": "catalog:"
+    "@executor-js/sdk": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "bun-types": "catalog:",
+    "effect": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "catalog:"
   }
 }

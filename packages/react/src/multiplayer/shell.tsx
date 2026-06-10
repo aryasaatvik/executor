@@ -383,6 +383,16 @@ function SidebarContent(
           />
         ))}
 
+        {pluginNavItems.map((item) => (
+          <NavItem
+            key={item.to}
+            to={item.to}
+            label={item.label}
+            active={props.pathname.startsWith(item.to)}
+            onNavigate={props.onNavigate}
+          />
+        ))}
+
         <div className="mt-5 mb-1 flex items-center justify-between px-2.5 text-xs font-medium uppercase tracking-widest text-muted-foreground">
           <span>Integrations</span>
           <Button

@@ -43,6 +43,11 @@ export {
   assertSupportedOAuthEndpointUrl,
 } from "./oauth-helpers";
 
+// Pre-runtime ORG plugin-storage read — host auth seams (e.g. the Cloudflare
+// service-token alias) consult plugin-written state before a scoped executor
+// exists. See the JSDoc on `readOrgPluginStorageData`.
+export { readOrgPluginStorageData } from "./executor";
+
 export {
   DEFAULT_SUBJECT_LAST_SEEN_THROTTLE_MS,
   resetSubjectTouchCache,
