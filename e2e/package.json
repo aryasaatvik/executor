@@ -14,7 +14,8 @@
     "viewer:build": "bun scripts/rebuild-viewer.ts",
     "serve": "bun scripts/rebuild-viewer.ts && bun scripts/serve.ts",
     "typecheck": "tsc --noEmit",
-    "test:desktop": "vitest run --project desktop"
+    "test:desktop": "vitest run --project desktop",
+    "motel": "MOTEL_OTEL_BASE_URL=http://127.0.0.1:4796 MOTEL_OTEL_DB_PATH=runs/.motel/telemetry.sqlite motel server"
   },
   "dependencies": {
     "@executor-js/api": "workspace:*",
@@ -35,6 +36,7 @@
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@executor-js/motel": "0.2.5-executor.1",
     "@types/node": "^25.9.2",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",

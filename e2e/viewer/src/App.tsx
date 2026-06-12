@@ -137,17 +137,33 @@ const Matrix = () => {
 // viewer (trace.playwright.dev fetches the zip from this server, client-side).
 // ---------------------------------------------------------------------------
 
+// The suite's motel (local OTLP store, booted by the global setup on a
+// fixed port). Every run exports distributed traces there; the run page
+// links its harvested trace ids straight into motel's per-trace waterfall.
+const MOTEL_VIEWER = "http://127.0.0.1:4796";
+
+interface RunTraceRef {
+  id: string;
+  at: number;
+  url: string;
+}
+
 const RunView = ({ target, slug }: { target: string; slug: string }) => {
   const base = `${target}/${slug}`;
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<"media" | "source">("media");
+  const [traces, setTraces] = useState<RunTraceRef[]>([]);
 
   useEffect(() => {
     fetch(`${base}/result.json`)
       .then((r) => r.json())
       .then(setResult)
       .catch((e) => setError(String(e)));
+    fetch(`${base}/traces.json`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setTraces)
+      .catch(() => setTraces([]));
   }, [base]);
 
   if (error) return <div className="page error-text">failed to load run: {error}</div>;
@@ -257,6 +273,47 @@ const RunView = ({ target, slug }: { target: string; slug: string }) => {
         <p className="dim">
           No visual artifacts — this surface's source of truth is the test code and its assertions.
         </p>
+      )}
+      {traces.length > 0 && (
+        <>
+          <h2 className="section">Distributed traces</h2>
+          <p className="hint">
+            Every API call the recording made, as a click→server→DB waterfall in the suite's motel
+            store (runs/.motel). Links need a motel serving that store — the suite's own while it
+            runs, or `bun run motel` afterwards.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>when</th>
+                <th>request</th>
+                <th>trace</th>
+              </tr>
+            </thead>
+            <tbody>
+              {traces.map((trace, index) => (
+                <tr key={`${trace.id}-${index}`}>
+                  <td className="dim">
+                    {result.startedAt
+                      ? `${((trace.at - result.startedAt) / 1000).toFixed(1)}s`
+                      : new Date(trace.at).toLocaleTimeString()}
+                  </td>
+                  <td className="dim">{trace.url.replace(/^https?:\/\/[^/]+/, "")}</td>
+                  <td>
+                    <a
+                      className="tool-link"
+                      href={`${MOTEL_VIEWER}/trace/${trace.id}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {trace.id.slice(0, 8)}…
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
       )}
     </div>
   );

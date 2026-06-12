@@ -35,6 +35,8 @@ export interface CloudBootOptions {
   /** Wipe the dev DB before boot (hermetic). Default true. */
   readonly fresh?: boolean;
   readonly logFile?: string;
+  /** Extra env for the app's dev stack (e.g. the suite's OTLP exporter). */
+  readonly extraEnv?: Record<string, string>;
 }
 
 export interface CloudBooted {
@@ -60,7 +62,10 @@ export const bootCloud = async (options: CloudBootOptions): Promise<CloudBooted>
     port: options.workosPort,
     ...(options.workosPublicUrl ? { baseUrl: options.workosPublicUrl } : {}),
   });
-  const autumn = await createEmulator({ service: "autumn", port: options.autumnPort });
+  const autumn = await createEmulator({
+    service: "autumn",
+    port: options.autumnPort,
+  });
 
   const workosUrl = options.workosPublicUrl ?? workos.url;
   const env = {
@@ -87,6 +92,7 @@ export const bootCloud = async (options: CloudBootOptions): Promise<CloudBooted>
     // Vite rejects unknown Host headers; allow the public hostname when a
     // proxy fronts the app.
     __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS: new URL(options.publicUrl).hostname,
+    ...options.extraEnv,
   };
 
   const procs = bootProcesses(

@@ -12,6 +12,7 @@ import { Effect } from "effect";
 import { chromium, type Page } from "playwright";
 
 import { markFocus, markRecordingStart } from "../timeline";
+import { appendTraces, type TraceEntry } from "../trace-harvest";
 import type { Identity, Target } from "../target";
 
 export interface BrowserSession {
@@ -60,17 +61,68 @@ export const makeBrowserSurface = (dir: string, target: Target): BrowserSurface 
           recordVideo: { dir: videoTmp, size: { width: 1280, height: 800 } },
           baseURL: target.baseUrl,
         });
-        await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+        await context.tracing.start({
+          screenshots: true,
+          snapshots: true,
+          sources: true,
+        });
         if (identity.cookies?.length) {
           await context.addCookies(
-            identity.cookies.map((cookie) => ({ ...cookie, url: target.baseUrl })),
+            identity.cookies.map((cookie) => ({
+              ...cookie,
+              url: target.baseUrl,
+            })),
           );
         }
         const page = await context.newPage();
         // The session video's clock starts with the page; anchor it for the
         // run's focus timeline (scripts/film.ts cuts on these).
         markRecordingStart(dir, "browser");
-        return { browser, context, page, videoTmp, shots: { count: 0 } };
+        // Harvest distributed-trace ids: every app API request carries a W3C
+        // traceparent (Effect's HttpClient), and each id names one
+        // click→server→DB trace in whatever OTLP store the run exported to
+        // (motel locally). Appended to traces.json (shared with the MCP
+        // surface's terminal-side entries) so the runs viewer can link a
+        // recording to its traces. Duration comes from the finished/failed
+        // event so the viewer can answer "why did that take so long"
+        // without leaving the run page.
+        const traceIds: Array<TraceEntry & { ms?: number; status?: number }> = [];
+        const inflight = new Map<unknown, (typeof traceIds)[number]>();
+        page.on("request", (request) => {
+          const traceparent = request.headers()["traceparent"];
+          const match = traceparent ? /^[0-9a-f]{2}-([0-9a-f]{32})-/.exec(traceparent) : null;
+          if (match?.[1]) {
+            const entry: (typeof traceIds)[number] = {
+              id: match[1],
+              at: Date.now(),
+              url: request.url(),
+              source: "browser",
+            };
+            traceIds.push(entry);
+            inflight.set(request, entry);
+          }
+        });
+        page.on("requestfinished", async (request) => {
+          const entry = inflight.get(request);
+          if (!entry) return;
+          inflight.delete(request);
+          entry.ms = Date.now() - entry.at;
+          entry.status = (await request.response().catch(() => null))?.status();
+        });
+        page.on("requestfailed", (request) => {
+          const entry = inflight.get(request);
+          if (!entry) return;
+          inflight.delete(request);
+          entry.ms = Date.now() - entry.at;
+        });
+        return {
+          browser,
+          context,
+          page,
+          videoTmp,
+          shots: { count: 0 },
+          traceIds,
+        };
       }),
       ({ page, context, shots }) =>
         Effect.promise(async () => {
@@ -95,8 +147,9 @@ export const makeBrowserSurface = (dir: string, target: Target): BrowserSurface 
             throw error;
           }
         }),
-      ({ browser, context, page, videoTmp }) =>
+      ({ browser, context, page, videoTmp, traceIds }) =>
         Effect.promise(async () => {
+          appendTraces(dir, traceIds);
           await context.tracing.stop({ path: join(dir, "trace.zip") }).catch(() => {});
           const video = page.video();
           await context.close(); // flushes the recording
