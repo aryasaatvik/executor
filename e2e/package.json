@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "cli": "bun scripts/cli.ts",
     "test": "vitest run --project cloud && vitest run --project selfhost",
     "test:cloud": "vitest run --project cloud",
     "test:selfhost": "vitest run --project selfhost",
@@ -17,7 +18,7 @@
   },
   "dependencies": {
     "@executor-js/api": "workspace:*",
-    "@executor-js/emulate": "^0.6.0",
+    "@executor-js/emulate": "^0.7.0",
     "@executor-js/mcporter": "^0.11.4",
     "@executor-js/plugin-graphql": "workspace:*",
     "@executor-js/plugin-mcp": "workspace:*",
