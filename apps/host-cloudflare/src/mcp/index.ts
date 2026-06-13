@@ -4,6 +4,7 @@ import { decodeResumeResponse } from "@executor-js/host-mcp/browser-approval";
 import type { McpApprovalOwner } from "@executor-js/cloudflare/mcp/agent-durable-object";
 import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import type { CloudflareConfig, CloudflareEnv } from "../config";
 import { makeAccessVerifier } from "../auth/cloudflare-access";
 
@@ -20,8 +21,9 @@ const jsonResponse = (value: unknown, status: number): Response =>
 export const makeCloudflareApprovalHandler = (
   config: CloudflareConfig,
   env: CloudflareEnv,
+  aliasLookup?: ServiceTokenAliasLookup,
 ): ((request: Request) => Promise<Response>) => {
-  const { verify } = makeAccessVerifier(config);
+  const { verify } = makeAccessVerifier(config, aliasLookup);
   const stubFor = (sessionId: string) => mcpSessionStub(env.MCP_SESSION, sessionId);
 
   return async (request) => {

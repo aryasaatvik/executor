@@ -18,6 +18,7 @@ import type { McpSessionProps } from "@executor-js/cloudflare/mcp/agent-durable-
 import { mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 
 import type { CloudflareConfig, CloudflareEnv } from "../config";
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import { cloudflareAccessMcpAuth } from "./auth";
 import { McpSessionDO } from "./session-durable-object";
 
@@ -62,12 +63,16 @@ const renderAuthError = (
   return jsonRpcResponse(503, -32001, outcome.message);
 };
 
-const authenticate = (request: Request, config: CloudflareConfig) =>
+const authenticate = (
+  request: Request,
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+) =>
   Effect.gen(function* () {
     const auth = yield* McpAuthProvider;
     const outcome = yield* auth.authenticate(request);
     return { auth, outcome };
-  }).pipe(Effect.provide(cloudflareAccessMcpAuth(config)));
+  }).pipe(Effect.provide(cloudflareAccessMcpAuth(config, aliasLookup)));
 
 const propsForPrincipal = (
   request: Request,
@@ -93,7 +98,10 @@ const propsForPrincipal = (
     };
   });
 
-export const makeCloudflareMcpAgentHandler = (config: CloudflareConfig) => {
+export const makeCloudflareMcpAgentHandler = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+) => {
   const serve = McpSessionDO.serve("/mcp", {
     binding: "MCP_SESSION",
     transport: "streamable-http",
@@ -103,7 +111,7 @@ export const makeCloudflareMcpAgentHandler = (config: CloudflareConfig) => {
     if (request.method === "OPTIONS") return corsPreflightResponse();
     const sessionId = request.headers.get("mcp-session-id");
 
-    const { auth, outcome } = await Effect.runPromise(authenticate(request, config));
+    const { auth, outcome } = await Effect.runPromise(authenticate(request, config, aliasLookup));
     if (!Predicate.isTagged(outcome, "Authenticated")) {
       if (Predicate.isTagged(outcome, "Forbidden") && sessionId) {
         await Effect.runPromise(
