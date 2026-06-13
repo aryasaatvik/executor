@@ -740,6 +740,49 @@ const makeCoreDb = (fuma: ReturnType<typeof makeFumaClient>) => ({
 
 type CoreDb = ReturnType<typeof makeCoreDb>;
 
+/**
+ * Read a single ORG-owned `plugin_storage` value OUTSIDE the executor runtime.
+ *
+ * For host code that must consult plugin-written state BEFORE a scoped executor
+ * exists — e.g. the Cloudflare host's auth seam resolving a service-token alias
+ * at JWT-verify time. It reuses the EXACT query path the runtime uses
+ * (`withQueryContext` → `makeFumaClient` → `makeCoreDb` → `findFirst`) so the
+ * column + owner semantics match precisely what a plugin's `pluginStorage.put`
+ * wrote under `owner: "org"`. Returns the row's decoded `data` (a `jsonColumn`),
+ * or `null` when there is no such row.
+ *
+ * `db` is the executor db handle's `db` (the FumaDB ORM surface,
+ * `ExecutorDbHandle["db"]`). Scoped as a pure-org reader (`subject: null`).
+ */
+export const readOrgPluginStorageData = (
+  db: Parameters<typeof withQueryContext>[0],
+  params: {
+    readonly tenant: string;
+    readonly pluginId: string;
+    readonly collection: string;
+    readonly key: string;
+  },
+): Effect.Effect<unknown, StorageFailure> => {
+  const ownerContext: ExecutorOwnerPolicyContext = {
+    tenant: Tenant.make(params.tenant),
+    subject: null,
+  };
+  const core = makeCoreDb(makeFumaClient(withQueryContext(db, ownerContext)));
+  return core
+    .findFirst("plugin_storage", {
+      where: (b: AnyCb) =>
+        b.and(
+          b("tenant", "=", params.tenant),
+          b("owner", "=", "org"),
+          b("subject", "=", ORG_SUBJECT),
+          b("plugin_id", "=", params.pluginId),
+          b("collection", "=", params.collection),
+          b("key", "=", params.key),
+        ),
+    })
+    .pipe(Effect.map((row) => row?.data ?? null));
+};
+
 // ---------------------------------------------------------------------------
 // Plugin storage facade — owner-scoped (was scope-keyed). Reads fall through
 // [user, org]; writes/deletes name an explicit owner.
