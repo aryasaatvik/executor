@@ -20,6 +20,7 @@ import type { ExecutorDbHandle } from "@executor-js/sdk/host-internal";
 // whole DB surface from one place (`@executor-js/api/server`).
 export {
   createExecutorFumaDb,
+  readOrgPluginStorageData,
   type CreateExecutorFumaDbOptions,
   type ExecutorDbHandle,
   type ExecutorDbProvider,
