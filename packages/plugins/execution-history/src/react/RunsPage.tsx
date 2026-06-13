@@ -59,13 +59,13 @@ type StatusFilter = (typeof STATUS_OPTIONS)[number];
 const PAGE_SIZE = 50;
 
 // ---------------------------------------------------------------------------
-// Formatting + lint-clean JSON handling. The stored `*Json` columns are
-// already-serialized strings; we pretty-print them through Schema rather than
-// reaching for the JSON global (banned in domain code by oxlint).
+// Formatting. The stored `*Json` columns are already-serialized (compact)
+// strings; decode them through Schema (only `JSON.parse` is lint-banned), then
+// re-indent for display. `JSON.stringify` is allowed and won't throw on a value
+// that just decoded from JSON.
 // ---------------------------------------------------------------------------
 
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString);
-const encodeJsonOption = Schema.encodeUnknownOption(Schema.UnknownFromJsonString);
 const decodeLogLines = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
@@ -74,7 +74,7 @@ const prettyJson = (raw: string | null): string | null => {
   if (!raw) return null;
   return Option.match(decodeJson(raw), {
     onNone: () => raw,
-    onSome: (value) => Option.getOrElse(encodeJsonOption(value), () => raw),
+    onSome: (value) => JSON.stringify(value, null, 2),
   });
 };
 
@@ -486,8 +486,10 @@ export function RunsPage() {
               <RunsTable runs={value.runs} onSelect={setSelected} />
               <div className="flex items-center justify-between gap-3">
                 <p className="font-mono text-xs text-muted-foreground">
-                  {value.total.toLocaleString()} total / showing {offset + 1}–
-                  {offset + value.runs.length}
+                  {value.total.toLocaleString()} total
+                  {value.runs.length > 0
+                    ? ` / showing ${offset + 1}–${offset + value.runs.length}`
+                    : ""}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button

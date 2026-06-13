@@ -354,9 +354,11 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
           }),
         { discard: true },
       );
-
-      buffers.delete(event.executionId);
-    });
+    }).pipe(
+      // Always release the buffer, even if a write fails or is interrupted —
+      // otherwise a StorageFailure during the flush leaks the RunBuffer forever.
+      Effect.ensuring(Effect.sync(() => buffers.delete(event.executionId))),
+    );
   };
 
   const handleEvent = (event: ExecutionEvent): Effect.Effect<void, StorageFailure> => {
@@ -365,7 +367,10 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     if (Predicate.isTagged(event, "ToolCallFinished")) return onToolCallFinished(event);
     if (Predicate.isTagged(event, "InteractionStarted")) return onInteractionStarted(event);
     if (Predicate.isTagged(event, "InteractionResolved")) return onInteractionResolved(event);
-    return onExecutionFinished(event);
+    // Explicit guard, not a fallthrough: a future ExecutionEvent variant must
+    // not be silently recorded as a finished run.
+    if (Predicate.isTagged(event, "ExecutionFinished")) return onExecutionFinished(event);
+    return Effect.void;
   };
 
   const list = (

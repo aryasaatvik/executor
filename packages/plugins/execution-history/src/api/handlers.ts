@@ -1,9 +1,9 @@
-import { Context, Effect } from "effect";
+import { Context, Effect, Schema } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { addGroup, capture } from "@executor-js/api";
 
-import type { RunStatus } from "../sdk/collections";
+import { RunStatus } from "../sdk/collections";
 import type { ExecutionHistoryListOptions, ExecutionHistoryStore } from "../sdk/store";
 import { ExecutionHistoryGroup } from "./group";
 
@@ -73,7 +73,9 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
         capture(
           Effect.gen(function* () {
             const history = yield* ExecutionHistoryExtensionService;
-            const statusFilter = splitCsv(query.status) as RunStatus[];
+            // Keep only valid RunStatus literals — an unknown `?status=bogus`
+            // must not reach the storage `where` clause.
+            const statusFilter = splitCsv(query.status).filter(Schema.is(RunStatus));
             const triggerFilter = splitCsv(query.trigger);
             const timeRange =
               query.from !== undefined || query.to !== undefined
