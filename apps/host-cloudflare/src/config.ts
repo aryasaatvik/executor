@@ -1,4 +1,6 @@
 import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
+import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 
 import { isValidOrgSlug } from "@executor-js/api";
 import { missingPublicOriginWarning, resolvePublicOrigin } from "@executor-js/sdk/public-origin";
@@ -25,6 +27,10 @@ export interface CloudflareEnv {
    *  DO fetches the built MCP-Apps shell document through it — a deployed
    *  Worker has no filesystem to read the shell from. */
   readonly ASSETS: { readonly fetch: (request: Request) => Promise<Response> };
+  /** Workers Analytics Engine binding — opt-in sink for execution metrics. When
+   *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
+   *  finished execution/tool call writes a data point; absent, metrics are off. */
+  readonly ANALYTICS?: AnalyticsEngineDataset;
   /** MCP session Durable Object namespace — one addressable isolate per MCP
    *  session (the DO id IS the session id), so a session survives across the
    *  Worker's stateless isolates. */
@@ -78,7 +84,7 @@ export interface CloudflareConfig {
 
 type CloudflareConfigEnv = Omit<
   CloudflareEnv,
-  "DB" | "BLOBS" | "ASSETS" | "MCP_SESSION" | "MCP_EXECUTION_OWNER"
+  "DB" | "BLOBS" | "ASSETS" | "ANALYTICS" | "MCP_SESSION" | "MCP_EXECUTION_OWNER"
 >;
 
 type CloudflareAccessEnv = Pick<
