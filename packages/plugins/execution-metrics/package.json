@@ -1,0 +1,38 @@
+{
+  "name": "@executor-js/plugin-execution-metrics",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/sdk/index.ts",
+    "./api": "./src/api/index.ts",
+    "./cloudflare": "./src/cloudflare/index.ts"
+  },
+  "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@executor-js/sdk": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "@effect/vitest": "catalog:",
+    "@executor-js/api": "workspace:*",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:",
+    "tsup": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@executor-js/api": "workspace:*"
+  },
+  "peerDependenciesMeta": {
+    "@executor-js/api": {
+      "optional": true
+    }
+  }
+}
