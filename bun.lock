@@ -186,6 +186,7 @@
         "@executor-js/plugin-mcp": "workspace:*",
         "@executor-js/plugin-openapi": "workspace:*",
         "@executor-js/plugin-provider-service-split": "workspace:*",
+        "@executor-js/plugin-service-tokens": "workspace:*",
         "@executor-js/plugin-toolkits": "workspace:*",
         "@executor-js/react": "workspace:*",
         "@executor-js/runtime-dynamic-worker": "workspace:*",
@@ -1202,6 +1203,39 @@
         "vitest": "catalog:",
       },
     },
+    "packages/plugins/service-tokens": {
+      "name": "@executor-js/plugin-service-tokens",
+      "version": "1.5.3",
+      "dependencies": {
+        "@effect/atom-react": "catalog:",
+        "@executor-js/sdk": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "bun-types": "catalog:",
+        "effect": "catalog:",
+        "react": "catalog:",
+        "tsup": "catalog:",
+        "typescript": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@effect/atom-react": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "effect": "catalog:",
+        "react": "catalog:",
+      },
+      "optionalPeers": [
+        "@effect/atom-react",
+        "@executor-js/react",
+        "react",
+      ],
+    },
     "packages/plugins/toolkits": {
       "name": "@executor-js/plugin-toolkits",
       "version": "1.5.34",
@@ -1912,6 +1946,8 @@
     "@executor-js/plugin-openapi": ["@executor-js/plugin-openapi@workspace:packages/plugins/openapi"],
 
     "@executor-js/plugin-provider-service-split": ["@executor-js/plugin-provider-service-split@workspace:packages/plugins/provider-service-split"],
+
+    "@executor-js/plugin-service-tokens": ["@executor-js/plugin-service-tokens@workspace:packages/plugins/service-tokens"],
 
     "@executor-js/plugin-toolkits": ["@executor-js/plugin-toolkits@workspace:packages/plugins/toolkits"],
 
