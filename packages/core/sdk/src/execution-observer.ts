@@ -134,7 +134,10 @@ export const composeExecutionObservers = <TPlugins extends readonly AnyPlugin[]>
       Effect.forEach(
         observers,
         (observer) => observer.handle(event).pipe(Effect.catchCause(() => Effect.void)),
-        { discard: true },
+        // Fan out in parallel — a slow sink (e.g. a DB-backed history observer)
+        // must not serialize behind another (e.g. a metrics push). Per-observer
+        // error isolation is preserved by the catchCause above.
+        { discard: true, concurrency: "unbounded" },
       ),
   };
 };

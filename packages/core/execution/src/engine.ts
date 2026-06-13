@@ -632,19 +632,36 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         );
         yield* Queue.offer(pauseQueue, paused);
 
-        // Suspend until resume() completes responseDeferred.
-        const response = yield* Deferred.await(responseDeferred);
-        yield* emit(
-          new InteractionResolved({
-            executionId,
-            interactionId,
-            owner,
-            status: interactionStatusFromAction(response.action),
-            response,
-            completedAt: new Date(),
-          }),
+        // Suspend until resume() completes responseDeferred. Emit
+        // InteractionResolved on the failure/interrupt path too (e.g. the daemon
+        // fiber is killed while blocked here) so InteractionStarted always has a
+        // pair — mirroring observeInlineElicitation on the inline path.
+        return yield* Deferred.await(responseDeferred).pipe(
+          Effect.tap((response) =>
+            emit(
+              new InteractionResolved({
+                executionId,
+                interactionId,
+                owner,
+                status: interactionStatusFromAction(response.action),
+                response,
+                completedAt: new Date(),
+              }),
+            ),
+          ),
+          Effect.tapCause((cause) =>
+            emit(
+              new InteractionResolved({
+                executionId,
+                interactionId,
+                owner,
+                status: "failed",
+                error: Cause.pretty(cause),
+                completedAt: new Date(),
+              }),
+            ),
+          ),
         );
-        return response;
       });
 
     const invoker = observeToolCalls(
