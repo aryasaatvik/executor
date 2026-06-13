@@ -1,9 +1,30 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { IdentityProvider, Unauthorized, type Principal } from "@executor-js/api/server";
 
 import type { CloudflareConfig } from "../config";
+import type { ServiceTokenAliasLookup } from "./service-token-alias";
+
+const AccessClaims = Schema.Struct({
+  sub: Schema.optional(Schema.String),
+  email: Schema.optional(Schema.String),
+  common_name: Schema.optional(Schema.String),
+});
+type AccessIdentity = { readonly sub: string; readonly email: string; readonly commonName: string };
+const decodeAccessClaims = Schema.decodeUnknownOption(AccessClaims);
+const accessIdentity = (claims: Record<string, unknown>): AccessIdentity =>
+  Option.match(decodeAccessClaims(claims), {
+    onNone: () => ({ sub: "", email: "", commonName: "" }),
+    onSome: (value) => ({
+      sub: value.sub ?? "",
+      email: value.email ?? "",
+      commonName: value.common_name ?? "",
+    }),
+  });
+const isServiceToken = (identity: AccessIdentity): boolean =>
+  identity.sub === "" && identity.commonName !== "";
+const serviceTokenEmail = (commonName: string): string => `${commonName}@service-token.internal`;
 
 // ---------------------------------------------------------------------------
 // Cloudflare Access IdentityProvider — the CF-native swap for self-host's
@@ -28,23 +49,43 @@ import type { CloudflareConfig } from "../config";
 export const principalFromAccessClaims = (
   claims: Record<string, unknown>,
   config: CloudflareConfig,
+  aliasedSubject?: string | null,
 ): Principal => {
-  const email = typeof claims.email === "string" ? claims.email : "";
-  const sub = typeof claims.sub === "string" && claims.sub.length > 0 ? claims.sub : "";
-  const commonName = typeof claims.common_name === "string" ? claims.common_name : "";
+  const identity = accessIdentity(claims);
   const nameClaim = claims[config.accessNameClaim];
   const groupsClaim = claims[config.accessGroupsClaim];
   const groups = Array.isArray(groupsClaim) ? groupsClaim.map(String) : [];
-  const isAdmin = email.length > 0 && config.adminEmails.includes(email.toLowerCase());
+  const isAdmin =
+    identity.email.length > 0 && config.adminEmails.includes(identity.email.toLowerCase());
+  const serviceToken = isServiceToken(identity);
+
+  if (serviceToken && aliasedSubject) {
+    return {
+      kind: "member",
+      accountId: aliasedSubject,
+      organizationId: config.organizationId,
+      organizationName: config.organizationName,
+      organizationSlug: config.organizationSlug,
+      email: serviceTokenEmail(identity.commonName),
+      name: identity.commonName,
+      avatarUrl: null,
+      roles: ["admin", ...groups],
+      actor: {
+        kind: "service-token",
+        id: identity.commonName,
+        label: identity.commonName,
+      },
+    };
+  }
 
   return {
     kind: "member",
-    accountId: sub || email || commonName,
+    accountId: identity.sub || identity.email || identity.commonName,
     organizationId: config.organizationId,
     organizationName: config.organizationName,
     organizationSlug: config.organizationSlug,
-    email,
-    name: typeof nameClaim === "string" ? nameClaim : commonName || null,
+    email: serviceToken ? serviceTokenEmail(identity.commonName) : identity.email,
+    name: typeof nameClaim === "string" ? nameClaim : identity.commonName || null,
     avatarUrl: null,
     roles: isAdmin ? ["admin", ...groups] : groups.length > 0 ? groups : ["member"],
   };
@@ -58,7 +99,10 @@ export const principalFromAccessClaims = (
  *
  * `jose` caches + rotates the team JWKS, so build the verifier once per config.
  */
-export const makeAccessVerifier = (config: CloudflareConfig) => {
+export const makeAccessVerifier = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+) => {
   const issuer = `https://${config.accessTeamDomain}`;
   // Cached, lazily-fetched team signing keys; jose handles rotation + caching.
   const jwks = config.enableDevAuth
@@ -93,7 +137,13 @@ export const makeAccessVerifier = (config: CloudflareConfig) => {
       }).pipe(Effect.orElseSucceed(() => null));
       if (!verified) return null;
 
-      return principalFromAccessClaims(verified.payload as Record<string, unknown>, config);
+      const claims = verified.payload as Record<string, unknown>;
+      const identity = accessIdentity(claims);
+      const aliasedSubject =
+        isServiceToken(identity) && aliasLookup
+          ? yield* aliasLookup(identity.commonName)
+          : null;
+      return principalFromAccessClaims(claims, config, aliasedSubject);
     });
 
   return { verify };
@@ -101,8 +151,9 @@ export const makeAccessVerifier = (config: CloudflareConfig) => {
 
 export const cloudflareAccessIdentityLayer = (
   config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
 ): Layer.Layer<IdentityProvider> => {
-  const { verify } = makeAccessVerifier(config);
+  const { verify } = makeAccessVerifier(config, aliasLookup);
   return Layer.succeed(IdentityProvider)(
     IdentityProvider.of({
       authenticate: (request) =>

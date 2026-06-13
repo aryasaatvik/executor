@@ -7,6 +7,7 @@ import { loadConfig, type CloudflareEnv } from "./config";
 import { makeCloudflarePlugins } from "./plugins";
 import { createD1ExecutorDb } from "./db/d1";
 import { cloudflareAccessIdentityLayer } from "./auth/cloudflare-access";
+import { makeServiceTokenAliasLookup } from "./auth/service-token-alias";
 import {
   CloudflareCodeExecutorProvider,
   makeCloudflareHostConfig,
@@ -45,11 +46,13 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   // Open and idempotently bring up the D1 schema once. This is the long-lived
   // handle the per-request scoped executor reads through the DbProvider seam.
   const dbHandle = await createD1ExecutorDb(env.DB, env.BLOBS);
-  const identityLayer = cloudflareAccessIdentityLayer(config);
+  const aliasLookup = makeServiceTokenAliasLookup(dbHandle, config.organizationId);
+  const identityLayer = cloudflareAccessIdentityLayer(config, aliasLookup);
   const mcpAgentHandler = makeCloudflareMcpAgentHandler(config, {
     makeModernServerBuilder: makeCloudflareModernMcpServerBuilder,
+    aliasLookup,
   });
-  const approvalHandler = makeCloudflareApprovalHandler(config, env);
+  const approvalHandler = makeCloudflareApprovalHandler(config, env, aliasLookup);
 
   const { appLayer, toWebHandler } = ExecutorApp.make({
     plugins,
@@ -65,7 +68,7 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
       // The account API (`/api/account/*`) backs the shared multiplayer shell's
       // auth context; `me` reflects the Access principal. Members/keys are
       // Access-managed, so the rest of the surface is stubbed.
-      account: cloudflareAccountMiddleware(config),
+      account: cloudflareAccountMiddleware(config, aliasLookup),
     },
     extensions: {
       routes: [

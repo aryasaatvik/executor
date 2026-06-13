@@ -29,6 +29,7 @@ import { mcpExecutionOwnerDirectoryFromNamespace } from "@executor-js/cloudflare
 import { createMcpSessionStub, mcpSessionStub } from "@executor-js/cloudflare/mcp/session-stub";
 
 import type { CloudflareConfig, CloudflareEnv } from "../config";
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import { cloudflareAccessMcpAuth } from "./auth";
 
 const DEAD_SESSION_CACHE_TTL_MS = 5 * 60 * 1_000;
@@ -161,6 +162,7 @@ interface CloudflareMcpAgentHandlerOptions {
     session: McpSessionProps["session"],
   ) => McpModernServerBuilder["Service"];
   readonly authProvider?: Layer.Layer<McpAuthProvider>;
+  readonly aliasLookup?: ServiceTokenAliasLookup;
 }
 
 /** Build the standalone Cloudflare worker's authenticated MCP request handler. */
@@ -168,7 +170,8 @@ export const makeCloudflareMcpAgentHandler = (
   config: CloudflareConfig,
   options: CloudflareMcpAgentHandlerOptions,
 ) => {
-  const authProvider = options.authProvider ?? cloudflareAccessMcpAuth(config);
+  const authProvider =
+    options.authProvider ?? cloudflareAccessMcpAuth(config, options.aliasLookup);
   const modern = makeMcpModernRequestRouter();
   return async (request: Request, env: CloudflareEnv, ctx: ExecutionContext): Promise<Response> => {
     if (request.method === "OPTIONS") {
