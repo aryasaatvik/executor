@@ -20,7 +20,7 @@ import {
   integrationPresetIconUrl,
 } from "../components/integration-favicon";
 import { CommandPalette } from "../components/command-palette";
-import { useIntegrationPlugins } from "@executor-js/sdk/client";
+import { useClientPlugins, useIntegrationPlugins } from "@executor-js/sdk/client";
 import { useAuth } from "./auth-context";
 
 // ---------------------------------------------------------------------------
@@ -288,6 +288,23 @@ function SidebarContent(
   props: ShellProps & { pathname: string; onNavigate?: () => void; showBrand?: boolean },
 ) {
   const navItems = props.navItems ?? defaultShellNavItems;
+  // Plugin-contributed pages that declare `nav` render as top-level tabs
+  // alongside the host's own links. They mount at /plugins/<id>/<path> via the
+  // shared plugins route, so adding a plugin to `executor.config.ts` is enough
+  // for its tab to appear — no per-host nav wiring.
+  const clientPlugins = useClientPlugins();
+  const pluginNavItems = clientPlugins.flatMap((plugin) =>
+    (plugin.pages ?? []).flatMap((page) =>
+      page.nav
+        ? [
+            {
+              to: `/plugins/${plugin.id}${page.path === "/" ? "" : page.path}`,
+              label: page.nav.label,
+            },
+          ]
+        : [],
+    ),
+  );
   return (
     <>
       {props.showBrand !== false && (
@@ -303,6 +320,16 @@ function SidebarContent(
             to={item.to}
             label={item.label}
             active={item.to === "/" ? props.pathname === "/" : props.pathname.startsWith(item.to)}
+            onNavigate={props.onNavigate}
+          />
+        ))}
+
+        {pluginNavItems.map((item) => (
+          <NavItem
+            key={item.to}
+            to={item.to}
+            label={item.label}
+            active={props.pathname.startsWith(item.to)}
             onNavigate={props.onNavigate}
           />
         ))}
