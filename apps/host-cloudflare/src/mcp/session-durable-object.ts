@@ -13,6 +13,7 @@ import { artifactUrlFor } from "@executor-js/host-mcp/create-artifact";
 import { makeAssetsShellHtmlLoader } from "@executor-js/mcp-apps-shell/worker";
 import { smokeRenderArtifact } from "@executor-js/mcp-apps-shell/smoke-render";
 import type { ExecutorDbHandle } from "@executor-js/api/server";
+import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 import {
   McpAgentSessionDOBase,
   type BuiltMcpServer,
@@ -68,6 +69,7 @@ const makeCloudflareExecutionRuntime = (
   sessionMeta: SessionMeta,
   dbHandle: CfSessionDbHandle,
   config: CloudflareConfig,
+  analytics?: AnalyticsEngineDataset,
 ) =>
   Effect.gen(function* () {
     yield* Effect.promise(() => preloadQuickJs());
@@ -76,7 +78,7 @@ const makeCloudflareExecutionRuntime = (
       sessionMeta.organizationId,
       sessionMeta.organizationName,
       { mcpResource: sessionMeta.resource },
-    ).pipe(Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle)));
+    ).pipe(Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle, analytics)));
     const description = yield* buildExecuteDescription(executor);
     return { engine, executor, description };
   });
@@ -161,7 +163,7 @@ export const makeCloudflareModernMcpServerBuilder = (
           artifactsEnabled: session.artifactsEnabled,
           webOrigin: session.webOrigin,
         };
-        return makeCloudflareExecutionRuntime(sessionMeta, dbHandle, config).pipe(
+        return makeCloudflareExecutionRuntime(sessionMeta, dbHandle, config, env.ANALYTICS).pipe(
           Effect.flatMap((runtime) =>
             makeCloudflareModernRuntime(
               sessionMeta,
@@ -247,7 +249,12 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
     const config = this.cfConfig;
     const self = this;
     return Effect.gen(function* () {
-      const runtime = yield* makeCloudflareExecutionRuntime(sessionMeta, dbHandle, config);
+      const runtime = yield* makeCloudflareExecutionRuntime(
+        sessionMeta,
+        dbHandle,
+        config,
+        self.cfEnv.ANALYTICS,
+      );
       const { engine, executor, description } = runtime;
       const modernRuntime = makeCloudflareModernRuntime(
         sessionMeta,
@@ -336,7 +343,12 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
     dbHandle: CfSessionDbHandle,
   ): Effect.Effect<BuiltModernMcpRuntime> {
     const self = this;
-    return makeCloudflareExecutionRuntime(sessionMeta, dbHandle, this.cfConfig).pipe(
+    return makeCloudflareExecutionRuntime(
+      sessionMeta,
+      dbHandle,
+      this.cfConfig,
+      this.cfEnv.ANALYTICS,
+    ).pipe(
       Effect.map((runtime) =>
         makeCloudflareModernRuntime(sessionMeta, runtime, self.loadAppShellHtml, self.cfConfig, {
           pausedExecutionHooks: self.modernPausedExecutionHooks,
