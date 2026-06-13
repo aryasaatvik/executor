@@ -41,9 +41,32 @@ describe("principalFromAccessClaims", () => {
     const p = principalFromAccessClaims({ common_name: "df8a20db.access", type: "app" }, config);
     expect(p.accountId).toBe("df8a20db.access"); // not empty — stable per token
     expect(p.name).toBe("df8a20db.access");
-    expect(p.email).toBe("");
+    expect(p.email).toBe("df8a20db.access@service-token.internal"); // synthetic, non-routable
     expect(p.roles).toEqual(["member"]); // a token is a member, not an admin
     expect(p.organizationId).toBe("default");
+  });
+
+  it("aliases a SERVICE TOKEN to its mapped human subject, as admin", () => {
+    // When the verifier resolves an alias (common_name → subject), the token
+    // ACTS AS that human: same subject partition, admin role, synthetic email.
+    const p = principalFromAccessClaims(
+      { common_name: "df8a20db.access", type: "app" },
+      config,
+      "527888ce-human-sub",
+    );
+    expect(p.accountId).toBe("527888ce-human-sub");
+    expect(p.roles).toContain("admin");
+    expect(p.email).toBe("df8a20db.access@service-token.internal"); // synthetic, non-routable
+    expect(p.name).toBe("df8a20db.access");
+  });
+
+  it("ignores an aliasedSubject for a human (sub present) — no token hijack", () => {
+    const p = principalFromAccessClaims(
+      { sub: "real-human", email: "person@example.com" },
+      config,
+      "someone-else",
+    );
+    expect(p.accountId).toBe("real-human");
   });
 
   it("defaults to member when there are no groups and no admin match", () => {
