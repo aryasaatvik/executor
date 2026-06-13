@@ -1,4 +1,5 @@
 import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 
 import { isValidOrgSlug } from "@executor-js/api";
 
@@ -18,6 +19,10 @@ export interface CloudflareEnv {
   readonly DB: D1Database;
   /** R2 bucket binding — holds values too large for a D1 row (~1-2MB cap). */
   readonly BLOBS?: R2Bucket;
+  /** Workers Analytics Engine binding — opt-in sink for execution metrics. When
+   *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
+   *  finished execution/tool call writes a data point; absent, metrics are off. */
+  readonly ANALYTICS?: AnalyticsEngineDataset;
   /** MCP session Durable Object namespace — one addressable isolate per MCP
    *  session (the DO id IS the session id), so a session survives across the
    *  Worker's stateless isolates. */
