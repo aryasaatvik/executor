@@ -824,6 +824,39 @@
         "react",
       ],
     },
+    "packages/plugins/execution-history": {
+      "name": "@executor-js/plugin-execution-history",
+      "version": "0.0.0",
+      "dependencies": {
+        "@executor-js/sdk": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/atom-react": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "@types/node": "catalog:",
+        "@types/react": "catalog:",
+        "bun-types": "catalog:",
+        "react": "catalog:",
+        "tsup": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@effect/atom-react": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@executor-js/react": "workspace:*",
+        "@tanstack/react-router": "catalog:",
+        "react": "catalog:",
+      },
+      "optionalPeers": [
+        "@effect/atom-react",
+        "@executor-js/react",
+        "@tanstack/react-router",
+        "react",
+      ],
+    },
     "packages/plugins/file-secrets": {
       "name": "@executor-js/plugin-file-secrets",
       "version": "1.5.17",
@@ -1665,6 +1698,8 @@
     "@executor-js/plugin-encrypted-secrets": ["@executor-js/plugin-encrypted-secrets@workspace:packages/plugins/encrypted-secrets"],
 
     "@executor-js/plugin-example": ["@executor-js/plugin-example@workspace:packages/plugins/example"],
+
+    "@executor-js/plugin-execution-history": ["@executor-js/plugin-execution-history@workspace:packages/plugins/execution-history"],
 
     "@executor-js/plugin-file-secrets": ["@executor-js/plugin-file-secrets@workspace:packages/plugins/file-secrets"],
 
