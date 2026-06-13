@@ -175,6 +175,7 @@
         "@executor-js/fumadb": "workspace:*",
         "@executor-js/host-mcp": "workspace:*",
         "@executor-js/plugin-encrypted-secrets": "workspace:*",
+        "@executor-js/plugin-execution-metrics": "workspace:*",
         "@executor-js/plugin-google": "workspace:*",
         "@executor-js/plugin-graphql": "workspace:*",
         "@executor-js/plugin-mcp": "workspace:*",
@@ -855,6 +856,29 @@
         "@executor-js/react",
         "@tanstack/react-router",
         "react",
+      ],
+    },
+    "packages/plugins/execution-metrics": {
+      "name": "@executor-js/plugin-execution-metrics",
+      "version": "0.0.0",
+      "dependencies": {
+        "@executor-js/sdk": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.20250620.0",
+        "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@types/node": "catalog:",
+        "bun-types": "catalog:",
+        "tsup": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@executor-js/api": "workspace:*",
+      },
+      "optionalPeers": [
+        "@executor-js/api",
       ],
     },
     "packages/plugins/file-secrets": {
@@ -1700,6 +1724,8 @@
     "@executor-js/plugin-example": ["@executor-js/plugin-example@workspace:packages/plugins/example"],
 
     "@executor-js/plugin-execution-history": ["@executor-js/plugin-execution-history@workspace:packages/plugins/execution-history"],
+
+    "@executor-js/plugin-execution-metrics": ["@executor-js/plugin-execution-metrics@workspace:packages/plugins/execution-metrics"],
 
     "@executor-js/plugin-file-secrets": ["@executor-js/plugin-file-secrets@workspace:packages/plugins/file-secrets"],
 
