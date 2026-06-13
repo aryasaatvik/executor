@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/sdk/index.ts",
-    "./api": "./src/api/index.ts"
+    "./api": "./src/api/index.ts",
+    "./react": "./src/react/index.ts",
+    "./client": "./src/react/plugin-client.tsx"
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
@@ -18,13 +20,35 @@
     "effect": "catalog:"
   },
   "peerDependencies": {
-    "@executor-js/api": "workspace:*"
+    "@effect/atom-react": "catalog:",
+    "@executor-js/api": "workspace:*",
+    "@executor-js/react": "workspace:*",
+    "@tanstack/react-router": "catalog:",
+    "react": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "@effect/atom-react": {
+      "optional": true
+    },
+    "@tanstack/react-router": {
+      "optional": true
+    },
+    "@executor-js/react": {
+      "optional": true
+    }
   },
   "devDependencies": {
+    "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
+    "@executor-js/react": "workspace:*",
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
     "bun-types": "catalog:",
+    "react": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
   }

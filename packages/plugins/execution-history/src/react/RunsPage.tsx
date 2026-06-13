@@ -1,0 +1,521 @@
+import { useAtomValue } from "@effect/atom-react";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import { useMemo, useState } from "react";
+import { Badge } from "@executor-js/react/components/badge";
+import { Button } from "@executor-js/react/components/button";
+import { ScrollArea } from "@executor-js/react/components/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@executor-js/react/components/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@executor-js/react/components/sheet";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@executor-js/react/components/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@executor-js/react/components/tabs";
+import { cn } from "@executor-js/react/lib/utils";
+
+import type { InteractionRow, RunRow, ToolCallRow } from "../sdk/collections";
+import type { RunStatus, ToolCallStatus } from "../sdk/collections";
+import { runDetailAtom, runToolCallsAtom, runsAtom, type RunsQuery } from "./atoms";
+
+// ---------------------------------------------------------------------------
+// Execution-history runs page (v1).
+//
+// A runs table (status / trigger / started / duration / tool calls /
+// interaction) with a status filter, limit/offset pagination, and a 4-tab
+// detail drawer (Properties / Tool calls / Logs / Interaction) opened on row
+// click. The richer command-palette filter, keyboard row navigation, live
+// auto-refresh, and timeline chart from the original prototype are
+// intentionally OUT OF SCOPE for v1.
+// ---------------------------------------------------------------------------
+
+const STATUS_OPTIONS = [
+  "all",
+  "running",
+  "waiting_for_interaction",
+  "completed",
+  "failed",
+] as const;
+
+type StatusFilter = (typeof STATUS_OPTIONS)[number];
+
+const PAGE_SIZE = 50;
+
+// ---------------------------------------------------------------------------
+// Formatting + lint-clean JSON handling. The stored `*Json` columns are
+// already-serialized strings; we pretty-print them through Schema rather than
+// reaching for the JSON global (banned in domain code by oxlint).
+// ---------------------------------------------------------------------------
+
+const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString);
+const encodeJsonOption = Schema.encodeUnknownOption(Schema.UnknownFromJsonString);
+const decodeLogLines = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+
+const prettyJson = (raw: string | null): string | null => {
+  if (!raw) return null;
+  return Option.match(decodeJson(raw), {
+    onNone: () => raw,
+    onSome: (value) => Option.getOrElse(encodeJsonOption(value), () => raw),
+  });
+};
+
+const logLines = (raw: string | null): readonly string[] =>
+  !raw
+    ? []
+    : Option.match(decodeLogLines(raw), {
+        onNone: () => [raw],
+        onSome: (value) => value,
+      });
+
+const statusLabel = (status: RunStatus | ToolCallStatus): string =>
+  status === "waiting_for_interaction" ? "waiting" : status;
+
+const statusClass = (status: RunStatus | ToolCallStatus): string =>
+  status === "completed"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    : status === "failed"
+      ? "border-destructive/30 bg-destructive/10 text-destructive"
+      : status === "waiting_for_interaction"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+        : "border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300";
+
+const formatDateTime = (timestamp: number | null): string =>
+  timestamp == null ? "Pending" : new Date(timestamp).toLocaleString();
+
+const formatRelative = (timestamp: number): string => {
+  const delta = timestamp - Date.now();
+  const abs = Math.abs(delta);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  if (abs < 60_000) return formatter.format(Math.round(delta / 1000), "second");
+  if (abs < 3_600_000) return formatter.format(Math.round(delta / 60_000), "minute");
+  if (abs < 86_400_000) return formatter.format(Math.round(delta / 3_600_000), "hour");
+  return formatter.format(Math.round(delta / 86_400_000), "day");
+};
+
+const formatDuration = (value: number | null): string => {
+  if (value == null) return "running";
+  if (value < 1000) return `${value}ms`;
+  if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
+  return `${(value / 60_000).toFixed(1)}m`;
+};
+
+// ---------------------------------------------------------------------------
+// Presentational blocks
+// ---------------------------------------------------------------------------
+
+function StatusBadge(props: { readonly status: RunStatus | ToolCallStatus }) {
+  return (
+    <Badge variant="outline" className={statusClass(props.status)}>
+      {statusLabel(props.status)}
+    </Badge>
+  );
+}
+
+function MetaCard(props: { readonly label: string; readonly children: React.ReactNode }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/20 px-3 py-2">
+      <p className="text-[10px] font-medium uppercase text-muted-foreground">{props.label}</p>
+      <div className="mt-1 text-sm break-words">{props.children}</div>
+    </div>
+  );
+}
+
+function JsonBlock(props: { readonly title: string; readonly value: string | null }) {
+  const text = prettyJson(props.value);
+  if (!text) {
+    return (
+      <div className="rounded-md border border-border bg-muted/25 px-4 py-8 text-center font-mono text-xs text-muted-foreground">
+        No {props.title.toLowerCase()} recorded.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-medium uppercase text-muted-foreground">{props.title}</p>
+      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-muted/25 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
+function CodeBlock(props: { readonly code: string }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-[10px] font-medium uppercase text-muted-foreground">Code</p>
+      <pre className="max-h-80 overflow-auto rounded-md border border-border bg-muted/25 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap">
+        {props.code}
+      </pre>
+    </div>
+  );
+}
+
+function LogsBlock(props: { readonly logsJson: string | null }) {
+  const lines = logLines(props.logsJson);
+  if (lines.length === 0) {
+    return (
+      <div className="rounded-md border border-border bg-muted/25 px-4 py-10 text-center font-mono text-xs text-muted-foreground">
+        No logs recorded.
+      </div>
+    );
+  }
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-muted/25">
+      {lines.map((line, index) => (
+        <pre
+          key={`${index}-${line.slice(0, 24)}`}
+          className={cn(
+            "border-b border-border/40 px-3 py-1.5 font-mono text-xs whitespace-pre-wrap last:border-b-0",
+            line.includes("[error]") && "text-destructive",
+            line.includes("[warn]") && "text-amber-600 dark:text-amber-300",
+          )}
+        >
+          {line}
+        </pre>
+      ))}
+    </div>
+  );
+}
+
+function ToolCallItem(props: { readonly call: ToolCallRow }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="overflow-hidden rounded-md border border-border bg-muted/20">
+      <Button
+        type="button"
+        variant="ghost"
+        onClick={() => setExpanded((value) => !value)}
+        className="grid h-auto w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-none px-3 py-2 text-left"
+      >
+        <span className="min-w-0 truncate font-mono text-xs">{props.call.path}</span>
+        <span className="flex items-center gap-2">
+          <span className="font-mono text-[11px] text-muted-foreground">
+            {formatDuration(props.call.durationMs)}
+          </span>
+          <StatusBadge status={props.call.status} />
+        </span>
+      </Button>
+      {expanded && (
+        <div className="grid gap-3 border-t border-border p-3 xl:grid-cols-2">
+          <JsonBlock title="Args" value={props.call.argsJson} />
+          {props.call.status === "failed" && props.call.errorText ? (
+            <div className="space-y-1">
+              <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
+              <pre className="max-h-72 overflow-auto rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
+                {props.call.errorText}
+              </pre>
+            </div>
+          ) : (
+            <JsonBlock title="Result" value={props.call.resultJson} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallsTab(props: { readonly executionId: string }) {
+  const toolCalls = useAtomValue(runToolCallsAtom(props.executionId));
+  return AsyncResult.match(toolCalls, {
+    onInitial: () => <p className="text-sm text-muted-foreground">Loading tool calls...</p>,
+    onFailure: () => <p className="text-sm text-destructive">Unable to load tool calls.</p>,
+    onSuccess: ({ value }) =>
+      value.toolCalls.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No tool calls recorded.</p>
+      ) : (
+        <div className="space-y-2">
+          {value.toolCalls.map((call) => (
+            <ToolCallItem key={call.toolCallId} call={call} />
+          ))}
+        </div>
+      ),
+  });
+}
+
+function InteractionTab(props: { readonly interactions: readonly InteractionRow[] }) {
+  if (props.interactions.length === 0) {
+    return (
+      <div className="rounded-md border border-border bg-muted/25 px-4 py-10 text-center font-mono text-xs text-muted-foreground">
+        No interactions recorded.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      {props.interactions.map((interaction) => (
+        <div
+          key={interaction.interactionId}
+          className="space-y-3 rounded-md border border-border p-3"
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <MetaCard label="Kind">{interaction.kind}</MetaCard>
+            <MetaCard label="Status">{interaction.status}</MetaCard>
+            <MetaCard label="Purpose">{interaction.purpose ?? "—"}</MetaCard>
+          </div>
+          <JsonBlock title="Request" value={interaction.payloadJson} />
+          <JsonBlock title="Response" value={interaction.responseJson} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DetailContent(props: {
+  readonly run: RunRow;
+  readonly interactions: readonly InteractionRow[];
+}) {
+  const { run } = props;
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <SheetHeader className="border-b border-border px-5 py-3">
+        <SheetTitle className="truncate font-mono text-sm">{run.executionId}</SheetTitle>
+        <SheetDescription>
+          {statusLabel(run.status)} / {run.triggerKind ?? "unknown"} /{" "}
+          {formatDuration(run.durationMs)}
+        </SheetDescription>
+      </SheetHeader>
+
+      <Tabs defaultValue="properties" className="min-h-0 flex-1 gap-0">
+        <TabsList variant="line" className="mx-5 mt-3">
+          <TabsTrigger value="properties">Properties</TabsTrigger>
+          <TabsTrigger value="tools">Tool calls</TabsTrigger>
+          <TabsTrigger value="logs">Logs</TabsTrigger>
+          <TabsTrigger value="interaction">Interaction</TabsTrigger>
+        </TabsList>
+        <ScrollArea className="min-h-0 flex-1 px-5 py-4">
+          <TabsContent value="properties" className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <MetaCard label="Execution ID">
+                <span className="font-mono text-xs break-all">{run.executionId}</span>
+              </MetaCard>
+              <MetaCard label="Status">
+                <StatusBadge status={run.status} />
+              </MetaCard>
+              <MetaCard label="Trigger">{run.triggerKind ?? "unknown"}</MetaCard>
+              <MetaCard label="Duration">{formatDuration(run.durationMs)}</MetaCard>
+              <MetaCard label="Started">{formatDateTime(run.startedAt)}</MetaCard>
+              <MetaCard label="Completed">{formatDateTime(run.completedAt)}</MetaCard>
+            </div>
+            <CodeBlock code={run.code} />
+            <JsonBlock title="Result" value={run.resultJson} />
+            {run.errorText && (
+              <div className="space-y-1">
+                <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
+                <pre className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
+                  {run.errorText}
+                </pre>
+              </div>
+            )}
+          </TabsContent>
+          <TabsContent value="tools">
+            <ToolCallsTab executionId={run.executionId} />
+          </TabsContent>
+          <TabsContent value="logs">
+            <LogsBlock logsJson={run.logsJson} />
+          </TabsContent>
+          <TabsContent value="interaction">
+            <InteractionTab interactions={props.interactions} />
+          </TabsContent>
+        </ScrollArea>
+      </Tabs>
+    </div>
+  );
+}
+
+function DetailDrawer(props: {
+  readonly executionId: string | null;
+  readonly onClose: () => void;
+}) {
+  const detail = useAtomValue(runDetailAtom(props.executionId ?? "__none__"));
+  return (
+    <Sheet open={props.executionId != null} onOpenChange={(open) => !open && props.onClose()}>
+      <SheetContent side="right" showCloseButton className="w-full gap-0 p-0 sm:max-w-3xl">
+        {props.executionId == null
+          ? null
+          : AsyncResult.match(detail, {
+              onInitial: () => (
+                <div className="p-5 text-sm text-muted-foreground">Loading run...</div>
+              ),
+              onFailure: () => (
+                <div className="p-5 text-sm text-destructive">Unable to load run.</div>
+              ),
+              onSuccess: ({ value }) =>
+                value ? (
+                  <DetailContent run={value.run} interactions={value.interactions} />
+                ) : (
+                  <div className="p-5 text-sm text-muted-foreground">Run not found.</div>
+                ),
+            })}
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function RunsTableRow(props: { readonly run: RunRow; readonly onSelect: () => void }) {
+  const { run } = props;
+  return (
+    <TableRow className="cursor-pointer" onClick={props.onSelect}>
+      <TableCell>
+        <StatusBadge status={run.status} />
+      </TableCell>
+      <TableCell className="text-muted-foreground">{run.triggerKind ?? "unknown"}</TableCell>
+      <TableCell className="text-muted-foreground" title={formatDateTime(run.startedAt)}>
+        {formatRelative(run.startedAt)}
+      </TableCell>
+      <TableCell className="font-mono text-xs">{formatDuration(run.durationMs)}</TableCell>
+      <TableCell className="font-mono text-xs">{run.toolCallCount}</TableCell>
+      <TableCell>
+        {run.hadInteraction ? (
+          <Badge variant="outline" className="border-amber-500/30 bg-amber-500/10">
+            yes
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function RunsTable(props: {
+  readonly runs: readonly RunRow[];
+  readonly onSelect: (executionId: string) => void;
+}) {
+  if (props.runs.length === 0) {
+    return (
+      <div className="flex h-48 items-center justify-center px-4 text-center font-mono text-xs text-muted-foreground">
+        No runs match the current filters.
+      </div>
+    );
+  }
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Status</TableHead>
+          <TableHead>Trigger</TableHead>
+          <TableHead>Started</TableHead>
+          <TableHead>Duration</TableHead>
+          <TableHead>Tools</TableHead>
+          <TableHead>Interaction</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {props.runs.map((run) => (
+          <RunsTableRow
+            key={run.executionId}
+            run={run}
+            onSelect={() => props.onSelect(run.executionId)}
+          />
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
+export function RunsPage() {
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<string | null>(null);
+
+  const query = useMemo<RunsQuery>(
+    () => ({
+      limit: PAGE_SIZE,
+      offset,
+      sort: "desc",
+      ...(status === "all" ? {} : { status }),
+    }),
+    [offset, status],
+  );
+  const runs = useAtomValue(runsAtom(query));
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold">Runs</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Plugin-backed local execution history, newest first.
+          </p>
+        </div>
+        <Select
+          value={status}
+          onValueChange={(value) => {
+            setStatus(value as StatusFilter);
+            setOffset(0);
+          }}
+        >
+          <SelectTrigger size="sm" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option === "all" ? "All statuses" : statusLabel(option)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <ScrollArea className="min-h-0 flex-1">
+        {AsyncResult.match(runs, {
+          onInitial: () => <div className="p-4 text-sm text-muted-foreground">Loading runs...</div>,
+          onFailure: () => <div className="p-4 text-sm text-destructive">Unable to load runs.</div>,
+          onSuccess: ({ value }) => (
+            <div className="flex flex-col gap-3 p-4">
+              <RunsTable runs={value.runs} onSelect={setSelected} />
+              <div className="flex items-center justify-between gap-3">
+                <p className="font-mono text-xs text-muted-foreground">
+                  {value.total.toLocaleString()} total / showing {offset + 1}–
+                  {offset + value.runs.length}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={offset === 0}
+                    onClick={() => setOffset((current) => Math.max(0, current - PAGE_SIZE))}
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={offset + value.runs.length >= value.total}
+                    onClick={() => setOffset((current) => current + PAGE_SIZE)}
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ),
+        })}
+      </ScrollArea>
+
+      <DetailDrawer executionId={selected} onClose={() => setSelected(null)} />
+    </div>
+  );
+}
