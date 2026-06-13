@@ -28,6 +28,7 @@
     "@executor-js/plugin-graphql": "workspace:*",
     "@executor-js/plugin-mcp": "workspace:*",
     "@executor-js/plugin-openapi": "workspace:*",
+    "@executor-js/plugin-service-tokens": "workspace:*",
     "@executor-js/react": "workspace:*",
     "@executor-js/runtime-quickjs": "workspace:*",
     "@executor-js/sdk": "workspace:*",

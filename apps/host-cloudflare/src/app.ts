@@ -6,6 +6,7 @@ import { loadConfig, type CloudflareEnv } from "./config";
 import { makeCloudflarePlugins } from "./plugins";
 import { createD1ExecutorDb } from "./db/d1";
 import { cloudflareAccessIdentityLayer } from "./auth/cloudflare-access";
+import { makeServiceTokenAliasLookup } from "./auth/service-token-alias";
 import {
   CloudflareCodeExecutorProvider,
   makeCloudflareHostConfig,
@@ -42,10 +43,16 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   // Open + idempotently bring up the D1 schema once (the long-lived handle the
   // per-request scoped executor reads through the DbProvider seam).
   const dbHandle = await createD1ExecutorDb(env.DB, env.BLOBS);
-  const identityLayer = cloudflareAccessIdentityLayer(config);
+  // Resolve service-token → human-subject aliases (written by the service-tokens
+  // plugin) at JWT-verify time, so a machine token can ACT AS the user it is
+  // mapped to. Shared by the API gate, the account `me`, and the `/mcp` gate so
+  // all three agree on identity. Reads the long-lived `dbHandle`.
+  const aliasLookup = makeServiceTokenAliasLookup(dbHandle, config.organizationId);
+  const identityLayer = cloudflareAccessIdentityLayer(config, aliasLookup);
   // MCP runs through the `MCP_SESSION` Durable Object (cross-isolate sessions);
   // each session DO opens its own D1 handle, so it takes `env`, not `dbHandle`.
-  const mcp = makeCloudflareMcpSeams(config, env);
+  // The `/mcp` GATE auth runs in the Worker, so it shares the alias lookup.
+  const mcp = makeCloudflareMcpSeams(config, env, aliasLookup);
 
   const { appLayer, toWebHandler } = ExecutorApp.make({
     plugins,
@@ -61,7 +68,7 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
       // The account API (`/api/account/*`) backs the shared multiplayer shell's
       // auth context; `me` reflects the Access principal. Members/keys are
       // Access-managed, so the rest of the surface is stubbed.
-      account: cloudflareAccountMiddleware(config),
+      account: cloudflareAccountMiddleware(config, aliasLookup),
       // The MCP serving envelope: Access-JWT auth + the shared in-process session
       // store over the QuickJS engine.
       mcp: { auth: mcp.auth, sessions: mcp.sessions, reporter: mcp.reporter },

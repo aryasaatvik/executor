@@ -8,6 +8,7 @@ import {
   type AnalyticsEngineDataset,
 } from "@executor-js/plugin-execution-metrics/cloudflare";
 import { noopExecutionObserver } from "@executor-js/sdk";
+import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -37,6 +38,7 @@ export const makeCloudflarePlugins = (secretKey: string, analytics?: AnalyticsEn
     executionMetricsPlugin({
       observer: () => (analytics ? createWaeMetricsObserver(analytics) : noopExecutionObserver),
     }),
+    serviceTokensPlugin(),
   ] as const;
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;

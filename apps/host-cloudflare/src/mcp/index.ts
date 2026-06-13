@@ -2,6 +2,7 @@ import type { Layer } from "effect";
 
 import type { McpAuthProvider, McpErrorReporter, McpSessionStore } from "@executor-js/host-mcp";
 
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import type { CloudflareConfig, CloudflareEnv } from "../config";
 import { cloudflareAccessMcpAuth } from "./auth";
 import { cloudflareMcpReporter, makeCloudflareMcpSessionStore } from "./session-store";
@@ -37,13 +38,16 @@ export interface CloudflareMcpSeams {
 /**
  * Build the Cloudflare MCP serving seams over the host's `MCP_SESSION` Durable
  * Object namespace. No per-session DB handle is threaded here — each session DO
- * opens its own D1 handle in its own isolate.
+ * opens its own D1 handle in its own isolate. The `/mcp` GATE auth runs in the
+ * Worker (not the DO), so it takes the app-level service-token alias lookup so a
+ * service-token MCP client resolves its aliased identity just like the API gate.
  */
 export const makeCloudflareMcpSeams = (
   config: CloudflareConfig,
   env: CloudflareEnv,
+  aliasLookup?: ServiceTokenAliasLookup,
 ): CloudflareMcpSeams => ({
-  auth: cloudflareAccessMcpAuth(config),
+  auth: cloudflareAccessMcpAuth(config, aliasLookup),
   sessions: makeCloudflareMcpSessionStore(env),
   reporter: cloudflareMcpReporter,
 });
