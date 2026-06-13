@@ -1,9 +1,49 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 
 import { IdentityProvider, Unauthorized, type Principal } from "@executor-js/api/server";
 
 import type { CloudflareConfig } from "../config";
+import type { ServiceTokenAliasLookup } from "./service-token-alias";
+
+// ---------------------------------------------------------------------------
+// Access claim parsing
+//
+// The three identity claims are decoded with a lenient Schema (→ Option) so a
+// malformed payload normalizes to all-absent rather than throwing in the auth
+// path. A human carries `sub` (usually with `email`); a service token carries
+// only `common_name`. The display-name and groups claims use operator-
+// configurable keys, so they are read off the raw payload separately.
+// ---------------------------------------------------------------------------
+
+const AccessClaims = Schema.Struct({
+  sub: Schema.optional(Schema.String),
+  email: Schema.optional(Schema.String),
+  common_name: Schema.optional(Schema.String),
+});
+
+interface AccessIdentity {
+  readonly sub: string;
+  readonly email: string;
+  readonly commonName: string;
+}
+
+const decodeAccessClaims = Schema.decodeUnknownOption(AccessClaims);
+
+const accessIdentity = (claims: Record<string, unknown>): AccessIdentity =>
+  Option.match(decodeAccessClaims(claims), {
+    onNone: () => ({ sub: "", email: "", commonName: "" }),
+    onSome: (c) => ({ sub: c.sub ?? "", email: c.email ?? "", commonName: c.common_name ?? "" }),
+  });
+
+/** A service token presents `common_name` and no `sub`. */
+const isServiceToken = (id: AccessIdentity): boolean => id.sub === "" && id.commonName !== "";
+
+/** A service token has no mailbox; synthesize a stable, clearly-non-routable
+ *  address from its common_name. `.internal` is the ICANN-reserved private-use
+ *  TLD (2024) — it never resolves publicly and reads as an internal machine
+ *  credential, not an invalid one. */
+const serviceTokenEmail = (commonName: string): string => `${commonName}@service-token.internal`;
 
 // ---------------------------------------------------------------------------
 // Cloudflare Access IdentityProvider — the CF-native swap for self-host's
@@ -24,26 +64,49 @@ import type { CloudflareConfig } from "../config";
  * `CF-Access-Client-Id`/`-Secret` headers — which carry `common_name` (the
  * token's client id) instead of email/sub. Single-tenant: every principal
  * belongs to the one configured org; admin comes from the email allowlist.
+ *
+ * A service token can be ALIASED to a human subject: pass `aliasedSubject` (the
+ * `sub` resolved from the service-tokens plugin's alias table). When present for
+ * a service token, the token acts as that identity — same subject → same
+ * Personal connection partition (zero migration) — and is treated as an admin:
+ * the deliberate static-credential equivalent of that user's browser/OAuth
+ * session. The lookup is async I/O, so it stays in the verifier; this mapper is
+ * kept pure (alias passed in) and unit-testable.
  */
 export const principalFromAccessClaims = (
   claims: Record<string, unknown>,
   config: CloudflareConfig,
+  aliasedSubject?: string | null,
 ): Principal => {
-  const email = typeof claims.email === "string" ? claims.email : "";
-  const sub = typeof claims.sub === "string" && claims.sub.length > 0 ? claims.sub : "";
-  const commonName = typeof claims.common_name === "string" ? claims.common_name : "";
+  const id = accessIdentity(claims);
   const nameClaim = claims[config.accessNameClaim];
   const groupsClaim = claims[config.accessGroupsClaim];
   const groups = Array.isArray(groupsClaim) ? groupsClaim.map(String) : [];
-  const isAdmin = email.length > 0 && config.adminEmails.includes(email.toLowerCase());
+  // Admin is keyed off the REAL email claim — a synthetic service-token address
+  // can never match the allowlist.
+  const isAdmin = id.email.length > 0 && config.adminEmails.includes(id.email.toLowerCase());
+  const serviceToken = isServiceToken(id);
+
+  // Aliased service token → act as the mapped human subject, as an admin.
+  if (serviceToken && aliasedSubject) {
+    return {
+      accountId: aliasedSubject,
+      organizationId: config.organizationId,
+      organizationName: config.organizationName,
+      email: serviceTokenEmail(id.commonName),
+      name: id.commonName,
+      avatarUrl: null,
+      roles: ["admin", ...groups],
+    };
+  }
 
   return {
-    accountId: sub || email || commonName,
+    accountId: id.sub || id.email || id.commonName,
     organizationId: config.organizationId,
     organizationName: config.organizationName,
     organizationSlug: config.organizationSlug,
-    email,
-    name: typeof nameClaim === "string" ? nameClaim : commonName || null,
+    email: serviceToken ? serviceTokenEmail(id.commonName) : id.email,
+    name: typeof nameClaim === "string" ? nameClaim : id.commonName || null,
     avatarUrl: null,
     roles: isAdmin ? ["admin", ...groups] : groups.length > 0 ? groups : ["member"],
   };
@@ -57,7 +120,10 @@ export const principalFromAccessClaims = (
  *
  * `jose` caches + rotates the team JWKS, so build the verifier once per config.
  */
-export const makeAccessVerifier = (config: CloudflareConfig) => {
+export const makeAccessVerifier = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+) => {
   const issuer = `https://${config.accessTeamDomain}`;
   // Cached, lazily-fetched team signing keys; jose handles rotation + caching.
   const jwks = createRemoteJWKSet(new URL(`${issuer}/cdn-cgi/access/certs`));
@@ -88,7 +154,14 @@ export const makeAccessVerifier = (config: CloudflareConfig) => {
       }).pipe(Effect.orElseSucceed(() => null));
       if (!verified) return null;
 
-      return principalFromAccessClaims(verified.payload as Record<string, unknown>, config);
+      const claims = verified.payload as Record<string, unknown>;
+      // A service token (common_name, no sub) may be aliased to a human subject.
+      // Resolve it before building the principal so the token acts as that user.
+      const id = accessIdentity(claims);
+      const aliasedSubject =
+        isServiceToken(id) && aliasLookup ? yield* aliasLookup(id.commonName) : null;
+
+      return principalFromAccessClaims(claims, config, aliasedSubject);
     });
 
   return { verify };
@@ -96,8 +169,9 @@ export const makeAccessVerifier = (config: CloudflareConfig) => {
 
 export const cloudflareAccessIdentityLayer = (
   config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
 ): Layer.Layer<IdentityProvider> => {
-  const { verify } = makeAccessVerifier(config);
+  const { verify } = makeAccessVerifier(config, aliasLookup);
   return Layer.succeed(IdentityProvider)(
     IdentityProvider.of({
       authenticate: (request) =>

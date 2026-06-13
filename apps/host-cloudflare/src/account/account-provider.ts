@@ -8,6 +8,7 @@ import {
 import { AccountError, AccountUnauthorized } from "@executor-js/api";
 
 import { makeAccessVerifier } from "../auth/cloudflare-access";
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import type { CloudflareConfig } from "../config";
 
 // ---------------------------------------------------------------------------
@@ -27,8 +28,9 @@ const NOT_IN_APP = "Managed by Cloudflare Access, not in the app.";
 
 export const cloudflareAccountProvider = (
   config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
 ): Layer.Layer<AccountProvider> => {
-  const { verify } = makeAccessVerifier(config);
+  const { verify } = makeAccessVerifier(config, aliasLookup);
 
   // The provider gets raw headers; rebuild a minimal Request so `verify` can
   // read the Access assertion header (and honor the dev-auth bypass).
@@ -71,5 +73,7 @@ export const cloudflareAccountProvider = (
 };
 
 /** The per-request `AccountProvider` middleware (mounted under `/api`). */
-export const cloudflareAccountMiddleware = (config: CloudflareConfig) =>
-  accountProviderMiddlewareLayer(cloudflareAccountProvider(config));
+export const cloudflareAccountMiddleware = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+) => accountProviderMiddlewareLayer(cloudflareAccountProvider(config, aliasLookup));

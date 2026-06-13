@@ -3,6 +3,7 @@ import { Effect, Layer } from "effect";
 import { authenticated, McpAuthProvider, unauthorized } from "@executor-js/host-mcp";
 
 import { makeAccessVerifier } from "../auth/cloudflare-access";
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import type { CloudflareConfig } from "../config";
 
 // ---------------------------------------------------------------------------
@@ -21,8 +22,11 @@ import type { CloudflareConfig } from "../config";
 // discovery docs + a token endpoint here behind this same seam.
 // ---------------------------------------------------------------------------
 
-export const cloudflareAccessMcpAuth = (config: CloudflareConfig): Layer.Layer<McpAuthProvider> => {
-  const { verify } = makeAccessVerifier(config);
+export const cloudflareAccessMcpAuth = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+): Layer.Layer<McpAuthProvider> => {
+  const { verify } = makeAccessVerifier(config, aliasLookup);
   return Layer.succeed(McpAuthProvider)({
     discoveryRoutes: [],
     resourceMetadataUrl: (request) =>
