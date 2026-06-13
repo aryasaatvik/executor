@@ -22,7 +22,7 @@ describe("execution-history store", () => {
     Effect.gen(function* () {
       const executor = yield* makeTestExecutor({
         backend: "sqlite",
-        plugins: [executionHistoryPlugin] as const,
+        plugins: [executionHistoryPlugin()] as const,
       });
 
       const executionId = ExecutionId.make("exec_1");

@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/sdk/index.ts"
+    ".": "./src/sdk/index.ts",
+    "./api": "./src/api/index.ts"
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
@@ -16,8 +17,12 @@
     "@executor-js/sdk": "workspace:*",
     "effect": "catalog:"
   },
+  "peerDependencies": {
+    "@executor-js/api": "workspace:*"
+  },
   "devDependencies": {
     "@effect/vitest": "catalog:",
+    "@executor-js/api": "workspace:*",
     "@types/node": "catalog:",
     "bun-types": "catalog:",
     "tsup": "catalog:",

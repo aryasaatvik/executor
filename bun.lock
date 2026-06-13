@@ -815,10 +815,14 @@
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
         "@types/node": "catalog:",
         "bun-types": "catalog:",
         "tsup": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@executor-js/api": "workspace:*",
       },
     },
     "packages/plugins/file-secrets": {

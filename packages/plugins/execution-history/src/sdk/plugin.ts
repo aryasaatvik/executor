@@ -4,8 +4,8 @@ import { interactions, runs, toolCalls } from "./collections";
 import { makeExecutionHistoryObserver, makeExecutionHistoryStore } from "./store";
 
 // ---------------------------------------------------------------------------
-// Execution-history plugin. A pure sink: it contributes no tools or
-// integrations, only the three storage collections, a read surface
+// Execution-history plugin (SDK surface). A pure sink: it contributes no tools
+// or integrations, only the three storage collections, a read surface
 // (`list`/`get`/`listToolCalls`) on `executor.executionHistory`, and a runtime
 // ExecutionObserver that records the engine's event stream.
 //
@@ -13,6 +13,10 @@ import { makeExecutionHistoryObserver, makeExecutionHistoryStore } from "./store
 // buffered `handleEvent` writer), `extension(ctx)` surfaces the read methods
 // AND `handleEvent` off `ctx.storage`, and `runtime.executionObserver(self)`
 // (which receives the EXTENSION) wraps `self.handleEvent` into an observer.
+//
+// The HTTP transport (routes/handlers/extensionService) is layered on by the
+// api-aware factory in `@executor-js/plugin-execution-history/api`, so SDK-only
+// consumers never load `@executor-js/api`.
 // ---------------------------------------------------------------------------
 
 export const executionHistoryPlugin = definePlugin(() => ({
@@ -29,4 +33,4 @@ export const executionHistoryPlugin = definePlugin(() => ({
   runtime: {
     executionObserver: (self) => makeExecutionHistoryObserver(self),
   },
-}))();
+}));
