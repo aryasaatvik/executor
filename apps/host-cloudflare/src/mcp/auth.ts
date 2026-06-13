@@ -8,6 +8,7 @@ import {
 } from "@executor-js/host-mcp";
 
 import { makeAccessVerifier } from "../auth/cloudflare-access";
+import type { ServiceTokenAliasLookup } from "../auth/service-token-alias";
 import type { CloudflareConfig } from "../config";
 
 const PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource";
@@ -69,8 +70,11 @@ const protectedResourceMetadataResponse = (request: Request): Response => {
 // discovery docs + a token endpoint here behind this same seam.
 // ---------------------------------------------------------------------------
 
-export const cloudflareAccessMcpAuth = (config: CloudflareConfig): Layer.Layer<McpAuthProvider> => {
-  const { verify } = makeAccessVerifier(config);
+export const cloudflareAccessMcpAuth = (
+  config: CloudflareConfig,
+  aliasLookup?: ServiceTokenAliasLookup,
+): Layer.Layer<McpAuthProvider> => {
+  const { verify } = makeAccessVerifier(config, aliasLookup);
   const discoveryRoutes: ReadonlyArray<McpDiscoveryRoute> = [
     {
       path: PROTECTED_RESOURCE_METADATA_PATH,
