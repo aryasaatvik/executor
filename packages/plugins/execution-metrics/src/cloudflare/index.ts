@@ -2,6 +2,8 @@ import { Effect, Predicate } from "effect";
 
 import { type ExecutionEvent, type ExecutionObserver } from "@executor-js/sdk/core";
 
+import { rememberStart } from "../sdk/bounded-map";
+
 /**
  * Minimal structural view of a Workers Analytics Engine binding. The full type
  * lives in `@cloudflare/workers-types` as a global ambient `interface
@@ -41,7 +43,7 @@ export const createWaeMetricsObserver = (analytics: AnalyticsEngineDataset): Exe
     handle: (event: ExecutionEvent) => {
       if (Predicate.isTagged(event, "ExecutionStarted")) {
         return Effect.sync(() => {
-          executionStarts.set(event.executionId, {
+          rememberStart(executionStarts, event.executionId, {
             startedAt: event.startedAt.getTime(),
             trigger: event.trigger?.kind,
           });
@@ -50,7 +52,7 @@ export const createWaeMetricsObserver = (analytics: AnalyticsEngineDataset): Exe
 
       if (Predicate.isTagged(event, "ToolCallStarted")) {
         return Effect.sync(() => {
-          toolCallStarts.set(event.toolCallId, event.startedAt.getTime());
+          rememberStart(toolCallStarts, event.toolCallId, event.startedAt.getTime());
         });
       }
 

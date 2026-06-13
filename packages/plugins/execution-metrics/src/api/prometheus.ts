@@ -102,7 +102,7 @@ const formatPair = (metric: Metric.Metric.Snapshot, seen: Set<string>): readonly
       const state = metric.state;
       const lines = [...emitHeader(name, "counter", description, seen)];
       for (const [bucket, count] of state.occurrences) {
-        lines.push(`${name}${formatLabels(attributes, { bucket })} ${count}`);
+        lines.push(`${name}${formatLabels(attributes, { bucket })} ${formatValue(count)}`);
       }
       return lines;
     }),

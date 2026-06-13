@@ -6,6 +6,8 @@ import {
   type ExecutionObserver,
 } from "@executor-js/sdk/core";
 
+import { rememberStart } from "./bounded-map";
+
 // ---------------------------------------------------------------------------
 // Metric definitions — registered in the global Effect Metric registry the
 // first time this module is loaded. The Prometheus scrape (`../api/prometheus`)
@@ -72,7 +74,7 @@ export const createExecutionMetricsObserver = (): ExecutionObserver => {
     event: Extract<ExecutionEvent, { readonly _tag: "ExecutionStarted" }>,
   ) =>
     Effect.sync(() => {
-      executionStarts.set(event.executionId, {
+      rememberStart(executionStarts, event.executionId, {
         startedAt: event.startedAt,
         trigger: event.trigger?.kind,
       });

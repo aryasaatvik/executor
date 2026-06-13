@@ -85,8 +85,7 @@ describe("execution-metrics observer + renderPrometheus", () => {
         .split("\n")
         .filter(
           (line) =>
-            line.startsWith("executor_execution_duration_ms_bucket{") &&
-            line.includes('le="+Inf"'),
+            line.startsWith("executor_execution_duration_ms_bucket{") && line.includes('le="+Inf"'),
         );
       expect(infBuckets).toHaveLength(1);
 
