@@ -105,12 +105,16 @@ export function RunsPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  // The live divider + isPast styling assume newest-first ordering. For
+  // ascending sort live rows append at the bottom with no divider, so only
+  // compute the cutoff for descending sort.
+  const isDescending = filters.sortDirection !== "asc";
   const cutoffIndex = useMemo(
     () =>
-      view.liveCutoffId == null
+      !isDescending || view.liveCutoffId == null
         ? -1
         : view.rows.findIndex((run) => run.executionId === view.liveCutoffId),
-    [view.rows, view.liveCutoffId],
+    [isDescending, view.rows, view.liveCutoffId],
   );
 
   const rowItems: React.ReactNode[] = [];
@@ -129,6 +133,20 @@ export function RunsPage() {
       />,
     );
   });
+
+  if (view.isLoadMoreError) {
+    rowItems.push(
+      <div
+        key="load-more-error"
+        className="flex w-full flex-col items-center justify-center gap-2 border-t border-border/50 py-4 text-center"
+      >
+        <p className="font-mono text-xs text-destructive">Failed to load more</p>
+        <Button type="button" variant="outline" size="sm" onClick={view.retry}>
+          Retry
+        </Button>
+      </div>,
+    );
+  }
 
   const toolbar = (
     <div className="flex flex-col gap-2">

@@ -70,8 +70,10 @@ export interface RunsListView {
   readonly isLoading: boolean;
   readonly isLoadingMore: boolean;
   readonly isError: boolean;
+  readonly isLoadMoreError: boolean;
   readonly hasMore: boolean;
   readonly loadMore: () => void;
+  readonly retry: () => void;
   readonly refresh: () => void;
   readonly liveCutoffId: string | null;
 }
@@ -102,7 +104,10 @@ export const useRunsList = (filters: RunsFilters, live: boolean): RunsListView =
   const pageResult = useAtomValue(pageAtom);
   const firstResult = useAtomValue(firstAtom);
   const refreshFirst = useAtomRefresh(firstAtom);
-  const rows = runsListRows(state);
+  const refreshPaged = useAtomRefresh(pagedAtom);
+  // Descending (newest-first) keeps live rows on top; ascending appends them
+  // to the tail so the live edge stays at the bottom.
+  const rows = runsListRows(state, filters.sortDirection !== "asc");
 
   // Fold each settled page into the accumulator (idempotent in the reducer).
   useEffect(() => {
@@ -140,6 +145,8 @@ export const useRunsList = (filters: RunsFilters, live: boolean): RunsListView =
   }, [live, refreshFirst]);
 
   const loadMore = useCallback(() => dispatch({ type: "loadMore" }), []);
+  // Re-fetch the errored page; on success the appendPage effect folds it in.
+  const retry = useCallback(() => refreshPaged(), [refreshPaged]);
   const refresh = useCallback(() => {
     dispatch({ type: "reset" });
     refreshFirst();
@@ -154,8 +161,10 @@ export const useRunsList = (filters: RunsFilters, live: boolean): RunsListView =
     isLoading: rows.length === 0 && settling,
     isLoadingMore: state.cursor !== undefined && settling,
     isError: AsyncResult.isFailure(pageResult) && rows.length === 0,
+    isLoadMoreError: state.cursor !== undefined && AsyncResult.isFailure(pageResult),
     hasMore: !state.done,
     loadMore,
+    retry,
     refresh,
     liveCutoffId: state.liveCutoffId,
   };

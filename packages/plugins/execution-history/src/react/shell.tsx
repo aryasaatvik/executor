@@ -52,8 +52,11 @@ export function RunsShell(props: RunsShellProps) {
   React.useEffect(() => {
     const toolbar = toolbarRef.current;
     if (!toolbar) return;
-    const observer = new ResizeObserver(() => {
-      setStickyTop(toolbar.getBoundingClientRect().height);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+      setStickyTop(height);
     });
     observer.observe(toolbar);
     return () => observer.disconnect();

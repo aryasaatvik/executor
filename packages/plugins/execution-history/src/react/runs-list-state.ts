@@ -104,8 +104,10 @@ export const runsListReducer = (state: RunsListState, action: RunsListAction): R
   return initialRunsListState;
 };
 
-/** The merged display list (newest first). */
-export const runsListRows = (state: RunsListState): readonly RunRow[] => [
-  ...state.live,
-  ...state.pages.flat(),
-];
+/**
+ * The merged display list. With `liveFirst` (the default, for descending /
+ * newest-first sort) live rows go on top; otherwise (ascending sort) they are
+ * appended after the paginated rows so the live tail stays at the bottom.
+ */
+export const runsListRows = (state: RunsListState, liveFirst = true): readonly RunRow[] =>
+  liveFirst ? [...state.live, ...state.pages.flat()] : [...state.pages.flat(), ...state.live];

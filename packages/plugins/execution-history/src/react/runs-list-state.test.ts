@@ -108,6 +108,22 @@ describe("runsListReducer", () => {
     expect(runsListRows(state).map((r) => r.executionId)).toEqual(["r3", "r2", "r1"]);
   });
 
+  it("runsListRows(state, false) places live rows after pages.flat()", () => {
+    const state = run([
+      {
+        type: "appendPage",
+        cursor: undefined,
+        runs: [row("r2", 2000), row("r1", 1000)],
+        nextCursor: null,
+      },
+      { type: "prependLive", runs: [row("r3", 3000)] },
+    ]);
+    // Default (liveFirst) keeps the live row on top.
+    expect(runsListRows(state).map((r) => r.executionId)).toEqual(["r3", "r2", "r1"]);
+    // Ascending sort appends live rows after the paginated rows.
+    expect(runsListRows(state, false).map((r) => r.executionId)).toEqual(["r2", "r1", "r3"]);
+  });
+
   it("reset clears all accumulated state", () => {
     const state = run([
       { type: "appendPage", cursor: undefined, runs: [row("r1", 1000)], nextCursor: "c2" },
