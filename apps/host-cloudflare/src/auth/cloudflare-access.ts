@@ -2,9 +2,10 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { IdentityProvider, Unauthorized, type Principal } from "@executor-js/api/server";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 
 import type { CloudflareConfig } from "../config";
-import type { ServiceTokenAliasLookup } from "./service-token-alias";
+import type { ResolvedServiceTokenAlias, ServiceTokenAliasLookup } from "./service-token-alias";
 
 const AccessClaims = Schema.Struct({
   sub: Schema.optional(Schema.String),
@@ -49,7 +50,7 @@ const serviceTokenEmail = (commonName: string): string => `${commonName}@service
 export const principalFromAccessClaims = (
   claims: Record<string, unknown>,
   config: CloudflareConfig,
-  aliasedSubject?: string | null,
+  alias?: ResolvedServiceTokenAlias | null,
 ): Principal => {
   const identity = accessIdentity(claims);
   const nameClaim = claims[config.accessNameClaim];
@@ -57,24 +58,38 @@ export const principalFromAccessClaims = (
   const groups = Array.isArray(groupsClaim) ? groupsClaim.map(String) : [];
   const isAdmin =
     identity.email.length > 0 && config.adminEmails.includes(identity.email.toLowerCase());
-  const serviceToken = isServiceToken(identity);
 
-  if (serviceToken && aliasedSubject) {
+  if (isServiceToken(identity)) {
+    const actor: ExecutionActor = {
+      kind: "service-token",
+      id: identity.commonName,
+      label: alias?.machineName ?? identity.commonName,
+    };
+    if (alias) {
+      return {
+        kind: "member",
+        accountId: alias.subject,
+        organizationId: config.organizationId,
+        organizationName: config.organizationName,
+        organizationSlug: config.organizationSlug,
+        email: alias.email ?? serviceTokenEmail(identity.commonName),
+        name: alias.name ?? identity.commonName,
+        avatarUrl: null,
+        roles: ["admin", ...groups],
+        actor,
+      };
+    }
     return {
       kind: "member",
-      accountId: aliasedSubject,
+      accountId: identity.commonName,
       organizationId: config.organizationId,
       organizationName: config.organizationName,
       organizationSlug: config.organizationSlug,
       email: serviceTokenEmail(identity.commonName),
       name: identity.commonName,
       avatarUrl: null,
-      roles: ["admin", ...groups],
-      actor: {
-        kind: "service-token",
-        id: identity.commonName,
-        label: identity.commonName,
-      },
+      roles: groups.length > 0 ? groups : ["member"],
+      actor,
     };
   }
 
@@ -84,7 +99,7 @@ export const principalFromAccessClaims = (
     organizationId: config.organizationId,
     organizationName: config.organizationName,
     organizationSlug: config.organizationSlug,
-    email: serviceToken ? serviceTokenEmail(identity.commonName) : identity.email,
+    email: identity.email,
     name: typeof nameClaim === "string" ? nameClaim : identity.commonName || null,
     avatarUrl: null,
     roles: isAdmin ? ["admin", ...groups] : groups.length > 0 ? groups : ["member"],
@@ -139,11 +154,11 @@ export const makeAccessVerifier = (
 
       const claims = verified.payload as Record<string, unknown>;
       const identity = accessIdentity(claims);
-      const aliasedSubject =
+      const alias =
         isServiceToken(identity) && aliasLookup
           ? yield* aliasLookup(identity.commonName)
           : null;
-      return principalFromAccessClaims(claims, config, aliasedSubject);
+      return principalFromAccessClaims(claims, config, alias);
     });
 
   return { verify };
