@@ -49,7 +49,7 @@ export function HoverCardTimestamp({
   className,
 }: HoverCardTimestampProps) {
   return (
-    <HoverCard openDelay={0} closeDelay={0}>
+    <HoverCard openDelay={0} closeDelay={150}>
       <HoverCardTrigger asChild>
         <span className={cn("font-mono whitespace-nowrap", className)}>
           {display ?? absolute(timestamp)}

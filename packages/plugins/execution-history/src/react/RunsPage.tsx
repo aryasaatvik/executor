@@ -46,13 +46,19 @@ const readStoredColumns = (): RunColumns => {
   if (typeof window === "undefined") return DEFAULT_COLUMNS;
   const raw = window.localStorage.getItem(COLUMNS_STORAGE_KEY);
   if (raw == null) return DEFAULT_COLUMNS;
-  const visible = new Set(raw.split(",").filter(Boolean));
+  // Start from the current defaults and override only the keys actually stored,
+  // so a column added in a later release keeps its default visibility instead
+  // of being read as hidden for existing users.
   const next = { ...DEFAULT_COLUMNS };
-  for (const key of Object.keys(next) as RunColumnKey[]) {
-    next[key] = visible.has(key);
+  for (const pair of raw.split(",")) {
+    const [key, value] = pair.split("=");
+    if (key != null && key in next) next[key as RunColumnKey] = value === "1";
   }
   return next;
 };
+
+const serializeColumns = (columns: RunColumns): string =>
+  (Object.keys(columns) as RunColumnKey[]).map((key) => `${key}=${columns[key] ? 1 : 0}`).join(",");
 
 export function RunsPage() {
   const [filters, setFilters] = useState<RunsFilters>(emptyRunsFilters);
@@ -80,8 +86,7 @@ export function RunsPage() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const visible = (Object.keys(columns) as RunColumnKey[]).filter((key) => columns[key]);
-    window.localStorage.setItem(COLUMNS_STORAGE_KEY, visible.join(","));
+    window.localStorage.setItem(COLUMNS_STORAGE_KEY, serializeColumns(columns));
   }, [columns]);
 
   // Keep the latest view/selected reachable from a stable keydown listener.
