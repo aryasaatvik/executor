@@ -6,7 +6,12 @@
 import { Effect, Layer, Redacted } from "effect";
 import { HttpServerResponse } from "effect/unstable/http";
 
-import { AuthContext, NoOrganization, Unauthorized } from "@executor-js/api/server";
+import {
+  AuthContext,
+  authContextFromPrincipal,
+  NoOrganization,
+  Unauthorized,
+} from "@executor-js/api/server";
 
 import {
   OrgAuth,
@@ -93,24 +98,20 @@ export const OrgAuthLive = Layer.effect(
           // (org-settings → domain verification) is niche; URL-scoping it would
           // mean converting this to an HttpRouter middleware — deferred.
           const session = sessionFromSealed(result, Redacted.value(credential));
-          const auth = {
+          // Wrap the WorkOS session into a neutral `Principal` and let
+          // `authContextFromPrincipal` derive everything (incl. the run actor),
+          // so this path never re-implements the actor/label logic. `roles` is
+          // empty (the WorkOS control plane doesn't resolve them here; no cloud
+          // handler reads them) and `organizationName` is unused by AuthContext.
+          const auth = authContextFromPrincipal({
             accountId: session.accountId,
             organizationId: result.organizationId,
+            organizationName: "",
             email: session.email,
             name: session.name,
             avatarUrl: session.avatarUrl,
-            // The unified `AuthContext` carries roles; cloud's WorkOS control
-            // plane does not resolve them here, so pass an empty list (no cloud
-            // handler reads roles today).
             roles: [],
-            // Attribute runs to the WorkOS user (cloud has no service-token
-            // actors); mirrors `executionActorFromPrincipal`'s user default.
-            actor: {
-              kind: "user",
-              id: session.accountId,
-              label: session.name ?? (session.email.length > 0 ? session.email : null),
-            },
-          };
+          });
 
           return yield* Effect.provideService(httpEffect, AuthContext, auth);
         }),
