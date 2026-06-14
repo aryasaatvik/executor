@@ -4,7 +4,14 @@ import { cn } from "@executor-js/react/lib/utils";
 
 import type { RunsSortField } from "./use-runs-list";
 import type { RunColumns } from "./view";
-import { COL_ACTOR, COL_DURATION, COL_INTERACTION, COL_TOOLS, COL_TRIGGER } from "./run-row";
+import {
+  COL_ACTOR,
+  COL_DURATION,
+  COL_INTERACTION,
+  COL_LOG,
+  COL_TOOLS,
+  COL_TRIGGER,
+} from "./run-row";
 
 // ---------------------------------------------------------------------------
 // RunsColumnHeader — sticky header row aligned to RunListRow's layout.
@@ -106,6 +113,9 @@ export function RunsColumnHeader({
 
       {/* Interaction */}
       {columns.interaction ? <span className={COL_INTERACTION}>interaction</span> : null}
+
+      {/* Log */}
+      {columns.log ? <span className={COL_LOG}>log</span> : null}
 
       {/* Code */}
       <span className="min-w-0 flex-1 truncate">code</span>
