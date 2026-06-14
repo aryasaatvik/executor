@@ -637,9 +637,11 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
 
       // Resolve a display label + kind per actor. The facet keys on the STABLE
       // `actorId`, but renders the human snapshot (`actorLabel`/`actorKind`) from
-      // that actor's most-recent run — one bounded query per distinct actor
-      // (small cardinality within an owner scope; the null-actor group needs no
-      // lookup). Keeps the facet self-describing like status/trigger.
+      // that actor's most-recent run WITHIN the current filter window — so the
+      // label stays consistent with the (filtered) count shown beside it, rather
+      // than a globally-newest snapshot that could predate the window. One query
+      // per distinct actor; the null-actor group needs no lookup.
+      const actorFacetWhere = buildRunsWhere(options, "actorId");
       const actorIds = actorGroups
         .map((group) => (typeof group.value === "string" ? group.value : null))
         .filter(Predicate.isNotNull);
@@ -648,7 +650,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         (actorId) =>
           runsC
             .query({
-              where: { actorId },
+              where: { ...actorFacetWhere, actorId: { in: [actorId] } },
               orderBy: [{ field: "startedAt", direction: "desc" }],
               limit: 1,
             })
@@ -659,7 +661,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
                 kind: rows[0]?.data.actorKind ?? null,
               })),
             ),
-        { concurrency: "unbounded" },
+        // Cap the burst: distinct-actor cardinality is normally small, but a
+        // workspace with many service tokens shouldn't fan out unboundedly.
+        { concurrency: 10 },
       );
       const actorMetaById = new Map(actorMeta.map((entry) => [entry.actorId, entry]));
       const actorCounts: RunActorCount[] = actorGroups.map((group) => {
