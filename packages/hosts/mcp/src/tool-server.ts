@@ -49,6 +49,7 @@ import type {
   Executor,
   ToolSchemaView,
 } from "@executor-js/sdk";
+import type { ExecutionTrigger } from "@executor-js/sdk/core";
 import type * as Tracer from "effect/Tracer";
 import {
   createExecutionEngine,
@@ -116,6 +117,8 @@ class CfWorkerJsonSchemaValidator implements jsonSchemaValidator {
 // ---------------------------------------------------------------------------
 
 type SharedMcpServerConfig = {
+  /** What initiated executions from this MCP connection. */
+  readonly trigger?: ExecutionTrigger;
   /**
    * Pre-built `execute` tool description. When provided, the factory skips
    * its internal `engine.getDescription` yield. Useful when the caller
@@ -1674,6 +1677,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
     ): Effect.Effect<McpToolResult, E> =>
       engine
         .execute(code, {
+          trigger: config.trigger,
           onElicitation: makeMcpElicitationHandler(server, extra.requestId, debugLog),
         })
         .pipe(Effect.map(toMcpResult));
@@ -1696,7 +1700,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         if (elicitationMode.mode === "native") {
           return yield* executeWithNativeElicitation(code, extra);
         }
-        const outcome = yield* engine.executeWithPause(code);
+        const outcome = yield* engine.executeWithPause(code, { trigger: config.trigger });
         debugLog("execute.paused_flow_result", {
           status: outcome.status,
           executionId: outcome.status === "paused" ? outcome.execution.id : undefined,
@@ -1822,7 +1826,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         if (elicitationMode.mode === "native") {
           return yield* executeWithNativeElicitation(boundCode, extra);
         }
-        const outcome = yield* engine.executeWithPause(boundCode);
+        const outcome = yield* engine.executeWithPause(boundCode, { trigger: config.trigger });
         debugLog("execute_action.paused_flow_result", {
           status: outcome.status,
           executionId: outcome.status === "paused" ? outcome.execution.id : undefined,

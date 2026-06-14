@@ -18,8 +18,27 @@ export type ExecutionToolCallId = typeof ExecutionToolCallId.Type;
 export const ExecutionInteractionId = Schema.String.pipe(Schema.brand("ExecutionInteractionId"));
 export type ExecutionInteractionId = typeof ExecutionInteractionId.Type;
 
+/**
+ * The credential identity a run acts as — the "who" behind a trigger.
+ *
+ * `kind` is the credential class (e.g. `"user"`, `"service-token"`); `id` is the
+ * STABLE identity used for filtering/grouping (a user subject, a token client
+ * id) — it must not change when a display name is edited; `label` is a
+ * human-facing string (machine name, email, display name) or null. Hosts that
+ * know more than the neutral `Principal` (e.g. a Cloudflare service token's
+ * client id) supply this so the actor stays distinguishable from the human
+ * subject it may be aliased to act as.
+ */
+export type ExecutionActor = {
+  readonly kind: string;
+  readonly id: string;
+  readonly label: string | null;
+};
+
 export type ExecutionTrigger = {
   readonly kind: string;
+  /** Who/what this run acts as; recorded on `ExecutionStarted` for attribution. */
+  readonly actor?: ExecutionActor;
   readonly metadata?: Record<string, unknown>;
 };
 

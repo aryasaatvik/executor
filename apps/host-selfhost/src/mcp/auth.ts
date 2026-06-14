@@ -235,6 +235,7 @@ export const selfHostMcpAuth: Layer.Layer<McpAuthProvider, never, BetterAuth | I
             name: user.name ?? null,
             avatarUrl: user.image ?? null,
             roles: parseRoles(userRole(user)),
+            kind: "member",
             orgRoleModel: "organization",
             orgRole,
           } satisfies Principal;

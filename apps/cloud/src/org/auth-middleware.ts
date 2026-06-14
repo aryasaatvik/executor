@@ -79,6 +79,11 @@ const OrgAuthMiddleware = HttpRouter.middleware<{
           name: session.name,
           avatarUrl: session.avatarUrl,
           roles: [],
+          actor: {
+            kind: "user",
+            id: session.accountId,
+            label: session.name ?? (session.email.length > 0 ? session.email : null),
+          },
         });
 
         return yield* Effect.provideContext(

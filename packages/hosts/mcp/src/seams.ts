@@ -39,6 +39,10 @@ import type { OrgWriteAccess } from "@executor-js/sdk";
 // ---------------------------------------------------------------------------
 
 const PrincipalFields = {
+  /** Discriminant mirrored from `@executor-js/api`'s identity `Principal`: the
+   *  MCP boundary carries an acting member, never the org-level platform
+   *  credential, so this arm is the only one that crosses it. */
+  kind: Schema.Literal("member"),
   accountId: Schema.String,
   organizationId: Schema.String,
   organizationName: Schema.String,
@@ -50,6 +54,18 @@ const PrincipalFields = {
   name: Schema.NullOr(Schema.String),
   avatarUrl: Schema.NullOr(Schema.String),
   roles: Schema.Array(Schema.String),
+  // The credential identity this principal acts AS, for run attribution
+  // (structurally the SDK's `ExecutionActor`). Schema'd here — not just passed
+  // through — so it survives the cross-isolate session-store serialization the
+  // cloud DO does. Unset means "attribute to the user" (derived downstream); a
+  // host sets it when a machine credential acts as a human (a service token).
+  actor: Schema.optional(
+    Schema.Struct({
+      kind: Schema.String,
+      id: Schema.String,
+      label: Schema.NullOr(Schema.String),
+    }),
+  ),
 } as const;
 
 export const Principal = Schema.Union([

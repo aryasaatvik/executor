@@ -99,6 +99,7 @@ const principalFromSession = (
       name: resolved.user.name ?? null,
       avatarUrl: resolved.user.image ?? null,
       roles: parseRoles(resolved.user.role ?? null),
+      kind: "member",
       orgRoleModel: "organization" as const,
       orgRole,
     })),

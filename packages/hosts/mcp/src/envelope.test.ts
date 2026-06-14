@@ -33,6 +33,7 @@ import {
 const DISCOVERY_PATH = "/.well-known/oauth-protected-resource" as const;
 
 const TEST_PRINCIPAL: Principal = {
+  kind: "member",
   accountId: "acct_test",
   organizationId: "org_test",
   organizationName: "Test Org",

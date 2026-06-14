@@ -66,6 +66,7 @@ const adminAuth = {
   name: "Admin",
   avatarUrl: null,
   roles: [],
+  actor: { kind: "user", id: "user_admin", label: "Admin" },
 };
 
 const provide = (

@@ -112,6 +112,7 @@ const principalFromToken = (
   organizationId: organization.id,
   organizationName: organization.name,
   ...(organization.slug === undefined ? {} : { organizationSlug: organization.slug }),
+  kind: "member",
   orgRoleModel: "organization",
   orgRole: organization.memberRole,
   email: "",
