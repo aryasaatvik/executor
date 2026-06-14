@@ -44,29 +44,45 @@ describe("principalFromAccessClaims", () => {
     expect(p.email).toBe("df8a20db.access@service-token.internal"); // synthetic, non-routable
     expect(p.roles).toEqual(["member"]); // a token is a member, not an admin
     expect(p.organizationId).toBe("default");
+    // Even unaliased, a token attributes runs to itself (client id) so runs stay
+    // filterable by the token — labelled by the client id (no machine name yet).
+    expect(p.actor).toEqual({
+      kind: "service-token",
+      id: "df8a20db.access",
+      label: "df8a20db.access",
+    });
   });
 
-  it("aliases a SERVICE TOKEN to its mapped human subject, as admin", () => {
-    // When the verifier resolves an alias (common_name → subject), the token
-    // ACTS AS that human: same subject partition, admin role, synthetic email.
-    const p = principalFromAccessClaims(
-      { common_name: "df8a20db.access", type: "app" },
-      config,
-      "527888ce-human-sub",
-    );
+  it("aliases a SERVICE TOKEN to its mapped human identity, as admin", () => {
+    // When the verifier resolves an alias, the token ACTS AS that human: same
+    // subject partition, admin role, the human's stored email/name surfaced, and
+    // an actor keyed by the client id (labelled by the friendly machine name).
+    const p = principalFromAccessClaims({ common_name: "df8a20db.access", type: "app" }, config, {
+      subject: "527888ce-human-sub",
+      machineName: "phoenix",
+      email: "human@example.com",
+      name: "Human",
+    });
     expect(p.accountId).toBe("527888ce-human-sub");
     expect(p.roles).toContain("admin");
-    expect(p.email).toBe("df8a20db.access@service-token.internal"); // synthetic, non-routable
-    expect(p.name).toBe("df8a20db.access");
+    expect(p.email).toBe("human@example.com"); // the human's stored email, not synthetic
+    expect(p.name).toBe("Human");
+    expect(p.actor).toEqual({
+      kind: "service-token",
+      id: "df8a20db.access",
+      label: "phoenix",
+    });
   });
 
-  it("ignores an aliasedSubject for a human (sub present) — no token hijack", () => {
-    const p = principalFromAccessClaims(
-      { sub: "real-human", email: "person@example.com" },
-      config,
-      "someone-else",
-    );
+  it("ignores an alias for a human (sub present) — no token hijack", () => {
+    const p = principalFromAccessClaims({ sub: "real-human", email: "person@example.com" }, config, {
+      subject: "someone-else",
+      machineName: null,
+      email: null,
+      name: null,
+    });
     expect(p.accountId).toBe("real-human");
+    expect(p.actor).toBeUndefined(); // humans get the default user actor downstream
   });
 
   it("defaults to member when there are no groups and no admin match", () => {
