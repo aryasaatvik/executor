@@ -10,8 +10,15 @@ import type { RunColumns } from "./view";
 // Column slot classes — RunListRow and RunsColumnHeader both apply these
 // fixed-width, same-breakpoint slots (after the dot/started/status base
 // columns) so the header and rows stay aligned across screen sizes.
-export const COL_TRIGGER = "hidden 2xl:block w-[120px] shrink-0";
-export const COL_DURATION = "hidden md:block w-[100px] shrink-0";
+//
+// Trigger/duration carry inline content (a dot+label, a sort button), so their
+// visible state must be a flex display — `xl:flex`/`md:flex` rather than
+// `xl:block`/`md:block`. A `block` slot composed with an element's own
+// `inline-flex` makes tailwind-merge pick one display value, which silently
+// desyncs header and row (the trigger column) or wraps the sort label onto a
+// second line (duration). A single flex display keeps both in lockstep.
+export const COL_TRIGGER = "hidden w-[120px] shrink-0 xl:flex";
+export const COL_DURATION = "hidden w-[100px] shrink-0 md:flex";
 export const COL_TOOLS = "hidden xl:block w-[80px] shrink-0";
 export const COL_INTERACTION = "hidden xl:block w-[100px] shrink-0";
 
@@ -68,12 +75,9 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
 
       {/* Trigger (optional) */}
       {columns.trigger ? (
-        <span className={cn(COL_TRIGGER, "inline-flex gap-1")}>
-          <span
-            aria-hidden
-            className={cn("mt-px size-1.5 shrink-0 self-center rounded-full", trigger.dot)}
-          />
-          <span className={trigger.text}>{trigger.label}</span>
+        <span className={cn(COL_TRIGGER, "items-center gap-1")}>
+          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
+          <span className={cn("truncate", trigger.text)}>{trigger.label}</span>
         </span>
       ) : null}
 
