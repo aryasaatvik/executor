@@ -154,4 +154,79 @@ describe("execution-history list — meta, facets, keyset", () => {
       expect(page.meta).toBeNull();
     }),
   );
+
+  it.effect("attributes runs to their actor: facet (label+kind) + filter", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeExecutor();
+      const seedActor = (
+        id: string,
+        startedAt: number,
+        actor: { kind: string; id: string; label: string | null },
+      ) =>
+        Effect.gen(function* () {
+          const executionId = ExecutionId.make(id);
+          yield* executor.executionHistory.handleEvent(
+            new ExecutionStarted({
+              executionId,
+              owner,
+              code: "noop",
+              trigger: { kind: "mcp", actor },
+              startedAt: new Date(startedAt),
+            }),
+          );
+          yield* executor.executionHistory.handleEvent(
+            new ExecutionFinished({
+              executionId,
+              owner,
+              status: "completed",
+              result: { ok: true },
+              logs: [],
+              completedAt: new Date(startedAt + 100),
+            }),
+          );
+        });
+
+      const token = { kind: "service-token", id: "tok_abc.access", label: "executor-phoenix" };
+      const user = { kind: "user", id: "sub_123", label: "saatvik@example.com" };
+      yield* seedActor("a1", 1000, token);
+      yield* seedActor("a2", 2000, token);
+      yield* seedActor("a3", 3000, user);
+
+      // The actor facet keys on the stable `actorId` and renders the most-recent
+      // run's label + kind snapshot.
+      const page = yield* executor.executionHistory.list({ limit: 10 });
+      expect(
+        Object.fromEntries((page.meta?.actorCounts ?? []).map((entry) => [entry.actorId, entry])),
+      ).toEqual({
+        "tok_abc.access": {
+          actorId: "tok_abc.access",
+          actorLabel: "executor-phoenix",
+          actorKind: "service-token",
+          count: 2,
+        },
+        sub_123: {
+          actorId: "sub_123",
+          actorLabel: "saatvik@example.com",
+          actorKind: "user",
+          count: 1,
+        },
+      });
+
+      // Filtering by the token returns only its runs; the facet omits its own
+      // filter so every actor stays visible in the rail.
+      const filtered = yield* executor.executionHistory.list({
+        limit: 10,
+        actorFilter: ["tok_abc.access"],
+      });
+      expect(filtered.runs.map((r) => r.executionId)).toEqual(["a2", "a1"]);
+      expect(filtered.meta?.filterRowCount).toBe(2);
+      expect(filtered.meta?.actorCounts).toHaveLength(2);
+
+      // The persisted run carries the actor snapshot for the column/detail.
+      const run = filtered.runs[0];
+      expect(run?.actorId).toBe("tok_abc.access");
+      expect(run?.actorLabel).toBe("executor-phoenix");
+      expect(run?.actorKind).toBe("service-token");
+    }),
+  );
 });

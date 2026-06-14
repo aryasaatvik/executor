@@ -89,10 +89,13 @@ interface RunBuffer {
   owner: Owner;
   startedAt: number;
   // Retained from ExecutionStarted so every re-write of the run row (waiting,
-  // terminal) keeps the code + trigger — later events don't carry them.
+  // terminal) keeps the code + trigger + actor — later events don't carry them.
   code: string;
   triggerKind: string | null;
   triggerMetaJson: string | null;
+  actorId: string | null;
+  actorLabel: string | null;
+  actorKind: string | null;
   hadInteraction: boolean;
   toolCalls: Map<string, BufferedToolCall>;
   interactions: Map<string, BufferedInteraction>;
@@ -121,6 +124,7 @@ export interface RunsCursor {
 export interface ExecutionHistoryListOptions {
   readonly statusFilter?: readonly RunStatus[];
   readonly triggerFilter?: readonly string[];
+  readonly actorFilter?: readonly string[];
   readonly timeRange?: { readonly from?: number; readonly to?: number };
   readonly hadInteraction?: boolean;
   /** Live-tail floor: only runs whose `startedAt` is strictly greater. */
@@ -138,6 +142,14 @@ export interface RunStatusCount {
 
 export interface RunTriggerCount {
   readonly triggerKind: string | null;
+  readonly count: number;
+}
+
+export interface RunActorCount {
+  readonly actorId: string | null;
+  /** A display label for the actor (the most-recent run's snapshot), or null. */
+  readonly actorLabel: string | null;
+  readonly actorKind: string | null;
   readonly count: number;
 }
 
@@ -168,6 +180,7 @@ export interface ExecutionListMeta {
   readonly filterRowCount: number;
   readonly statusCounts: readonly RunStatusCount[];
   readonly triggerCounts: readonly RunTriggerCount[];
+  readonly actorCounts: readonly RunActorCount[];
   readonly interactionCounts: RunInteractionCounts;
   readonly chartBucketMs: number;
   readonly chartData: readonly RunChartBucket[];
@@ -206,6 +219,7 @@ export interface ExecutionHistoryStore {
 type RunsWhere = {
   status?: { in: readonly RunStatus[] };
   triggerKind?: { in: readonly string[] };
+  actorId?: { in: readonly string[] };
   startedAt?: { gte?: number; lte?: number; gt?: number };
   hadInteraction?: { eq: boolean };
 };
@@ -215,7 +229,7 @@ type RunsWhere = {
  *  shows every option for the field you're filtering on). */
 const buildRunsWhere = (
   options: ExecutionHistoryListOptions,
-  omit?: "status" | "triggerKind" | "hadInteraction",
+  omit?: "status" | "triggerKind" | "actorId" | "hadInteraction",
 ): RunsWhere => {
   const where: RunsWhere = {};
   if (omit !== "status" && options.statusFilter && options.statusFilter.length > 0) {
@@ -223,6 +237,9 @@ const buildRunsWhere = (
   }
   if (omit !== "triggerKind" && options.triggerFilter && options.triggerFilter.length > 0) {
     where.triggerKind = { in: options.triggerFilter };
+  }
+  if (omit !== "actorId" && options.actorFilter && options.actorFilter.length > 0) {
+    where.actorId = { in: options.actorFilter };
   }
   const startedAt: { gte?: number; lte?: number; gt?: number } = {};
   if (options.timeRange?.from != null) startedAt.gte = options.timeRange.from;
@@ -273,12 +290,19 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     const startedAt = event.startedAt.getTime();
     const triggerKind = event.trigger?.kind ?? null;
     const triggerMetaJson = toJson(event.trigger?.metadata);
+    const actor = event.trigger?.actor;
+    const actorId = actor?.id ?? null;
+    const actorLabel = actor?.label ?? null;
+    const actorKind = actor?.kind ?? null;
     buffers.set(event.executionId, {
       owner,
       startedAt,
       code: event.code,
       triggerKind,
       triggerMetaJson,
+      actorId,
+      actorLabel,
+      actorKind,
       hadInteraction: false,
       toolCalls: new Map(),
       interactions: new Map(),
@@ -292,6 +316,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       logsJson: null,
       triggerKind,
       triggerMetaJson,
+      actorId,
+      actorLabel,
+      actorKind,
       startedAt,
       completedAt: null,
       durationMs: null,
@@ -369,6 +396,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       logsJson: null,
       triggerKind: buffer.triggerKind,
       triggerMetaJson: buffer.triggerMetaJson,
+      actorId: buffer.actorId,
+      actorLabel: buffer.actorLabel,
+      actorKind: buffer.actorKind,
       startedAt: buffer.startedAt,
       completedAt: null,
       durationMs: null,
@@ -412,6 +442,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       const code = buffer?.code ?? existing?.data.code ?? "";
       const triggerKind = buffer?.triggerKind ?? existing?.data.triggerKind ?? null;
       const triggerMetaJson = buffer?.triggerMetaJson ?? existing?.data.triggerMetaJson ?? null;
+      const actorId = buffer?.actorId ?? existing?.data.actorId ?? null;
+      const actorLabel = buffer?.actorLabel ?? existing?.data.actorLabel ?? null;
+      const actorKind = buffer?.actorKind ?? existing?.data.actorKind ?? null;
       const startedAt = buffer?.startedAt ?? existing?.data.startedAt ?? completedAt;
       const hadInteraction =
         buffer?.hadInteraction ?? (existing?.data.hadInteraction || interactionEntries.length > 0);
@@ -425,6 +458,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         logsJson: toJson(event.logs),
         triggerKind,
         triggerMetaJson,
+        actorId,
+        actorLabel,
+        actorKind,
         startedAt,
         completedAt,
         durationMs: completedAt - startedAt,
@@ -507,6 +543,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         filterRowCount,
         statusGroups,
         triggerGroups,
+        actorGroups,
         interactionGroups,
         stats,
         startedAtStats,
@@ -521,6 +558,10 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
           runsC.aggregate.groupCount({
             field: "triggerKind",
             where: buildRunsWhere(options, "triggerKind"),
+          }),
+          runsC.aggregate.groupCount({
+            field: "actorId",
+            where: buildRunsWhere(options, "actorId"),
           }),
           runsC.aggregate.groupCount({
             field: "hadInteraction",
@@ -593,6 +634,44 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         triggerKind: typeof group.value === "string" ? group.value : null,
         count: group.count,
       }));
+
+      // Resolve a display label + kind per actor. The facet keys on the STABLE
+      // `actorId`, but renders the human snapshot (`actorLabel`/`actorKind`) from
+      // that actor's most-recent run — one bounded query per distinct actor
+      // (small cardinality within an owner scope; the null-actor group needs no
+      // lookup). Keeps the facet self-describing like status/trigger.
+      const actorIds = actorGroups
+        .map((group) => (typeof group.value === "string" ? group.value : null))
+        .filter(Predicate.isNotNull);
+      const actorMeta = yield* Effect.forEach(
+        actorIds,
+        (actorId) =>
+          runsC
+            .query({
+              where: { actorId },
+              orderBy: [{ field: "startedAt", direction: "desc" }],
+              limit: 1,
+            })
+            .pipe(
+              Effect.map((rows) => ({
+                actorId,
+                label: rows[0]?.data.actorLabel ?? null,
+                kind: rows[0]?.data.actorKind ?? null,
+              })),
+            ),
+        { concurrency: "unbounded" },
+      );
+      const actorMetaById = new Map(actorMeta.map((entry) => [entry.actorId, entry]));
+      const actorCounts: RunActorCount[] = actorGroups.map((group) => {
+        const actorId = typeof group.value === "string" ? group.value : null;
+        const resolved = actorId !== null ? actorMetaById.get(actorId) : undefined;
+        return {
+          actorId,
+          actorLabel: resolved?.label ?? null,
+          actorKind: resolved?.kind ?? null,
+          count: group.count,
+        };
+      });
       const withInteraction = interactionGroups.find((group) => group.value === true)?.count ?? 0;
       const withoutInteraction =
         interactionGroups.find((group) => group.value === false)?.count ?? 0;
@@ -604,6 +683,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         filterRowCount,
         statusCounts,
         triggerCounts,
+        actorCounts,
         interactionCounts: { withInteraction, withoutInteraction },
         chartBucketMs: bucketMs,
         chartData,
