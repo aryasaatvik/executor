@@ -300,7 +300,9 @@ function DetailContent(props: {
         </SheetDescription>
       </SheetHeader>
 
-      <Tabs defaultValue="properties" className="min-h-0 flex-1 gap-0">
+      {/* Key by run so prev/next nav remounts the tabs and resets to Properties
+          rather than stranding the user on an empty tab from the prior run. */}
+      <Tabs key={run.executionId} defaultValue="properties" className="min-h-0 flex-1 gap-0">
         <TabsList variant="line" className="mx-5 mt-3">
           <TabsTrigger value="properties">Properties</TabsTrigger>
           <TabsTrigger value="tools">
