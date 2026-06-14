@@ -13,6 +13,7 @@ import type {
   SaveArtifactInput,
   ToolFileValue,
 } from "@executor-js/sdk";
+import type { ExecutionTrigger } from "@executor-js/sdk/core";
 import type * as Tracer from "effect/Tracer";
 import {
   createExecutionEngine,
@@ -196,6 +197,8 @@ type SharedMcpServerConfig = {
    * restore. Best-effort: failures are swallowed and never affect the session.
    */
   readonly onAppsEnabledChange?: (appsEnabled: boolean) => Effect.Effect<void>;
+  /** What initiated executions from this MCP connection. */
+  readonly trigger?: ExecutionTrigger;
   /**
    * The client identity self-reported at a previous `initialize` (or in a
    * modern request's `_meta`), restored for the same reason as
@@ -347,6 +350,7 @@ export type NativeExecutionServices<
   readonly code: string;
   readonly requestContext: RequestContext;
   readonly source: "execute" | "execute_action";
+  readonly trigger?: ExecutionTrigger;
   readonly debugLog: (event: string, data: Record<string, unknown>) => void;
   readonly complete: (result: Parameters<typeof formatExecuteResult>[0]) => McpToolResult;
   readonly resume: (
@@ -1168,6 +1172,7 @@ export const buildExecutorMcpTools = <
         code,
         requestContext: extra,
         source,
+        trigger: config.trigger,
         debugLog,
         complete: toMcpResult,
         resume: resumeWithLifecycle,
@@ -1198,7 +1203,7 @@ export const buildExecutorMcpTools = <
         if (elicitationMode.mode === "native") {
           return yield* executeWithNativeElicitation(code, extra, "execute");
         }
-        const outcome = yield* engine.executeWithPause(code);
+        const outcome = yield* engine.executeWithPause(code, { trigger: config.trigger });
         debugLog("execute.paused_flow_result", {
           status: outcome.status,
           executionId: outcome.status === "paused" ? outcome.execution.id : undefined,
@@ -1315,7 +1320,7 @@ export const buildExecutorMcpTools = <
         if (elicitationMode.mode === "native") {
           return yield* executeWithNativeElicitation(boundCode, extra, "execute_action");
         }
-        const outcome = yield* engine.executeWithPause(boundCode);
+        const outcome = yield* engine.executeWithPause(boundCode, { trigger: config.trigger });
         debugLog("execute_action.paused_flow_result", {
           status: outcome.status,
           executionId: outcome.status === "paused" ? outcome.execution.id : undefined,
