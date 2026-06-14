@@ -34,6 +34,12 @@ const RunTriggerCount = Schema.Struct({
   triggerKind: Schema.NullOr(Schema.String),
   count: Schema.Number,
 });
+const RunActorCount = Schema.Struct({
+  actorId: Schema.NullOr(Schema.String),
+  actorLabel: Schema.NullOr(Schema.String),
+  actorKind: Schema.NullOr(Schema.String),
+  count: Schema.Number,
+});
 const RunInteractionCounts = Schema.Struct({
   withInteraction: Schema.Number,
   withoutInteraction: Schema.Number,
@@ -58,6 +64,7 @@ export const ExecutionListMeta = Schema.Struct({
   filterRowCount: Schema.Number,
   statusCounts: Schema.Array(RunStatusCount),
   triggerCounts: Schema.Array(RunTriggerCount),
+  actorCounts: Schema.Array(RunActorCount),
   interactionCounts: RunInteractionCounts,
   chartBucketMs: Schema.Number,
   chartData: Schema.Array(RunChartBucket),
@@ -93,8 +100,8 @@ export const ListToolCallsResponse = Schema.Struct({
 // Query / path params
 //
 // Numeric filters arrive as strings and decode via `NumberFromString`. The
-// `status`/`trigger` CSV lists stay raw strings the handler splits, mirroring
-// how the store's `list` takes `statusFilter`/`triggerFilter` arrays. The
+// `status`/`trigger`/`actor` CSV lists stay raw strings the handler splits,
+// mirroring how the store's `list` takes the matching filter arrays. The
 // boolean `interaction` is carried as a string ("true"/"false") and
 // interpreted in the handler — the same convention core uses for
 // `includeAnnotations`/`includeBlocked`.
@@ -103,6 +110,8 @@ export const ListToolCallsResponse = Schema.Struct({
 const ListRunsQuery = Schema.Struct({
   status: Schema.optional(Schema.String),
   trigger: Schema.optional(Schema.String),
+  // CSV of actor ids (token client ids / user subjects) to filter runs by.
+  actor: Schema.optional(Schema.String),
   from: Schema.optional(Schema.NumberFromString),
   to: Schema.optional(Schema.NumberFromString),
   interaction: Schema.optional(Schema.String),

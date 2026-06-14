@@ -4,7 +4,7 @@ import { Badge } from "@executor-js/react/components/badge";
 
 import type { RunRow } from "../sdk/collections";
 import { formatDateTime, formatDuration, formatRelative, statusLabel } from "./format";
-import { STATUS_TONES, triggerTone } from "./status";
+import { actorTone, STATUS_TONES, triggerTone } from "./status";
 import type { RunColumns } from "./view";
 
 // Column slot classes — RunListRow and RunsColumnHeader both apply these
@@ -18,6 +18,9 @@ import type { RunColumns } from "./view";
 // desyncs header and row (the trigger column) or wraps the sort label onto a
 // second line (duration). A single flex display keeps both in lockstep.
 export const COL_TRIGGER = "hidden w-[120px] shrink-0 xl:flex";
+// Actor carries a dot + label (machine name / email / user), so it is a flex
+// slot like trigger. Wider, since labels are longer than trigger kinds.
+export const COL_ACTOR = "hidden w-[170px] shrink-0 lg:flex";
 export const COL_DURATION = "hidden w-[100px] shrink-0 md:flex";
 export const COL_TOOLS = "hidden xl:block w-[80px] shrink-0";
 export const COL_INTERACTION = "hidden xl:block w-[100px] shrink-0";
@@ -33,6 +36,7 @@ export interface RunListRowProps {
 export function RunListRow({ run, selected, isPast, columns, onSelect }: RunListRowProps) {
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
+  const actor = actorTone(run.actorKind);
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
 
   return (
@@ -78,6 +82,25 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         <span className={cn(COL_TRIGGER, "items-center gap-1")}>
           <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
           <span className={cn("truncate", trigger.text)}>{trigger.label}</span>
+        </span>
+      ) : null}
+
+      {/* Actor (optional) */}
+      {columns.actor ? (
+        <span className={cn(COL_ACTOR, "items-center gap-1")}>
+          {run.actorId !== null ? (
+            <>
+              <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", actor.dot)} />
+              <span
+                className={cn("truncate", actor.text)}
+                title={run.actorLabel ?? run.actorId ?? undefined}
+              >
+                {run.actorLabel ?? run.actorId}
+              </span>
+            </>
+          ) : (
+            <span className="text-muted-foreground/50">—</span>
+          )}
         </span>
       ) : null}
 

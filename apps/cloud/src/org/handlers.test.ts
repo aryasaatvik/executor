@@ -53,6 +53,7 @@ const adminAuth = {
   name: "Admin",
   avatarUrl: null,
   roles: [],
+  actor: { kind: "user", id: "user_admin", label: "Admin" },
 };
 
 const memberAuth = {
@@ -62,6 +63,7 @@ const memberAuth = {
   name: "Member",
   avatarUrl: null,
   roles: [],
+  actor: { kind: "user", id: "user_member", label: "Member" },
 };
 
 const provide = (auth: typeof adminAuth, workosOverrides: StubOverrides = {}) =>

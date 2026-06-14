@@ -5,7 +5,13 @@ import { cn } from "@executor-js/react/lib/utils";
 
 import { RUN_COLUMN_LABELS, type RunColumnKey, type RunColumns } from "./view";
 
-const COLUMN_KEYS: readonly RunColumnKey[] = ["trigger", "duration", "tools", "interaction"];
+const COLUMN_KEYS: readonly RunColumnKey[] = [
+  "trigger",
+  "actor",
+  "duration",
+  "tools",
+  "interaction",
+];
 
 export function ViewOptions(props: {
   readonly columns: RunColumns;

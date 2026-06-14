@@ -12,9 +12,9 @@ export const withExecutionUsageTracking = <E extends Cause.YieldableError>(
     engine
       .execute(code, options)
       .pipe(Effect.tap(() => Effect.sync(() => trackUsage(organizationId)))),
-  executeWithPause: (code) =>
+  executeWithPause: (code, options) =>
     engine
-      .executeWithPause(code)
+      .executeWithPause(code, options)
       .pipe(Effect.tap(() => Effect.sync(() => trackUsage(organizationId)))),
   // resume doesn't count as usage
   resume: (executionId, response) => engine.resume(executionId, response),

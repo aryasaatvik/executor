@@ -21,6 +21,7 @@ export type RunsSortField = "startedAt" | "durationMs";
 export interface RunsFilters {
   readonly status: readonly string[];
   readonly trigger: readonly string[];
+  readonly actor: readonly string[];
   readonly interaction: "true" | "false" | null;
   readonly from: number | null;
   readonly to: number | null;
@@ -34,6 +35,7 @@ const LIVE_INTERVAL_MS = 5000;
 export const emptyRunsFilters: RunsFilters = {
   status: [],
   trigger: [],
+  actor: [],
   interaction: null,
   from: null,
   to: null,
@@ -47,6 +49,7 @@ export const buildRunsQuery = (filters: RunsFilters, cursor: string | undefined)
   dir: filters.sortDirection,
   ...(filters.status.length > 0 ? { status: filters.status.join(",") } : {}),
   ...(filters.trigger.length > 0 ? { trigger: filters.trigger.join(",") } : {}),
+  ...(filters.actor.length > 0 ? { actor: filters.actor.join(",") } : {}),
   ...(filters.interaction != null ? { interaction: filters.interaction } : {}),
   ...(filters.from != null ? { from: filters.from } : {}),
   ...(filters.to != null ? { to: filters.to } : {}),
@@ -57,6 +60,7 @@ const filtersKey = (filters: RunsFilters): string =>
   JSON.stringify([
     filters.status,
     filters.trigger,
+    filters.actor,
     filters.interaction,
     filters.from,
     filters.to,
