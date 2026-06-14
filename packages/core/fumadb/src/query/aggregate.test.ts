@@ -40,6 +40,15 @@ const seedRows: readonly SeedRow[] = [
   { id: "e5", tenant: "t2", data: { status: "completed", trigger: "cli", startedAt: 5000, durationMs: 500 } },
 ];
 
+// Rows whose status carries literal LIKE wildcards (`_`, `%`). Kept out of the
+// shared seed (existing assertions count exact t1 rows) and seeded only by the
+// wildcard-parity test under a dedicated tenant. `a_b%c` must be matched
+// literally; `axbyc` is the lookalike an unescaped LIKE would wrongly catch.
+const wildcardRows: readonly SeedRow[] = [
+  { id: "w1", tenant: "tw", data: { status: "a_b%c", trigger: "cli", startedAt: 6000, durationMs: 600 } },
+  { id: "w2", tenant: "tw", data: { status: "axbyc", trigger: "cli", startedAt: 7000, durationMs: 700 } },
+];
+
 const inT1 = (eb: Parameters<NonNullable<Parameters<EventsQuery["jsonCount"]>[1]["where"]>>[0]) =>
   eb("tenant", "=", "t1");
 
@@ -49,6 +58,17 @@ const statusIn = (values: readonly string[]): JsonFilter => ({
   valueType: "text",
   operator: "in",
   values,
+});
+
+const statusCompare = (
+  operator: "=" | "contains" | "starts with" | "ends with",
+  value: string,
+): JsonFilter => ({
+  kind: "compare",
+  path: ["status"],
+  valueType: "text",
+  operator,
+  value,
 });
 
 const seed = async (orm: EventsQuery) => {
@@ -190,3 +210,49 @@ const runSuite = (name: string, makeHarness: () => Promise<Harness>) => {
 
 runSuite("memory", makeMemoryHarness);
 runSuite("sqlite", makeSqliteHarness);
+
+// LIKE-wildcard parity: a value carrying literal `_`/`%` must match the same
+// rows under the drizzle (sqlite) adapter as under the literal memory adapter.
+// Without ESCAPE these wildcards would make sqlite over-match (`a_b%c` would
+// also catch `axbyc`).
+describe("json filter LIKE-wildcard parity (memory vs sqlite)", () => {
+  let memory: Harness;
+  let sqlite: Harness;
+  beforeEach(async () => {
+    memory = await makeMemoryHarness();
+    sqlite = await makeSqliteHarness();
+    await memory.orm.createMany("events", wildcardRows.map((row) => ({ ...row })));
+    await sqlite.orm.createMany("events", wildcardRows.map((row) => ({ ...row })));
+  });
+  afterEach(async () => {
+    await memory.close();
+    await sqlite.close();
+  });
+
+  const idsFor = async (orm: EventsQuery, filter: JsonFilter): Promise<readonly string[]> => {
+    const rows = await orm.jsonPage("events", {
+      column: "data",
+      where: (eb) => eb("tenant", "=", "tw"),
+      filter,
+      orderBy: [{ path: ["startedAt"], valueType: "number", direction: "asc" }],
+      keyColumn: "id",
+      keyDirection: "asc",
+      limit: 100,
+    });
+    return rows.map((row) => row.id as string);
+  };
+
+  it.each([
+    ["contains", statusCompare("contains", "_b%")],
+    ["eq", statusCompare("=", "a_b%c")],
+    ["starts with", statusCompare("starts with", "a_")],
+    ["ends with", statusCompare("ends with", "%c")],
+  ] as const)("matches identically for %s", async (_label, filter) => {
+    const fromMemory = await idsFor(memory.orm, filter);
+    const fromSqlite = await idsFor(sqlite.orm, filter);
+    expect(fromSqlite).toEqual(fromMemory);
+    // The wildcard row must be selected, the lookalike (`axbyc`) must not.
+    expect(fromMemory).toContain("w1");
+    expect(fromMemory).not.toContain("w2");
+  });
+});

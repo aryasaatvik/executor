@@ -279,14 +279,32 @@ export function fromDrizzle(
     valueType: JsonValueType,
   ): Drizzle.SQL {
     if (provider === "postgresql") {
-      const pgPath = `{${path.join(",")}}`;
+      // Build a `text[]` array literal with each segment double-quoted so a
+      // segment containing a comma (the array element separator) descends the
+      // intended key instead of splitting into two. Inside a quoted element a
+      // backslash and a double-quote must be backslash-escaped.
+      const pgPath = `{${path
+        .map((segment) => `"${segment.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`)
+        .join(",")}}`;
       const text = Drizzle.sql`(${jsonColumn} #>> ${pgPath})`;
       if (valueType === "number") return Drizzle.sql`${text}::numeric`;
       if (valueType === "boolean") return Drizzle.sql`${text}::boolean`;
       return text;
     }
-    const jsonPath = `$.${path.join(".")}`;
+    // Build a quoted SQLite JSON path (`$."seg1"."seg2"`) so a segment
+    // containing a dot (the path separator) is treated as one key. Inside a
+    // quoted segment an embedded double-quote is doubled (`""`).
+    const jsonPath = `$${path
+      .map((segment) => `."${segment.replace(/"/g, '""')}"`)
+      .join("")}`;
     return Drizzle.sql`json_extract(${jsonColumn}, ${jsonPath})`;
+  }
+
+  // Escape LIKE wildcards (`%`, `_`) and the escape character itself so the
+  // value matches literally — parity with the memory adapter's
+  // includes/startsWith/endsWith. Paired with an explicit `escape '\'` clause.
+  function escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, (char) => `\\${char}`);
   }
 
   function jsonCompareSql(
@@ -307,12 +325,18 @@ export function fromDrizzle(
         return Drizzle.lt(expr, value);
       case "<=":
         return Drizzle.lte(expr, value);
-      case "contains":
-        return Drizzle.like(expr, `%${String(value)}%`);
-      case "starts with":
-        return Drizzle.like(expr, `${String(value)}%`);
-      case "ends with":
-        return Drizzle.like(expr, `%${String(value)}`);
+      case "contains": {
+        const escaped = escapeLikePattern(String(value));
+        return Drizzle.sql`${expr} like ${`%${escaped}%`} escape '\\'`;
+      }
+      case "starts with": {
+        const escaped = escapeLikePattern(String(value));
+        return Drizzle.sql`${expr} like ${`${escaped}%`} escape '\\'`;
+      }
+      case "ends with": {
+        const escaped = escapeLikePattern(String(value));
+        return Drizzle.sql`${expr} like ${`%${escaped}`} escape '\\'`;
+      }
       default:
         throw new Error(`[FumaDB Drizzle] Unsupported JSON operator: ${operator}`);
     }
