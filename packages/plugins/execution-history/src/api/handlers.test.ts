@@ -74,7 +74,7 @@ const makeStubExtension = (captured: {
 }): ExecutionHistoryExtension => ({
   list: (options): Effect.Effect<ExecutionHistoryListResult> => {
     captured.options = options;
-    return Effect.succeed({ runs: [runRow({})], total: 1 });
+    return Effect.succeed({ runs: [runRow({})], nextCursor: null, meta: null });
   },
   get: (executionId): Effect.Effect<ExecutionHistoryDetail | null> =>
     Effect.succeed(
@@ -120,15 +120,17 @@ describe("ExecutionHistoryHandlers", () => {
 
       const res = yield* get(
         web,
-        "http://localhost/execution-history/runs?status=completed,failed&trigger=manual&from=100&to=900&interaction=true&limit=10&offset=5&sort=asc",
+        "http://localhost/execution-history/runs?status=completed,failed&trigger=manual&from=100&to=900&interaction=true&after=50&limit=10&sort=startedAt&dir=asc",
       );
       expect(res.status).toBe(200);
       const body = (yield* Effect.promise(() => res.json())) as {
         runs: { executionId: string }[];
-        total: number;
+        nextCursor: string | null;
+        meta: unknown;
       };
-      expect(body.total).toBe(1);
       expect(body.runs.map((r) => r.executionId)).toEqual(["exec_1"]);
+      expect(body.nextCursor).toBeNull();
+      expect(body.meta).toBeNull();
 
       const options = captured.options;
       expect(options).toBeDefined();
@@ -136,9 +138,10 @@ describe("ExecutionHistoryHandlers", () => {
       expect(options?.triggerFilter).toEqual(["manual"]);
       expect(options?.timeRange).toEqual({ from: 100, to: 900 });
       expect(options?.hadInteraction).toBe(true);
+      expect(options?.after).toBe(50);
       expect(options?.limit).toBe(10);
-      expect(options?.offset).toBe(5);
-      expect(options?.sort).toBe("asc");
+      expect(options?.sortField).toBe("startedAt");
+      expect(options?.sortDirection).toBe("asc");
     }),
   );
 
