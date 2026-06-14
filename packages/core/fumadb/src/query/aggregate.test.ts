@@ -205,6 +205,53 @@ const runSuite = (name: string, makeHarness: () => Promise<Harness>) => {
       });
       expect(rows.map((row) => row.id)).toEqual(["e1", "e2", "e3"]);
     });
+
+    it("excludes null-path rows from = / != filters (SQL three-valued logic)", async () => {
+      const { orm } = harness;
+      // e4 has durationMs: null. `!= 200` excludes e2 (it matches 200) AND e4
+      // (NULL comparisons are unknown in SQL), leaving e1 + e3.
+      expect(
+        await orm.jsonCount("events", {
+          column: "data",
+          where: inT1,
+          filter: { kind: "compare", path: ["durationMs"], valueType: "number", operator: "!=", value: 200 },
+        }),
+      ).toBe(2);
+      // `= 100` matches only e1; the null row never matches `=`.
+      expect(
+        await orm.jsonCount("events", {
+          column: "data",
+          where: inT1,
+          filter: { kind: "compare", path: ["durationMs"], valueType: "number", operator: "=", value: 100 },
+        }),
+      ).toBe(1);
+    });
+
+    it("keyset-paginates a nullable sort column without truncating", async () => {
+      const { orm } = harness;
+      const collected: string[] = [];
+      let cursor: { readonly values: readonly (number | null)[]; readonly key: string } | undefined;
+      for (let i = 0; i < 10; i += 1) {
+        const rows = await orm.jsonPage("events", {
+          column: "data",
+          where: inT1,
+          orderBy: [{ path: ["durationMs"], valueType: "number", direction: "asc" }],
+          keyColumn: "id",
+          keyDirection: "asc",
+          limit: 1,
+          cursor,
+        });
+        if (rows.length === 0) break;
+        const last = rows[rows.length - 1]!;
+        const key = last.id as string;
+        collected.push(key);
+        cursor = { values: [(last.data as { durationMs: number | null }).durationMs], key };
+      }
+      // asc, nulls first: e4(null), then e1(100), e2(200), e3(300). The page
+      // whose cursor is the null row must still return the non-null rows — a
+      // naive `durationMs > NULL` predicate would truncate here.
+      expect(collected).toEqual(["e4", "e1", "e2", "e3"]);
+    });
   });
 };
 

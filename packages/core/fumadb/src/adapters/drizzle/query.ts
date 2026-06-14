@@ -622,9 +622,35 @@ export function fromDrizzle(
 
       const orderExprs: Drizzle.SQL[] = orderBy.map((entry) => {
         const expr = jsonExtractSql(jsonColumn, entry.path, entry.valueType);
-        return entry.direction === "desc" ? Drizzle.desc(expr) : Drizzle.asc(expr);
+        // Mirror the memory adapter's null ordering (null first in asc, last in
+        // desc — see compareNullableAscending). SQLite defaults to this; Postgres
+        // defaults to the opposite, so make it explicit on both dialects.
+        return entry.direction === "desc"
+          ? Drizzle.sql`${expr} desc nulls last`
+          : Drizzle.sql`${expr} asc nulls first`;
       });
       orderExprs.push(keyDirection === "desc" ? Drizzle.desc(keyDrizzle) : Drizzle.asc(keyDrizzle));
+
+      // Keyset boundary terms with SQL three-valued-logic null handling. A naive
+      // `expr > NULL` / `expr < NULL` is always unknown, which silently empties
+      // every page once the cursor row's sort value is null. These mirror
+      // compareNullableAscending so a nullable sort column paginates correctly.
+      const eqTerm = (expr: Drizzle.SQL, cv: unknown): Drizzle.SQL =>
+        cv == null ? Drizzle.isNull(expr) : Drizzle.eq(expr, cv);
+      const strictTerm = (
+        expr: Drizzle.SQL,
+        cv: unknown,
+        dir: "asc" | "desc",
+      ): Drizzle.SQL | null => {
+        if (dir === "asc") {
+          // null is first: everything non-null is after a null cursor.
+          return cv == null ? Drizzle.isNotNull(expr) : Drizzle.gt(expr, cv);
+        }
+        // desc, null last: nothing is strictly after a null cursor on this field;
+        // and null rows fall after any non-null cursor value.
+        if (cv == null) return null;
+        return Drizzle.or(Drizzle.lt(expr, cv), Drizzle.isNull(expr)) ?? null;
+      };
 
       let conditions = scoped;
       if (cursor) {
@@ -634,7 +660,7 @@ export function fromDrizzle(
           for (let prior = 0; prior < boundary; prior += 1) {
             const entry = orderBy[prior]!;
             andTerms.push(
-              Drizzle.eq(
+              eqTerm(
                 jsonExtractSql(jsonColumn, entry.path, entry.valueType),
                 cursor.values[prior] as unknown,
               ),
@@ -643,8 +669,9 @@ export function fromDrizzle(
           if (boundary < orderBy.length) {
             const entry = orderBy[boundary]!;
             const expr = jsonExtractSql(jsonColumn, entry.path, entry.valueType);
-            const value = cursor.values[boundary] as unknown;
-            andTerms.push(entry.direction === "asc" ? Drizzle.gt(expr, value) : Drizzle.lt(expr, value));
+            const strict = strictTerm(expr, cursor.values[boundary] as unknown, entry.direction);
+            if (strict === null) continue;
+            andTerms.push(strict);
           } else {
             andTerms.push(
               keyDirection === "asc"

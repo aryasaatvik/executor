@@ -58,10 +58,13 @@ const matchesCompareOperator = (
   right: JsonScalar,
 ): boolean => {
   switch (operator) {
+    // SQL three-valued logic: any comparison with NULL is unknown and excluded
+    // from a WHERE clause, so `= NULL` and `!= NULL` both match nothing. Mirror
+    // that here so the memory adapter agrees with the SQL adapters.
     case "=":
-      return scalarsEqual(left, right);
+      return left != null && right != null && scalarsEqual(left, right);
     case "!=":
-      return !scalarsEqual(left, right);
+      return left != null && right != null && !scalarsEqual(left, right);
     case ">": {
       const compared = compareScalars(left, right);
       return compared != null && compared > 0;
@@ -102,6 +105,10 @@ export const matchesJsonFilter = (doc: unknown, filter: JsonFilter): boolean => 
     }
     case "array": {
       const left = coerceJsonValue(extractJsonPath(doc, filter.path), filter.valueType);
+      // SQL: `NULL IN (...)` and `NULL NOT IN (...)` are both unknown → the row
+      // is excluded either way. Mirror that (the Drizzle adapter does this
+      // implicitly via NULL semantics).
+      if (left == null) return false;
       const found = filter.values.some((candidate) =>
         scalarsEqual(left, coerceJsonValue(candidate, filter.valueType)),
       );
