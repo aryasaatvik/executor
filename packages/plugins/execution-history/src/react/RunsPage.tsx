@@ -149,7 +149,7 @@ export function RunsPage() {
   }
 
   const toolbar = (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2 px-4 py-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="text-sm font-semibold">Runs</h1>
