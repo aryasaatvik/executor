@@ -48,6 +48,7 @@ const unaliasMutation = Client.mutation("serviceTokens", "unalias");
 
 function ServiceTokensPage() {
   const [commonName, setCommonName] = useState("");
+  const [machineName, setMachineName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -76,15 +77,20 @@ function ServiceTokensPage() {
   const handleAlias = async () => {
     const name = commonName.trim();
     if (!name) return;
+    const machine = machineName.trim();
     setBusy(true);
     setError(null);
-    const exit = await doAlias({ payload: { commonName: name }, reactivityKeys: [] });
+    const exit = await doAlias({
+      payload: { commonName: name, ...(machine ? { machineName: machine } : {}) },
+      reactivityKeys: [],
+    });
     setBusy(false);
     if (Exit.isFailure(exit)) {
       setError("Failed to create alias");
       return;
     }
     setCommonName("");
+    setMachineName("");
     refresh();
   };
 
@@ -113,7 +119,16 @@ function ServiceTokensPage() {
             placeholder="service-token common_name (Client ID)"
             value={commonName}
             onChange={(e) => setCommonName((e.target as HTMLInputElement).value)}
-            className="h-9 font-mono text-[13px]"
+            className="h-9 flex-[2] font-mono text-[13px]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleAlias();
+            }}
+          />
+          <Input
+            placeholder="machine name (optional)"
+            value={machineName}
+            onChange={(e) => setMachineName((e.target as HTMLInputElement).value)}
+            className="h-9 flex-1 text-[13px]"
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleAlias();
             }}
@@ -157,10 +172,18 @@ function ServiceTokensPage() {
             <CardStackEntry key={alias.commonName}>
               <CardStackEntryContent>
                 <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
+                  {alias.machineName ? (
+                    <>
+                      <span className="text-muted-foreground/60">Name</span>
+                      <span className="truncate text-foreground/90">{alias.machineName}</span>
+                    </>
+                  ) : null}
                   <span className="text-muted-foreground/60">Token</span>
                   <span className="truncate font-mono text-foreground/80">{alias.commonName}</span>
                   <span className="text-muted-foreground/60">Acts as</span>
-                  <span className="truncate font-mono text-foreground/80">{alias.subject}</span>
+                  <span className="truncate font-mono text-foreground/80">
+                    {alias.email ?? alias.name ?? alias.subject}
+                  </span>
                 </div>
               </CardStackEntryContent>
               <CardStackEntryActions>
