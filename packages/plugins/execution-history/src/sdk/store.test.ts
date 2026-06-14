@@ -72,8 +72,11 @@ describe("execution-history store", () => {
         }),
       );
 
-      const listed = yield* executor.executionHistory.list();
-      expect(listed.total).toBe(1);
+      const listed = yield* executor.executionHistory.list({ limit: 50 });
+      expect(listed.meta?.totalRowCount).toBe(1);
+      expect(listed.meta?.filterRowCount).toBe(1);
+      expect(listed.meta?.statusCounts).toContainEqual({ status: "completed", count: 1 });
+      expect(listed.nextCursor).toBeNull();
       const run = listed.runs[0];
       expect(run?.executionId).toBe("exec_1");
       expect(run?.status).toBe("completed");

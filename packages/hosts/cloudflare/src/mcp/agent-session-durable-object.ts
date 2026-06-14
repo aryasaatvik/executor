@@ -24,6 +24,7 @@ import {
   ResumeResponsePayload,
   decodeResumeResponse,
 } from "@executor-js/host-mcp/browser-approval";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 
 import type { IncomingPropagationHeaders, McpElicitationMode } from "./do-headers";
 import { classifyDurableObjectError, type DurableObjectFailure } from "./durable-object-errors";
@@ -69,6 +70,8 @@ interface McpSessionInitBase {
   /** The organization's URL slug, from the same resolved record. */
   readonly organizationSlug?: string;
   readonly userId: string;
+  /** Credential identity that this session's runs act as. */
+  readonly actor?: ExecutionActor;
   readonly elicitationMode: McpElicitationMode;
   /** Whether this session serves artifacts, read off `?artifacts=` at connect
    *  time. Absent means the default (enabled). */
@@ -142,6 +145,8 @@ interface SessionMetaBase {
    * Pins browser-handoff URLs to the right org's console. */
   readonly organizationSlug?: string;
   readonly userId: string;
+  /** Persisted run actor, retained across Durable Object cold restores. */
+  readonly actor?: ExecutionActor;
   readonly elicitationMode?: McpElicitationMode;
   /** Whether the session serves artifacts (carried from {@link McpSessionInit}).
    *  Absent — including for sessions persisted before the flag existed — means
