@@ -20,6 +20,7 @@ import { cn } from "@executor-js/react/lib/utils";
 import type { InteractionRow, InteractionStatus, RunRow, ToolCallRow } from "../sdk/collections";
 import { runDetailAtom, runToolCallsAtom } from "./atoms";
 import { formatDateTime, formatDuration, logLines, prettyJson, statusLabel } from "./format";
+import { HoverCardTimestamp } from "./hover-card-timestamp";
 import { STATUS_TONES, triggerTone } from "./status";
 
 // ---------------------------------------------------------------------------
@@ -340,8 +341,16 @@ function DetailContent(props: {
                   <span className="text-muted-foreground/60">—</span>
                 )}
               </MetaCard>
-              <MetaCard label="Started">{formatDateTime(run.startedAt)}</MetaCard>
-              <MetaCard label="Completed">{formatDateTime(run.completedAt)}</MetaCard>
+              <MetaCard label="Started">
+                <HoverCardTimestamp timestamp={run.startedAt} side="bottom" />
+              </MetaCard>
+              <MetaCard label="Completed">
+                {run.completedAt != null ? (
+                  <HoverCardTimestamp timestamp={run.completedAt} side="bottom" />
+                ) : (
+                  formatDateTime(run.completedAt)
+                )}
+              </MetaCard>
             </div>
 
             <div className="flex items-center gap-2 text-xs">

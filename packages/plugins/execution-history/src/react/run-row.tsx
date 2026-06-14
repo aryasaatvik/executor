@@ -3,8 +3,9 @@ import { cn } from "@executor-js/react/lib/utils";
 import { Badge } from "@executor-js/react/components/badge";
 
 import type { RunRow } from "../sdk/collections";
-import { formatDateTime, formatDuration, formatRelative, statusLabel } from "./format";
+import { formatDuration, formatRelative, logLines, statusLabel } from "./format";
 import { actorTone, STATUS_TONES, triggerTone } from "./status";
+import { HoverCardTimestamp } from "./hover-card-timestamp";
 import type { RunColumns } from "./view";
 
 // Column slot classes — RunListRow and RunsColumnHeader both apply these
@@ -24,6 +25,8 @@ export const COL_ACTOR = "hidden w-[170px] shrink-0 lg:flex";
 export const COL_DURATION = "hidden w-[100px] shrink-0 md:flex";
 export const COL_TOOLS = "hidden xl:block w-[80px] shrink-0";
 export const COL_INTERACTION = "hidden xl:block w-[100px] shrink-0";
+// Log error/warn counts — least critical, so only on the widest screens.
+export const COL_LOG = "hidden 2xl:block w-[80px] shrink-0";
 
 export interface RunListRowProps {
   readonly run: RunRow;
@@ -38,6 +41,9 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const trigger = triggerTone(run.triggerKind);
   const actor = actorTone(run.actorKind);
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
+  const logs = columns.log ? logLines(run.logsJson) : [];
+  const logErrors = logs.filter((line) => line.toLowerCase().includes("[error]")).length;
+  const logWarns = logs.filter((line) => line.toLowerCase().includes("[warn]")).length;
 
   return (
     <Button
@@ -60,12 +66,11 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
       />
 
       {/* Started */}
-      <span
-        title={formatDateTime(run.startedAt)}
+      <HoverCardTimestamp
+        timestamp={run.startedAt}
+        display={formatRelative(run.startedAt)}
         className="w-[150px] shrink-0 tabular-nums text-muted-foreground md:w-[190px]"
-      >
-        {formatRelative(run.startedAt)}
-      </span>
+      />
 
       {/* Status label */}
       <span className={cn("inline-flex w-[120px] shrink-0 gap-1", tone.text)}>
@@ -104,9 +109,17 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         </span>
       ) : null}
 
-      {/* Duration (optional) */}
+      {/* Duration (optional) — slow runs (>5s) flagged. */}
       {columns.duration ? (
-        <span className={cn(COL_DURATION, "tabular-nums text-muted-foreground")}>
+        <span
+          className={cn(
+            COL_DURATION,
+            "tabular-nums",
+            run.durationMs != null && run.durationMs > 5000
+              ? "text-destructive"
+              : "text-muted-foreground",
+          )}
+        >
           {formatDuration(run.durationMs)}
         </span>
       ) : null}
@@ -140,11 +153,33 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         </span>
       ) : null}
 
+      {/* Log error/warn counts (optional) */}
+      {columns.log ? (
+        <span className={cn(COL_LOG, "tabular-nums")}>
+          {logs.length === 0 ? (
+            <span className="text-muted-foreground/50">—</span>
+          ) : (
+            <span className="inline-flex gap-1.5">
+              <span className={logErrors > 0 ? "text-destructive" : "text-muted-foreground/60"}>
+                {logErrors}E
+              </span>
+              <span
+                className={
+                  logWarns > 0 ? "text-amber-600 dark:text-amber-300" : "text-muted-foreground/60"
+                }
+              >
+                {logWarns}W
+              </span>
+            </span>
+          )}
+        </span>
+      ) : null}
+
       {/* Code snippet (always visible, fills remaining space) */}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
         <span className="text-muted-foreground/50">code: </span>
         <span className="text-foreground/70">
-          &quot;{run.code.trim().replace(/\s+/g, " ").slice(0, 80)}&quot;
+          &quot;{run.code.trim().replace(/\s+/g, " ").slice(0, 160)}&quot;
         </span>
       </span>
     </Button>

@@ -125,6 +125,11 @@ export function RunsShell(props: RunsShellProps) {
                   Loading more…
                 </div>
               )}
+              {!hasMore && !isLoadingMore && (
+                <div className="flex w-full items-center justify-center border-t border-border/40 py-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/40">
+                  End of history
+                </div>
+              )}
             </>
           )}
         </div>
