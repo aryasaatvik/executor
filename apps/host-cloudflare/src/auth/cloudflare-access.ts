@@ -2,9 +2,10 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { IdentityProvider, Unauthorized, type Principal } from "@executor-js/api/server";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 
 import type { CloudflareConfig } from "../config";
-import type { ServiceTokenAliasLookup } from "./service-token-alias";
+import type { ResolvedServiceTokenAlias, ServiceTokenAliasLookup } from "./service-token-alias";
 
 // ---------------------------------------------------------------------------
 // Access claim parsing
@@ -65,18 +66,23 @@ const serviceTokenEmail = (commonName: string): string => `${commonName}@service
  * token's client id) instead of email/sub. Single-tenant: every principal
  * belongs to the one configured org; admin comes from the email allowlist.
  *
- * A service token can be ALIASED to a human subject: pass `aliasedSubject` (the
- * `sub` resolved from the service-tokens plugin's alias table). When present for
- * a service token, the token acts as that identity — same subject → same
- * Personal connection partition (zero migration) — and is treated as an admin:
- * the deliberate static-credential equivalent of that user's browser/OAuth
- * session. The lookup is async I/O, so it stays in the verifier; this mapper is
+ * A service token can be ALIASED to a human subject: pass the resolved `alias`
+ * (from the service-tokens plugin's table). When present for a service token, the
+ * token acts as that identity — same subject → same Personal connection
+ * partition (zero migration) — and is treated as an admin: the deliberate
+ * static-credential equivalent of that user's browser/OAuth session, with the
+ * human's stored email/name surfaced so "Acts as" reads as a person.
+ *
+ * EVERY service token (aliased or not) also carries an `actor` keyed by its
+ * client id, so runs attribute to the TOKEN (distinct from the human subject it
+ * may share a partition with) — labelled by the friendly machine name when
+ * aliased. The lookup is async I/O, so it stays in the verifier; this mapper is
  * kept pure (alias passed in) and unit-testable.
  */
 export const principalFromAccessClaims = (
   claims: Record<string, unknown>,
   config: CloudflareConfig,
-  aliasedSubject?: string | null,
+  alias?: ResolvedServiceTokenAlias | null,
 ): Principal => {
   const id = accessIdentity(claims);
   const nameClaim = claims[config.accessNameClaim];
@@ -85,18 +91,40 @@ export const principalFromAccessClaims = (
   // Admin is keyed off the REAL email claim — a synthetic service-token address
   // can never match the allowlist.
   const isAdmin = id.email.length > 0 && config.adminEmails.includes(id.email.toLowerCase());
-  const serviceToken = isServiceToken(id);
 
-  // Aliased service token → act as the mapped human subject, as an admin.
-  if (serviceToken && aliasedSubject) {
+  if (isServiceToken(id)) {
+    // The token attributes runs to ITSELF (its client id), labelled by the
+    // friendly machine name when aliased, else the raw client id.
+    const actor: ExecutionActor = {
+      kind: "service-token",
+      id: id.commonName,
+      label: alias?.machineName ?? id.commonName,
+    };
+    if (alias) {
+      // Aliased → act as the mapped human subject, as an admin. Surface the
+      // human's stored email/name (so "Acts as" shows a person), falling back to
+      // the synthetic machine address when the alias predates capture.
+      return {
+        accountId: alias.subject,
+        organizationId: config.organizationId,
+        organizationName: config.organizationName,
+        email: alias.email ?? serviceTokenEmail(id.commonName),
+        name: alias.name ?? id.commonName,
+        avatarUrl: null,
+        roles: ["admin", ...groups],
+        actor,
+      };
+    }
+    // Unaliased service token → its own subject partition.
     return {
-      accountId: aliasedSubject,
+      accountId: id.commonName,
       organizationId: config.organizationId,
       organizationName: config.organizationName,
       email: serviceTokenEmail(id.commonName),
       name: id.commonName,
       avatarUrl: null,
-      roles: ["admin", ...groups],
+      roles: groups.length > 0 ? groups : ["member"],
+      actor,
     };
   }
 
@@ -104,7 +132,7 @@ export const principalFromAccessClaims = (
     accountId: id.sub || id.email || id.commonName,
     organizationId: config.organizationId,
     organizationName: config.organizationName,
-    email: serviceToken ? serviceTokenEmail(id.commonName) : id.email,
+    email: id.email,
     name: typeof nameClaim === "string" ? nameClaim : id.commonName || null,
     avatarUrl: null,
     roles: isAdmin ? ["admin", ...groups] : groups.length > 0 ? groups : ["member"],
@@ -156,10 +184,10 @@ export const makeAccessVerifier = (
       // A service token (common_name, no sub) may be aliased to a human subject.
       // Resolve it before building the principal so the token acts as that user.
       const id = accessIdentity(claims);
-      const aliasedSubject =
+      const alias =
         isServiceToken(id) && aliasLookup ? yield* aliasLookup(id.commonName) : null;
 
-      return principalFromAccessClaims(claims, config, aliasedSubject);
+      return principalFromAccessClaims(claims, config, alias);
     });
 
   return { verify };
