@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { definePluginStorageCollection } from "@executor-js/sdk/core";
 
@@ -50,11 +50,25 @@ export const RunRow = Schema.Struct({
   // Who/what the run acted as (from the trigger's `ExecutionActor`). `actorId`
   // is the STABLE filter/facet key (a token client id, a user subject);
   // `actorLabel` is the display snapshot at run time (machine name, email);
-  // `actorKind` is the credential class ("user", "service-token"). Null on runs
-  // recorded before a trigger actor was supplied.
-  actorId: Schema.NullOr(Schema.String),
-  actorLabel: Schema.NullOr(Schema.String),
-  actorKind: Schema.NullOr(Schema.String),
+  // `actorKind` is the credential class ("user", "service-token").
+  //
+  // Optional-key + decoding default, NOT `NullOr`: runs are stored as JSON
+  // documents, and rows written BEFORE these fields existed have no such key at
+  // all. `NullOr` requires the key to be present, so a legacy doc fails the
+  // response encoder ("Missing key at runs[0].actorId"). Making the key optional
+  // (tolerant on the wire) while defaulting an absent key to null on decode lets
+  // older docs decode/encode unchanged — and immunizes the collection against
+  // the next field added the same way. The decoded type stays `string | null`
+  // (always present), so every reader treats it as required.
+  actorId: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(null)),
+  ),
+  actorLabel: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(null)),
+  ),
+  actorKind: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(null)),
+  ),
   startedAt: Schema.Number,
   completedAt: Schema.NullOr(Schema.Number),
   durationMs: Schema.NullOr(Schema.Number),
