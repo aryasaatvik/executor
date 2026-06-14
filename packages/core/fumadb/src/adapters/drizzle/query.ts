@@ -1,6 +1,13 @@
 import * as Drizzle from "drizzle-orm";
 import type * as PostgreSQL from "drizzle-orm/pg-core";
 import type { AbstractQuery, FindManyOptions } from "../../query";
+import type {
+  JsonFilter,
+  JsonPath,
+  JsonScalar,
+  JsonValueType,
+} from "../../query/aggregate";
+import { coerceJsonValue, computePercentiles } from "../../query/aggregate-eval";
 import { type Condition, ConditionType } from "../../query/condition-builder";
 import { type SimplifyFindOptions, toORM } from "../../query/orm";
 import {
@@ -263,6 +270,95 @@ export function fromDrizzle(
     return out;
   }
 
+  // --- JSON-document aggregation helpers ----------------------------------
+  // Extract a JSON path as a typed SQL expression. SQLite `json_extract` is
+  // natively typed; Postgres `#>>` returns text and needs explicit casts.
+  function jsonExtractSql(
+    jsonColumn: ColumnType,
+    path: JsonPath,
+    valueType: JsonValueType,
+  ): Drizzle.SQL {
+    if (provider === "postgresql") {
+      const pgPath = `{${path.join(",")}}`;
+      const text = Drizzle.sql`(${jsonColumn} #>> ${pgPath})`;
+      if (valueType === "number") return Drizzle.sql`${text}::numeric`;
+      if (valueType === "boolean") return Drizzle.sql`${text}::boolean`;
+      return text;
+    }
+    const jsonPath = `$.${path.join(".")}`;
+    return Drizzle.sql`json_extract(${jsonColumn}, ${jsonPath})`;
+  }
+
+  function jsonCompareSql(
+    operator: string,
+    expr: Drizzle.SQL,
+    value: JsonScalar,
+  ): Drizzle.SQL {
+    switch (operator) {
+      case "=":
+        return Drizzle.eq(expr, value);
+      case "!=":
+        return Drizzle.ne(expr, value);
+      case ">":
+        return Drizzle.gt(expr, value);
+      case ">=":
+        return Drizzle.gte(expr, value);
+      case "<":
+        return Drizzle.lt(expr, value);
+      case "<=":
+        return Drizzle.lte(expr, value);
+      case "contains":
+        return Drizzle.like(expr, `%${String(value)}%`);
+      case "starts with":
+        return Drizzle.like(expr, `${String(value)}%`);
+      case "ends with":
+        return Drizzle.like(expr, `%${String(value)}`);
+      default:
+        throw new Error(`[FumaDB Drizzle] Unsupported JSON operator: ${operator}`);
+    }
+  }
+
+  function buildJsonFilter(
+    jsonColumn: ColumnType,
+    filter: JsonFilter,
+  ): Drizzle.SQL | undefined {
+    if (filter.kind === "and") {
+      return Drizzle.and(
+        ...filter.items.map((item) => buildJsonFilter(jsonColumn, item)),
+      );
+    }
+    if (filter.kind === "or") {
+      return Drizzle.or(
+        ...filter.items.map((item) => buildJsonFilter(jsonColumn, item)),
+      );
+    }
+    const expr = jsonExtractSql(jsonColumn, filter.path, filter.valueType);
+    if (filter.kind === "array") {
+      return filter.operator === "in"
+        ? Drizzle.inArray(expr, filter.values as unknown[])
+        : Drizzle.notInArray(expr, filter.values as unknown[]);
+    }
+    return jsonCompareSql(filter.operator, expr, filter.value);
+  }
+
+  function buildScopedConditions(
+    jsonColumn: ColumnType,
+    where: Condition | undefined,
+    filter: JsonFilter | undefined,
+  ): Drizzle.SQL | undefined {
+    const parts: Drizzle.SQL[] = [];
+    if (where) {
+      const compiled = buildWhere(toDrizzleColumn, where);
+      if (compiled) parts.push(compiled);
+    }
+    if (filter) {
+      const compiled = buildJsonFilter(jsonColumn, filter);
+      if (compiled) parts.push(compiled);
+    }
+    if (parts.length === 0) return undefined;
+    return Drizzle.and(...parts);
+  }
+
   return toORM({
     tables: schema.tables,
     async count(table, v) {
@@ -401,6 +497,155 @@ export function fromDrizzle(
       }
 
       await query;
+    },
+    async jsonCount(table, { column, where, filter }) {
+      const conditions = buildScopedConditions(toDrizzleColumn(column), where, filter);
+      return await db.$count(toDrizzle(table), conditions);
+    },
+    async jsonGroupCount(table, { column, where, filter, path, valueType }) {
+      const drizzleTable = toDrizzle(table);
+      const jsonColumn = toDrizzleColumn(column);
+      const groupExpr = jsonExtractSql(jsonColumn, path, valueType ?? "text");
+      const conditions = buildScopedConditions(jsonColumn, where, filter);
+      const rows = await db
+        .select({ value: groupExpr, count: Drizzle.sql<number>`count(*)` })
+        .from(drizzleTable)
+        .where(conditions)
+        .groupBy(groupExpr);
+      return rows.map((row) => ({
+        value: coerceJsonValue(row.value, valueType ?? "text"),
+        count: Number(row.count),
+      }));
+    },
+    async jsonTimeBuckets(table, { column, where, filter, path, bucketMs }) {
+      const drizzleTable = toDrizzle(table);
+      const jsonColumn = toDrizzleColumn(column);
+      const valueExpr = jsonExtractSql(jsonColumn, path, "number");
+      // `value - (value % bucket)` floors to the bucket start without relying
+      // on integer division (SQLite binds numeric params as REAL, so `/` would
+      // be float division). Matches `bucketFloor` for non-negative epochs.
+      const bucketExpr = Drizzle.sql`(${valueExpr} - (${valueExpr} % ${bucketMs}))`;
+      const conditions = buildScopedConditions(jsonColumn, where, filter);
+      const rows = await db
+        .select({ bucket: bucketExpr, count: Drizzle.sql<number>`count(*)` })
+        .from(drizzleTable)
+        .where(conditions)
+        .groupBy(bucketExpr)
+        .orderBy(bucketExpr);
+      return rows.map((row) => ({ bucket: Number(row.bucket), count: Number(row.count) }));
+    },
+    async jsonStats(table, { column, where, filter, path, percentiles }) {
+      const drizzleTable = toDrizzle(table);
+      const jsonColumn = toDrizzleColumn(column);
+      const valueExpr = jsonExtractSql(jsonColumn, path, "number");
+      const conditions = buildScopedConditions(jsonColumn, where, filter);
+      const aggregate = await db
+        .select({
+          count: Drizzle.sql<number>`count(${valueExpr})`,
+          min: Drizzle.sql<number | null>`min(${valueExpr})`,
+          max: Drizzle.sql<number | null>`max(${valueExpr})`,
+        })
+        .from(drizzleTable)
+        .where(conditions);
+      const summary = aggregate[0];
+      const count = Number(summary?.count ?? 0);
+      if (count === 0) return { count: 0, min: null, max: null, percentiles: [] };
+      const min = summary?.min == null ? null : Number(summary.min);
+      const max = summary?.max == null ? null : Number(summary.max);
+      const fractions = percentiles ?? [];
+      if (fractions.length === 0) return { count, min, max, percentiles: [] };
+
+      if (provider === "postgresql") {
+        const pctExpr = Drizzle.sql`percentile_cont(array[${Drizzle.sql.join(
+          fractions.map((fraction) => Drizzle.sql`${fraction}`),
+          Drizzle.sql`, `,
+        )}]) within group (order by ${valueExpr})`;
+        const pctRows = await db
+          .select({ values: Drizzle.sql<number[]>`${pctExpr}` })
+          .from(drizzleTable)
+          .where(conditions);
+        const values = pctRows[0]?.values ?? [];
+        return {
+          count,
+          min,
+          max,
+          percentiles: fractions.map((fraction, index) => ({
+            fraction,
+            value: Number(values[index]),
+          })),
+        };
+      }
+
+      // SQLite has no percentile_cont — compute over the projected values.
+      const valueRows = await db
+        .select({ value: valueExpr })
+        .from(drizzleTable)
+        .where(conditions)
+        .orderBy(valueExpr);
+      const sorted = valueRows
+        .map((row) => row.value)
+        .filter((value): value is number | string => value != null)
+        .map((value) => Number(value))
+        .filter((value) => !Number.isNaN(value))
+        .sort((a, b) => a - b);
+      return { count, min, max, percentiles: computePercentiles(sorted, fractions) };
+    },
+    async jsonPage(table, { column, where, filter, orderBy, keyColumn, keyDirection, cursor, limit }) {
+      const drizzleTable = toDrizzle(table);
+      const jsonColumn = toDrizzleColumn(column);
+      const keyDrizzle = toDrizzleColumn(keyColumn);
+      const scoped = buildScopedConditions(jsonColumn, where, filter);
+
+      const orderExprs: Drizzle.SQL[] = orderBy.map((entry) => {
+        const expr = jsonExtractSql(jsonColumn, entry.path, entry.valueType);
+        return entry.direction === "desc" ? Drizzle.desc(expr) : Drizzle.asc(expr);
+      });
+      orderExprs.push(keyDirection === "desc" ? Drizzle.desc(keyDrizzle) : Drizzle.asc(keyDrizzle));
+
+      let conditions = scoped;
+      if (cursor) {
+        const orTerms: Drizzle.SQL[] = [];
+        for (let boundary = 0; boundary <= orderBy.length; boundary += 1) {
+          const andTerms: Drizzle.SQL[] = [];
+          for (let prior = 0; prior < boundary; prior += 1) {
+            const entry = orderBy[prior]!;
+            andTerms.push(
+              Drizzle.eq(
+                jsonExtractSql(jsonColumn, entry.path, entry.valueType),
+                cursor.values[prior] as unknown,
+              ),
+            );
+          }
+          if (boundary < orderBy.length) {
+            const entry = orderBy[boundary]!;
+            const expr = jsonExtractSql(jsonColumn, entry.path, entry.valueType);
+            const value = cursor.values[boundary] as unknown;
+            andTerms.push(entry.direction === "asc" ? Drizzle.gt(expr, value) : Drizzle.lt(expr, value));
+          } else {
+            andTerms.push(
+              keyDirection === "asc"
+                ? Drizzle.gt(keyDrizzle, cursor.key)
+                : Drizzle.lt(keyDrizzle, cursor.key),
+            );
+          }
+          const combined = Drizzle.and(...andTerms);
+          if (combined) orTerms.push(combined);
+        }
+        const afterCursor = Drizzle.or(...orTerms);
+        conditions = scoped && afterCursor ? Drizzle.and(scoped, afterCursor) : (afterCursor ?? scoped);
+      }
+
+      const projection: Record<string, ColumnType> = {};
+      for (const tableColumn of Object.values(table.columns)) {
+        projection[tableColumn.ormName] = drizzleTable[tableColumn.names.drizzle];
+      }
+
+      return await db
+        .select(projection)
+        .from(drizzleTable)
+        .where(conditions)
+        .orderBy(...orderExprs)
+        .limit(limit);
     },
     async transaction(run) {
       // Some SQLite-compatible engines (Cloudflare D1) reject interactive
