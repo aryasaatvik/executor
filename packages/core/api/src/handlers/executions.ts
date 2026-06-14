@@ -1,6 +1,5 @@
 import { HttpApiBuilder } from "effect/unstable/httpapi";
-import { Effect } from "effect";
-import { Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import { ExecutorApi } from "../api";
 import { formatExecuteResult, formatPausedExecution } from "@executor-js/execution";
@@ -8,6 +7,7 @@ import { resolveArtifactAction } from "@executor-js/host-mcp/artifact-action";
 import { TOOL_CALL_CONTRACT_MESSAGE } from "@executor-js/host-mcp/tool-call-code";
 import { PENDING_APPROVAL_TTL_MS } from "@executor-js/sdk";
 import { ExecutionEngineService, ExecutorService } from "../services";
+import { AuthContext } from "../server/identity";
 import { capture, captureEngineError } from "@executor-js/api";
 
 class ExecutionNotFoundError extends Schema.TaggedErrorClass<ExecutionNotFoundError>()(
@@ -205,8 +205,21 @@ export const ExecutionsHandlers = HttpApiBuilder.group(ExecutorApi, "executions"
             payload.artifactId === undefined
               ? payload.code
               : yield* resolveArtifactCode(payload.code, payload.artifactId);
+          // Read identity OPTIONALLY (like `RequestWebOrigin`) so the handler
+          // never adds `AuthContext` to its requirements — every host provides it
+          // via middleware, but harnesses that mount handlers directly need not.
+          // The actor attributes the run; the kind tags the trigger "http"
+          // regardless of whether an actor was resolved.
+          const actor = Option.match(yield* Effect.serviceOption(AuthContext), {
+            onNone: () => undefined,
+            onSome: (auth) => auth.actor,
+          });
           const outcome = yield* captureEngineError(
-            engine.executeWithPause(code, { autoApprove: payload.autoApprove }),
+            engine.executeWithPause(code, {
+              autoApprove: payload.autoApprove,
+              trigger: { kind: "http", actor },
+            }),
+          );
           );
 
           if (outcome.status === "completed") {
