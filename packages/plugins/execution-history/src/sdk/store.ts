@@ -17,9 +17,9 @@ import {
   type InteractionRow,
   type InteractionStatus,
   type RunRow,
-  type RunStatus,
   type ToolCallRow,
   type ToolCallStatus,
+  RunStatus,
   interactions,
   runs,
   toolCalls,
@@ -50,6 +50,9 @@ const toJson = (value: unknown): string | null =>
   value === undefined ? null : Option.getOrNull(encodeUnknownJson(value));
 
 const ownerOf = (binding: OwnerBinding): Owner => (binding.subject != null ? "user" : "org");
+
+/** Hoisted: `Schema.is` compiles a guard, so it must not be rebuilt per row. */
+const isRunStatus = Schema.is(RunStatus);
 
 /** First dot-delimited segment of a tool path (its namespace), or null. */
 const namespaceOf = (path: string): string | null => {
@@ -97,21 +100,84 @@ interface RunBuffer {
 
 // ---------------------------------------------------------------------------
 // Read-surface option/result types.
+//
+// The list surface is keyset-paginated and carries an aggregate `meta` block
+// (facet counts, a stacked-by-status timeline, and duration percentiles) that
+// the runs UI renders. All of it is pushed down to SQL through the plugin
+// storage `aggregate`/`queryKeyset` facade — no whole-collection scans in JS.
+// `meta` is computed only on the initial page (no cursor, no live `after`),
+// matching how the UI fetches it once per filter set.
 // ---------------------------------------------------------------------------
+
+export type RunsSortField = "startedAt" | "durationMs";
+
+/** Opaque-to-the-client keyset cursor: the sort value + storage key of the last
+ *  row on a page. The HTTP layer encodes/decodes it as a string. */
+export interface RunsCursor {
+  readonly sort: number | null;
+  readonly key: string;
+}
 
 export interface ExecutionHistoryListOptions {
   readonly statusFilter?: readonly RunStatus[];
   readonly triggerFilter?: readonly string[];
   readonly timeRange?: { readonly from?: number; readonly to?: number };
   readonly hadInteraction?: boolean;
-  readonly limit?: number;
-  readonly offset?: number;
-  readonly sort?: "asc" | "desc";
+  /** Live-tail floor: only runs whose `startedAt` is strictly greater. */
+  readonly after?: number;
+  readonly sortField?: RunsSortField;
+  readonly sortDirection?: "asc" | "desc";
+  readonly limit: number;
+  readonly cursor?: RunsCursor;
+}
+
+export interface RunStatusCount {
+  readonly status: RunStatus;
+  readonly count: number;
+}
+
+export interface RunTriggerCount {
+  readonly triggerKind: string | null;
+  readonly count: number;
+}
+
+export interface RunInteractionCounts {
+  readonly withInteraction: number;
+  readonly withoutInteraction: number;
+}
+
+export interface RunChartBucket {
+  readonly bucketStart: number;
+  /** Status -> run count for the bucket; absent statuses are omitted. */
+  readonly counts: Readonly<Record<string, number>>;
+}
+
+export interface RunDurationStats {
+  readonly count: number;
+  readonly min: number | null;
+  readonly max: number | null;
+  readonly p50: number | null;
+  readonly p75: number | null;
+  readonly p90: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+}
+
+export interface ExecutionListMeta {
+  readonly totalRowCount: number;
+  readonly filterRowCount: number;
+  readonly statusCounts: readonly RunStatusCount[];
+  readonly triggerCounts: readonly RunTriggerCount[];
+  readonly interactionCounts: RunInteractionCounts;
+  readonly chartBucketMs: number;
+  readonly chartData: readonly RunChartBucket[];
+  readonly durationStats: RunDurationStats;
 }
 
 export interface ExecutionHistoryListResult {
   readonly runs: readonly RunRow[];
-  readonly total: number;
+  readonly nextCursor: RunsCursor | null;
+  readonly meta: ExecutionListMeta | null;
 }
 
 export interface ExecutionHistoryDetail {
@@ -123,7 +189,7 @@ export interface ExecutionHistoryDetail {
 export interface ExecutionHistoryStore {
   readonly handleEvent: (event: ExecutionEvent) => Effect.Effect<void, StorageFailure>;
   readonly list: (
-    options?: ExecutionHistoryListOptions,
+    options: ExecutionHistoryListOptions,
   ) => Effect.Effect<ExecutionHistoryListResult, StorageFailure>;
   readonly get: (
     executionId: string,
@@ -132,6 +198,62 @@ export interface ExecutionHistoryStore {
     executionId: string,
   ) => Effect.Effect<readonly ToolCallRow[], StorageFailure>;
 }
+
+// ---------------------------------------------------------------------------
+// List helpers (pure).
+// ---------------------------------------------------------------------------
+
+type RunsWhere = {
+  status?: { in: readonly RunStatus[] };
+  triggerKind?: { in: readonly string[] };
+  startedAt?: { gte?: number; lte?: number; gt?: number };
+  hadInteraction?: { eq: boolean };
+};
+
+/** Build the indexed-field `where` from list options. `omit` drops one facet's
+ *  own field so a facet count reflects the *other* filters (a faceted rail still
+ *  shows every option for the field you're filtering on). */
+const buildRunsWhere = (
+  options: ExecutionHistoryListOptions,
+  omit?: "status" | "triggerKind" | "hadInteraction",
+): RunsWhere => {
+  const where: RunsWhere = {};
+  if (omit !== "status" && options.statusFilter && options.statusFilter.length > 0) {
+    where.status = { in: options.statusFilter };
+  }
+  if (omit !== "triggerKind" && options.triggerFilter && options.triggerFilter.length > 0) {
+    where.triggerKind = { in: options.triggerFilter };
+  }
+  const startedAt: { gte?: number; lte?: number; gt?: number } = {};
+  if (options.timeRange?.from != null) startedAt.gte = options.timeRange.from;
+  if (options.timeRange?.to != null) startedAt.lte = options.timeRange.to;
+  if (options.after != null) startedAt.gt = options.after;
+  if (Object.keys(startedAt).length > 0) where.startedAt = startedAt;
+  if (omit !== "hadInteraction" && options.hadInteraction != null) {
+    where.hadInteraction = { eq: options.hadInteraction };
+  }
+  return where;
+};
+
+const HOUR_MS = 3_600_000;
+const BUCKET_STEPS_MS = [
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  HOUR_MS,
+  6 * HOUR_MS,
+  24 * HOUR_MS,
+  7 * 24 * HOUR_MS,
+] as const;
+
+/** Pick a timeline bucket width (~48 buckets across the requested range). */
+const chooseBucketMs = (timeRange: { from?: number; to?: number } | undefined): number => {
+  if (timeRange?.from == null || timeRange.to == null) return HOUR_MS;
+  const target = Math.max(1, timeRange.to - timeRange.from) / 48;
+  return (
+    BUCKET_STEPS_MS.find((step) => step >= target) ?? BUCKET_STEPS_MS[BUCKET_STEPS_MS.length - 1]!
+  );
+};
 
 export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistoryStore => {
   const pluginStorage: PluginStorageFacade = deps.pluginStorage;
@@ -373,41 +495,124 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     return Effect.void;
   };
 
-  const list = (
-    options?: ExecutionHistoryListOptions,
-  ): Effect.Effect<ExecutionHistoryListResult, StorageFailure> => {
-    const where: {
-      status?: { in: readonly RunStatus[] };
-      triggerKind?: { in: readonly string[] };
-      startedAt?: { gte?: number; lte?: number };
-      hadInteraction?: { eq: boolean };
-    } = {};
-    if (options?.statusFilter && options.statusFilter.length > 0) {
-      where.status = { in: options.statusFilter };
-    }
-    if (options?.triggerFilter && options.triggerFilter.length > 0) {
-      where.triggerKind = { in: options.triggerFilter };
-    }
-    if (options?.timeRange) {
-      where.startedAt = {};
-      if (options.timeRange.from != null) where.startedAt.gte = options.timeRange.from;
-      if (options.timeRange.to != null) where.startedAt.lte = options.timeRange.to;
-    }
-    if (options?.hadInteraction != null) {
-      where.hadInteraction = { eq: options.hadInteraction };
-    }
-
-    return Effect.gen(function* () {
-      const rows = yield* runsC.query({
-        where,
-        orderBy: [{ field: "startedAt", direction: options?.sort ?? "desc" }],
-        limit: options?.limit,
-        offset: options?.offset,
+  const computeMeta = (
+    options: ExecutionHistoryListOptions,
+  ): Effect.Effect<ExecutionListMeta, StorageFailure> =>
+    Effect.gen(function* () {
+      const where = buildRunsWhere(options);
+      const totalRowCount = yield* runsC.aggregate.count();
+      const filterRowCount = yield* runsC.aggregate.count({ where });
+      const statusGroups = yield* runsC.aggregate.groupCount({
+        field: "status",
+        where: buildRunsWhere(options, "status"),
       });
-      const total = yield* runsC.count({ where });
-      return { runs: rows.map((entry) => entry.data), total };
+      const triggerGroups = yield* runsC.aggregate.groupCount({
+        field: "triggerKind",
+        where: buildRunsWhere(options, "triggerKind"),
+      });
+      const interactionGroups = yield* runsC.aggregate.groupCount({
+        field: "hadInteraction",
+        where: buildRunsWhere(options, "hadInteraction"),
+        valueType: "boolean",
+      });
+      const stats = yield* runsC.aggregate.stats({
+        field: "durationMs",
+        where,
+        percentiles: [0.5, 0.75, 0.9, 0.95, 0.99],
+      });
+
+      const statusCounts: RunStatusCount[] = [];
+      for (const group of statusGroups) {
+        if (isRunStatus(group.value)) {
+          statusCounts.push({ status: group.value, count: group.count });
+        }
+      }
+
+      // Stacked-by-status timeline: one bucketed count per present status,
+      // merged by bucket start. Respects every filter except `status` itself.
+      const bucketMs = chooseBucketMs(options.timeRange);
+      const chartWhere = buildRunsWhere(options, "status");
+      const perStatusBuckets = yield* Effect.forEach(statusCounts, (entry) =>
+        runsC.aggregate
+          .timeBuckets({
+            field: "startedAt",
+            bucketMs,
+            where: { ...chartWhere, status: { in: [entry.status] } },
+          })
+          .pipe(Effect.map((buckets) => ({ status: entry.status, buckets }))),
+      );
+      const chartByBucket = new Map<number, Record<string, number>>();
+      for (const { status, buckets } of perStatusBuckets) {
+        for (const bucket of buckets) {
+          const counts = chartByBucket.get(bucket.bucket) ?? {};
+          counts[status] = bucket.count;
+          chartByBucket.set(bucket.bucket, counts);
+        }
+      }
+      const chartData: RunChartBucket[] = [...chartByBucket.entries()]
+        .sort((left, right) => left[0] - right[0])
+        .map(([bucketStart, counts]) => ({ bucketStart, counts }));
+
+      const triggerCounts: RunTriggerCount[] = triggerGroups.map((group) => ({
+        triggerKind: typeof group.value === "string" ? group.value : null,
+        count: group.count,
+      }));
+      const withInteraction = interactionGroups.find((group) => group.value === true)?.count ?? 0;
+      const withoutInteraction =
+        interactionGroups.find((group) => group.value === false)?.count ?? 0;
+      const percentileAt = (fraction: number): number | null =>
+        stats.percentiles.find((entry) => entry.fraction === fraction)?.value ?? null;
+
+      return {
+        totalRowCount,
+        filterRowCount,
+        statusCounts,
+        triggerCounts,
+        interactionCounts: { withInteraction, withoutInteraction },
+        chartBucketMs: bucketMs,
+        chartData,
+        durationStats: {
+          count: stats.count,
+          min: stats.min,
+          max: stats.max,
+          p50: percentileAt(0.5),
+          p75: percentileAt(0.75),
+          p90: percentileAt(0.9),
+          p95: percentileAt(0.95),
+          p99: percentileAt(0.99),
+        },
+      };
     });
-  };
+
+  const list = (
+    options: ExecutionHistoryListOptions,
+  ): Effect.Effect<ExecutionHistoryListResult, StorageFailure> =>
+    Effect.gen(function* () {
+      const sortField = options.sortField ?? "startedAt";
+      const sortDirection = options.sortDirection ?? "desc";
+      const where = buildRunsWhere(options);
+      const page = yield* runsC.queryKeyset({
+        where,
+        orderBy: [{ field: sortField, direction: sortDirection, valueType: "number" }],
+        limit: options.limit,
+        cursor: options.cursor
+          ? { values: [options.cursor.sort], key: options.cursor.key }
+          : undefined,
+      });
+      const nextCursor: RunsCursor | null = page.nextCursor
+        ? {
+            sort: typeof page.nextCursor.values[0] === "number" ? page.nextCursor.values[0] : null,
+            key: page.nextCursor.key,
+          }
+        : null;
+      // Meta is computed once per filter set — only for the first page, and
+      // never during live polling (`after`).
+      const meta =
+        options.cursor === undefined && options.after === undefined
+          ? yield* computeMeta(options)
+          : null;
+      return { runs: page.entries.map((entry) => entry.data), nextCursor, meta };
+    });
 
   const get = (executionId: string): Effect.Effect<ExecutionHistoryDetail | null, StorageFailure> =>
     Effect.gen(function* () {
