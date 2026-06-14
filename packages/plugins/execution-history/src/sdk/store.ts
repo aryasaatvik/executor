@@ -500,26 +500,34 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
   ): Effect.Effect<ExecutionListMeta, StorageFailure> =>
     Effect.gen(function* () {
       const where = buildRunsWhere(options);
-      const totalRowCount = yield* runsC.aggregate.count();
-      const filterRowCount = yield* runsC.aggregate.count({ where });
-      const statusGroups = yield* runsC.aggregate.groupCount({
-        field: "status",
-        where: buildRunsWhere(options, "status"),
-      });
-      const triggerGroups = yield* runsC.aggregate.groupCount({
-        field: "triggerKind",
-        where: buildRunsWhere(options, "triggerKind"),
-      });
-      const interactionGroups = yield* runsC.aggregate.groupCount({
-        field: "hadInteraction",
-        where: buildRunsWhere(options, "hadInteraction"),
-        valueType: "boolean",
-      });
-      const stats = yield* runsC.aggregate.stats({
-        field: "durationMs",
-        where,
-        percentiles: [0.5, 0.75, 0.9, 0.95, 0.99],
-      });
+
+      // Wave 1: all independent aggregates concurrently.
+      const [totalRowCount, filterRowCount, statusGroups, triggerGroups, interactionGroups, stats] =
+        yield* Effect.all(
+          [
+            runsC.aggregate.count(),
+            runsC.aggregate.count({ where }),
+            runsC.aggregate.groupCount({
+              field: "status",
+              where: buildRunsWhere(options, "status"),
+            }),
+            runsC.aggregate.groupCount({
+              field: "triggerKind",
+              where: buildRunsWhere(options, "triggerKind"),
+            }),
+            runsC.aggregate.groupCount({
+              field: "hadInteraction",
+              where: buildRunsWhere(options, "hadInteraction"),
+              valueType: "boolean",
+            }),
+            runsC.aggregate.stats({
+              field: "durationMs",
+              where,
+              percentiles: [0.5, 0.75, 0.9, 0.95, 0.99],
+            }),
+          ] as const,
+          { concurrency: "unbounded" },
+        );
 
       const statusCounts: RunStatusCount[] = [];
       for (const group of statusGroups) {
@@ -528,18 +536,22 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         }
       }
 
-      // Stacked-by-status timeline: one bucketed count per present status,
-      // merged by bucket start. Respects every filter except `status` itself.
+      // Wave 2: stacked-by-status timeline — one bucketed count per present
+      // status, merged by bucket start. Respects every filter except `status`
+      // itself. Per-status queries are independent so run concurrently.
       const bucketMs = chooseBucketMs(options.timeRange);
       const chartWhere = buildRunsWhere(options, "status");
-      const perStatusBuckets = yield* Effect.forEach(statusCounts, (entry) =>
-        runsC.aggregate
-          .timeBuckets({
-            field: "startedAt",
-            bucketMs,
-            where: { ...chartWhere, status: { in: [entry.status] } },
-          })
-          .pipe(Effect.map((buckets) => ({ status: entry.status, buckets }))),
+      const perStatusBuckets = yield* Effect.forEach(
+        statusCounts,
+        (entry) =>
+          runsC.aggregate
+            .timeBuckets({
+              field: "startedAt",
+              bucketMs,
+              where: { ...chartWhere, status: { in: [entry.status] } },
+            })
+            .pipe(Effect.map((buckets) => ({ status: entry.status, buckets }))),
+        { concurrency: "unbounded" },
       );
       const chartByBucket = new Map<number, Record<string, number>>();
       for (const { status, buckets } of perStatusBuckets) {
