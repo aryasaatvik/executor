@@ -110,6 +110,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
       organizationName: this.cfConfig.organizationName,
       organizationSlug: this.cfConfig.organizationSlug,
       userId: token.userId,
+      actor: token.actor,
       resource: token.resource,
       elicitationMode: token.elicitationMode,
       artifactsEnabled: token.artifactsEnabled,
@@ -135,6 +136,13 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
       ).pipe(
         Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle, self.cfEnv.ANALYTICS)),
       );
+      // Attribute every run from this MCP session to its actor — carried from
+      // the gate's principal, falling back to the session user.
+      const actor = sessionMeta.actor ?? {
+        kind: "user" as const,
+        id: sessionMeta.userId,
+        label: null,
+      };
       // Browser elicitation mode (the base owns the approval store + the HTTP
       // approval RPCs): a gated execution pauses and returns an approvalUrl into
       // the console resume page. The URL origin is the create request's origin
@@ -146,6 +154,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
       const artifactOrigin = sessionMeta.webOrigin ?? config.webBaseUrl;
       const mcpServer = yield* createExecutorMcpServer({
         engine,
+        trigger: { kind: "mcp", actor },
         artifacts: executor.artifacts,
         connections: executor.connections,
         // Artifacts are on by default, opt-out per connection. A session
