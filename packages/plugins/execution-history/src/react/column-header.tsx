@@ -84,7 +84,7 @@ export function RunsColumnHeader({
         sortField={sortField}
         sortDirection={sortDirection}
         onSort={onSort}
-        className="w-[150px] shrink-0 md:w-[190px]"
+        className="w-[180px] shrink-0"
       />
 
       {/* Status */}

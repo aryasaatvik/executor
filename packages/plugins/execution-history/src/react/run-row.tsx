@@ -9,24 +9,22 @@ import { HoverCardTimestamp } from "./hover-card-timestamp";
 import type { RunColumns } from "./view";
 
 // Column slot classes — RunListRow and RunsColumnHeader both apply these
-// fixed-width, same-breakpoint slots (after the dot/started/status base
-// columns) so the header and rows stay aligned across screen sizes.
+// fixed-width slots (after the dot/started/status base columns) so the header
+// and rows stay pixel-aligned. Every column is always rendered; when the
+// viewport is narrower than the table's natural width the body scrolls
+// horizontally (see RunsShell's min-width wrapper) instead of hiding columns.
 //
-// Trigger/duration carry inline content (a dot+label, a sort button), so their
-// visible state must be a flex display — `xl:flex`/`md:flex` rather than
-// `xl:block`/`md:block`. A `block` slot composed with an element's own
-// `inline-flex` makes tailwind-merge pick one display value, which silently
-// desyncs header and row (the trigger column) or wraps the sort label onto a
-// second line (duration). A single flex display keeps both in lockstep.
-export const COL_TRIGGER = "hidden w-[120px] shrink-0 xl:flex";
-// Actor carries a dot + label (machine name / email / user), so it is a flex
-// slot like trigger. Wider, since labels are longer than trigger kinds.
-export const COL_ACTOR = "hidden w-[170px] shrink-0 lg:flex";
-export const COL_DURATION = "hidden w-[100px] shrink-0 md:flex";
-export const COL_TOOLS = "hidden xl:block w-[80px] shrink-0";
-export const COL_INTERACTION = "hidden xl:block w-[100px] shrink-0";
-// Log error/warn counts — least critical, so only on the widest screens.
-export const COL_LOG = "hidden 2xl:block w-[80px] shrink-0";
+// Trigger/duration/actor carry inline content (a dot+label, a sort button), so
+// their display must be `flex` — composing `block` with an element's own
+// `inline-flex` makes tailwind-merge collapse to one display value, which
+// silently desyncs the header slot from the row slot (trigger) or wraps the
+// sort label onto a second line (duration). A `flex` slot keeps both in lockstep.
+export const COL_TRIGGER = "flex w-[120px] shrink-0";
+export const COL_ACTOR = "flex w-[170px] shrink-0";
+export const COL_DURATION = "flex w-[100px] shrink-0";
+export const COL_TOOLS = "block w-[80px] shrink-0";
+export const COL_INTERACTION = "block w-[100px] shrink-0";
+export const COL_LOG = "block w-[80px] shrink-0";
 
 export interface RunListRowProps {
   readonly run: RunRow;
@@ -69,7 +67,7 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
       <HoverCardTimestamp
         timestamp={run.startedAt}
         display={formatRelative(run.startedAt)}
-        className="w-[150px] shrink-0 tabular-nums text-muted-foreground md:w-[190px]"
+        className="w-[180px] shrink-0 tabular-nums text-muted-foreground"
       />
 
       {/* Status label */}
