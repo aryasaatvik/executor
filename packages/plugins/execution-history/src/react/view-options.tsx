@@ -11,6 +11,7 @@ const COLUMN_KEYS: readonly RunColumnKey[] = [
   "duration",
   "tools",
   "interaction",
+  "log",
 ];
 
 export function ViewOptions(props: {

@@ -36,11 +36,29 @@ interface ShortcutContext {
   readonly selected: string | null;
 }
 
+const COLUMNS_STORAGE_KEY = "executionHistory.columns";
+
+// Column visibility persists across reloads as a comma-joined list of the
+// visible keys (avoids JSON.parse, which the repo lints against). Keys absent
+// from the stored list — including columns added in a later release — read as
+// hidden, falling back to DEFAULT_COLUMNS only when nothing is stored.
+const readStoredColumns = (): RunColumns => {
+  if (typeof window === "undefined") return DEFAULT_COLUMNS;
+  const raw = window.localStorage.getItem(COLUMNS_STORAGE_KEY);
+  if (raw == null) return DEFAULT_COLUMNS;
+  const visible = new Set(raw.split(",").filter(Boolean));
+  const next = { ...DEFAULT_COLUMNS };
+  for (const key of Object.keys(next) as RunColumnKey[]) {
+    next[key] = visible.has(key);
+  }
+  return next;
+};
+
 export function RunsPage() {
   const [filters, setFilters] = useState<RunsFilters>(emptyRunsFilters);
   const [live, setLive] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [columns, setColumns] = useState<RunColumns>(DEFAULT_COLUMNS);
+  const [columns, setColumns] = useState<RunColumns>(readStoredColumns);
   const [commandOpen, setCommandOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [railCollapsed, setRailCollapsed] = useState(false);
@@ -59,6 +77,12 @@ export function RunsPage() {
   const toggleColumn = useCallback((key: RunColumnKey) => {
     setColumns((current) => ({ ...current, [key]: !current[key] }));
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const visible = (Object.keys(columns) as RunColumnKey[]).filter((key) => columns[key]);
+    window.localStorage.setItem(COLUMNS_STORAGE_KEY, visible.join(","));
+  }, [columns]);
 
   // Keep the latest view/selected reachable from a stable keydown listener.
   const shortcutRef = useRef<ShortcutContext>({ view, selected });
@@ -153,6 +177,11 @@ export function RunsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           <h1 className="text-sm font-semibold">Runs</h1>
+          {view.meta != null && (
+            <span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
+              {view.rows.length} of {view.meta.filterRowCount}
+            </span>
+          )}
           <Button
             type="button"
             variant="outline"
@@ -237,6 +266,9 @@ export function RunsPage() {
         emptyState={
           <div className="p-6 text-center font-mono text-xs text-muted-foreground">
             No runs match the current filters.
+            <span className="mt-1 block text-muted-foreground/60">
+              Try widening the time range or clearing a filter.
+            </span>
           </div>
         }
         railCollapsed={railCollapsed}

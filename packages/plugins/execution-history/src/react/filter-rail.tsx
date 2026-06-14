@@ -30,6 +30,7 @@ export interface TimeRangePreset {
 }
 
 export const TIME_RANGE_PRESETS: readonly TimeRangePreset[] = [
+  { key: "15m", label: "Last 15m", ms: 15 * 60 * 1000 },
   { key: "1h", label: "Last 1h", ms: 60 * 60 * 1000 },
   { key: "24h", label: "Last 24h", ms: 24 * 60 * 60 * 1000 },
   { key: "7d", label: "Last 7d", ms: 7 * 24 * 60 * 60 * 1000 },

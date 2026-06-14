@@ -11,6 +11,7 @@ export function RefreshButton(props: {
       variant="ghost"
       size="icon-sm"
       aria-label="Refresh"
+      title="Refresh (r)"
       onClick={props.onClick}
       disabled={props.isLoading}
     >
