@@ -1,11 +1,18 @@
-import { Context, Effect, Schema } from "effect";
+import { Context, Effect, Option, Schema } from "effect";
 import { HttpApiBuilder } from "effect/unstable/httpapi";
 
 import { addGroup, capture } from "@executor-js/api";
 
 import { RunStatus } from "../sdk/collections";
 import type { ExecutionHistoryListOptions, ExecutionHistoryStore } from "../sdk/store";
-import { ExecutionHistoryGroup } from "./group";
+import { ExecutionHistoryGroup, RunsCursorFromString } from "./group";
+
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
+const isRunStatus = Schema.is(RunStatus);
+const decodeCursor = Schema.decodeUnknownOption(RunsCursorFromString);
+const encodeCursor = Schema.encodeUnknownOption(RunsCursorFromString);
 
 // ---------------------------------------------------------------------------
 // Service tag
@@ -75,23 +82,36 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
             const history = yield* ExecutionHistoryExtensionService;
             // Keep only valid RunStatus literals — an unknown `?status=bogus`
             // must not reach the storage `where` clause.
-            const statusFilter = splitCsv(query.status).filter(Schema.is(RunStatus));
+            const statusFilter = splitCsv(query.status).filter(isRunStatus);
             const triggerFilter = splitCsv(query.trigger);
             const timeRange =
               query.from !== undefined || query.to !== undefined
                 ? { from: query.from, to: query.to }
                 : undefined;
+            const cursor =
+              query.cursor !== undefined
+                ? Option.getOrUndefined(decodeCursor(query.cursor))
+                : undefined;
+            const limit = Math.min(MAX_LIMIT, Math.max(1, query.limit ?? DEFAULT_LIMIT));
             const options: ExecutionHistoryListOptions = {
               statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
               triggerFilter: triggerFilter.length > 0 ? triggerFilter : undefined,
               timeRange,
               hadInteraction: parseBooleanFlag(query.interaction),
-              limit: query.limit,
-              offset: query.offset,
-              sort: query.sort,
+              after: query.after,
+              sortField: query.sort,
+              sortDirection: query.dir,
+              limit,
+              cursor,
             };
             const result = yield* history.list(options);
-            return { runs: result.runs, total: result.total };
+            return {
+              runs: result.runs,
+              nextCursor: result.nextCursor
+                ? Option.getOrNull(encodeCursor(result.nextCursor))
+                : null,
+              meta: result.meta,
+            };
           }),
         ),
       )
