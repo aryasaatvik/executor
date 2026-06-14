@@ -10,7 +10,8 @@ import { RunRow } from "./collections";
 // key at all. The store passes the raw stored doc straight to the HTTP response
 // encoder, so a legacy doc must both decode AND encode through `RunRow` without a
 // "Missing key" error — otherwise the entire runs list 400s on the newest page.
-// These fields use `optionalWith({ default: null })` precisely so that holds.
+// These fields use an optional key + a decoding default of null precisely so
+// that holds.
 // ---------------------------------------------------------------------------
 
 // Hoisted: `Schema.*Sync` compiles a function, so it must not be rebuilt per call.
@@ -49,12 +50,16 @@ describe("RunRow legacy-document tolerance", () => {
   it("encodes a legacy doc with the actor keys absent (the runs-response regression)", () => {
     // The store hands the raw stored doc to the response encoder, so the encode
     // input is the legacy shape itself. With `NullOr` this threw
-    // "Missing key at [actorId]"; with the optional key it must succeed.
+    // "Missing key at [actorId]"; with the optional key it must succeed, and the
+    // absent actor keys stay absent (the encoder must not fabricate them).
     const encoded = encodeRunRow(legacyRunDoc);
     expect(encoded.executionId).toBe("exec_legacy");
+    expect(encoded.actorId ?? null).toBeNull();
+    expect(encoded.actorLabel ?? null).toBeNull();
+    expect(encoded.actorKind ?? null).toBeNull();
   });
 
-  it("round-trips a run that DOES carry an actor", () => {
+  it("round-trips a run that DOES carry an actor through decode AND encode", () => {
     const withActor = {
       ...legacyRunDoc,
       actorId: "tok.access",
@@ -65,5 +70,11 @@ describe("RunRow legacy-document tolerance", () => {
     expect(decoded.actorId).toBe("tok.access");
     expect(decoded.actorLabel).toBe("phoenix");
     expect(decoded.actorKind).toBe("service-token");
+    // Encode must carry the present keys through unchanged (the path the runs
+    // response actually takes for an attributed run).
+    const encoded = encodeRunRow(decoded);
+    expect(encoded.actorId).toBe("tok.access");
+    expect(encoded.actorLabel).toBe("phoenix");
+    expect(encoded.actorKind).toBe("service-token");
   });
 });
