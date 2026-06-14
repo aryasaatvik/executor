@@ -51,15 +51,17 @@ const buildAxisFormatter =
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "—";
     const options: Intl.DateTimeFormatOptions =
-      bucketMs < DAY_MS
-        ? { hour: "2-digit", minute: "2-digit", hour12: false }
-        : bucketMs >= 7 * DAY_MS
-          ? { month: "short", day: "numeric" }
-          : { month: "2-digit", day: "2-digit" };
+      bucketMs <= 60_000
+        ? { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }
+        : bucketMs < DAY_MS
+          ? { hour: "2-digit", minute: "2-digit", hour12: false }
+          : bucketMs >= 7 * DAY_MS
+            ? { month: "short", day: "numeric" }
+            : { month: "2-digit", day: "2-digit" };
     return new Intl.DateTimeFormat(undefined, options).format(date);
   };
 
-const formatTooltipLabel = (value: number): string => {
+const formatTooltipLabel = (value: number, bucketMs: number): string => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
   return new Intl.DateTimeFormat(undefined, {
@@ -67,6 +69,7 @@ const formatTooltipLabel = (value: number): string => {
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    ...(bucketMs <= 60_000 ? { second: "2-digit" as const } : {}),
     hour12: false,
   }).format(date);
 };
@@ -163,11 +166,15 @@ export function RunsTimelineChart(props: {
         />
         <ChartTooltip
           cursor={false}
+          allowEscapeViewBox={{ x: false, y: true }}
+          wrapperStyle={{ zIndex: 50, pointerEvents: "none" }}
           content={
             <ChartTooltipContent
               labelFormatter={(_, payload) => {
                 const first = payload?.[0]?.payload as { bucketStart?: number } | undefined;
-                return first?.bucketStart == null ? "—" : formatTooltipLabel(first.bucketStart);
+                return first?.bucketStart == null
+                  ? "—"
+                  : formatTooltipLabel(first.bucketStart, props.bucketMs);
               }}
             />
           }
