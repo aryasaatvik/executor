@@ -6,11 +6,11 @@ import { ExecutionHistoryClient } from "./client";
 // Query atoms for the execution-history read model.
 //
 // The list atom is parameterized by the wire query shape of the `list`
-// endpoint (status/trigger CSV strings, numeric from/to/limit/offset, the
-// "true"/"false" interaction flag, and asc/desc sort). Detail + tool-call
-// atoms key off the execution id. Each atom is `Atom.family`-keyed so a
-// distinct filter/page/run gets its own cached result — matching the
-// graphql plugin's per-input atom pattern.
+// endpoint (status/trigger CSV strings, numeric from/to/after/limit, the
+// "true"/"false" interaction flag, sort field + direction, and an opaque
+// keyset cursor). Detail + tool-call atoms key off the execution id. Each atom
+// is `Atom.family`-keyed so a distinct filter/page/run gets its own cached
+// result — matching the graphql plugin's per-input atom pattern.
 // ---------------------------------------------------------------------------
 
 export interface RunsQuery {
@@ -19,9 +19,11 @@ export interface RunsQuery {
   readonly from?: number;
   readonly to?: number;
   readonly interaction?: string;
+  readonly after?: number;
+  readonly sort?: "startedAt" | "durationMs";
+  readonly dir?: "asc" | "desc";
   readonly limit?: number;
-  readonly offset?: number;
-  readonly sort?: "asc" | "desc";
+  readonly cursor?: string;
 }
 
 export const runsAtom = Atom.family((query: RunsQuery) =>

@@ -434,17 +434,21 @@ function RunsTable(props: {
 
 export function RunsPage() {
   const [status, setStatus] = useState<StatusFilter>("all");
-  const [offset, setOffset] = useState(0);
+  // Forward keyset pagination: a stack of cursors, top = current page (page 1
+  // is `undefined`). Next pushes `nextCursor`; Previous pops.
+  const [cursorStack, setCursorStack] = useState<readonly (string | undefined)[]>([undefined]);
   const [selected, setSelected] = useState<string | null>(null);
+  const cursor = cursorStack[cursorStack.length - 1];
 
   const query = useMemo<RunsQuery>(
     () => ({
       limit: PAGE_SIZE,
-      offset,
-      sort: "desc",
+      sort: "startedAt",
+      dir: "desc",
       ...(status === "all" ? {} : { status }),
+      ...(cursor !== undefined ? { cursor } : {}),
     }),
-    [offset, status],
+    [cursor, status],
   );
   const runs = useAtomValue(runsAtom(query));
 
@@ -461,7 +465,7 @@ export function RunsPage() {
           value={status}
           onValueChange={(value) => {
             setStatus(value as StatusFilter);
-            setOffset(0);
+            setCursorStack([undefined]);
           }}
         >
           <SelectTrigger size="sm" className="w-44">
@@ -486,18 +490,17 @@ export function RunsPage() {
               <RunsTable runs={value.runs} onSelect={setSelected} />
               <div className="flex items-center justify-between gap-3">
                 <p className="font-mono text-xs text-muted-foreground">
-                  {value.total.toLocaleString()} total
-                  {value.runs.length > 0
-                    ? ` / showing ${offset + 1}–${offset + value.runs.length}`
-                    : ""}
+                  {value.meta
+                    ? `${value.meta.filterRowCount.toLocaleString()} total`
+                    : `${value.runs.length.toLocaleString()} on this page`}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={offset === 0}
-                    onClick={() => setOffset((current) => Math.max(0, current - PAGE_SIZE))}
+                    disabled={cursorStack.length === 1}
+                    onClick={() => setCursorStack((stack) => stack.slice(0, -1))}
                   >
                     Previous
                   </Button>
@@ -505,8 +508,12 @@ export function RunsPage() {
                     type="button"
                     variant="outline"
                     size="sm"
-                    disabled={offset + value.runs.length >= value.total}
-                    onClick={() => setOffset((current) => current + PAGE_SIZE)}
+                    disabled={value.nextCursor === null}
+                    onClick={() =>
+                      setCursorStack((stack) =>
+                        value.nextCursor === null ? stack : [...stack, value.nextCursor],
+                      )
+                    }
                   >
                     Next
                   </Button>
