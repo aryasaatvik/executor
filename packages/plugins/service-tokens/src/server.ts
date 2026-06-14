@@ -27,6 +27,7 @@ import {
   type StorageFailure,
 } from "@executor-js/sdk/core";
 import { capture } from "@executor-js/api";
+import { AuthContext } from "@executor-js/api/server";
 
 import { ServiceTokensApi, type ServiceTokenAlias } from "./shared";
 
@@ -38,6 +39,17 @@ const ALIAS_OWNER: Owner = "org";
 
 interface AliasData {
   readonly subject: string;
+  readonly machineName: string | null;
+  readonly email: string | null;
+  readonly name: string | null;
+}
+
+/** The identity fields captured from the aliasing user, plus the typed machine
+ *  name — everything the alias stores beyond the token's `commonName`. */
+interface AliasFields {
+  readonly machineName: string | null;
+  readonly email: string | null;
+  readonly name: string | null;
 }
 
 // Bundle the group into a single-group HttpApi for typing only — the runtime
@@ -53,13 +65,20 @@ const makeServiceTokensExtension = (ctx: {
       .list<AliasData>({ collection: COLLECTION })
       .pipe(
         Effect.map((entries) =>
-          entries.map((entry) => ({ commonName: entry.key, subject: entry.data.subject })),
+          entries.map((entry) => ({
+            commonName: entry.key,
+            subject: entry.data.subject,
+            machineName: entry.data.machineName ?? null,
+            email: entry.data.email ?? null,
+            name: entry.data.name ?? null,
+          })),
         ),
       ),
 
-  // Alias the given token to the CALLER's own subject — a user can only map a
-  // token to their own identity, never someone else's.
-  alias: (commonName: string): Effect.Effect<ServiceTokenAlias, StorageFailure> =>
+  // Alias the given token to the CALLER's own identity — a user can only map a
+  // token to themselves. `fields` carries the caller's email/name (captured from
+  // their principal by the handler) + the typed machine name.
+  alias: (commonName: string, fields: AliasFields): Effect.Effect<ServiceTokenAlias, StorageFailure> =>
     Effect.gen(function* () {
       const subject = ctx.owner.subject;
       if (subject == null) {
@@ -72,13 +91,19 @@ const makeServiceTokensExtension = (ctx: {
         });
       }
       const subjectStr = String(subject);
+      const data: AliasData = {
+        subject: subjectStr,
+        machineName: fields.machineName,
+        email: fields.email,
+        name: fields.name,
+      };
       yield* ctx.pluginStorage.put<AliasData>({
         collection: COLLECTION,
         key: commonName,
         owner: ALIAS_OWNER,
-        data: { subject: subjectStr },
+        data,
       });
-      return { commonName, subject: subjectStr };
+      return { commonName, ...data };
     }),
 
   unalias: (commonName: string): Effect.Effect<{ readonly ok: boolean }, StorageFailure> =>
@@ -112,7 +137,15 @@ const ServiceTokensHandlers = HttpApiBuilder.group(ServiceTokensApiBundle, "serv
       capture(
         Effect.gen(function* () {
           const ext = yield* ServiceTokensExtensionService;
-          return yield* ext.alias(payload.commonName);
+          // Capture the caller's identity natively from their Access principal —
+          // the alias acts as THIS user, so "Acts as" can render their email
+          // instead of the `sub` UUID, with no Cloudflare API call.
+          const auth = yield* AuthContext;
+          return yield* ext.alias(payload.commonName, {
+            machineName: payload.machineName ?? null,
+            email: auth.email.length > 0 ? auth.email : null,
+            name: auth.name,
+          });
         }),
       ),
     )

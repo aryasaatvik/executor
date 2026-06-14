@@ -22,6 +22,14 @@ export const ServiceTokenAlias = Schema.Struct({
   commonName: Schema.String,
   /** The human Access `sub` this token acts as. */
   subject: Schema.String,
+  /** A user-friendly machine name for the token (e.g. "executor-phoenix").
+   *  Captured at alias time; shown as the run actor label + on this page. */
+  machineName: Schema.NullOr(Schema.String),
+  /** The aliasing user's email, captured natively from their Access JWT at
+   *  creation — so "Acts as" renders a human address, not the `sub` UUID. */
+  email: Schema.NullOr(Schema.String),
+  /** The aliasing user's display name, captured the same way. */
+  name: Schema.NullOr(Schema.String),
 });
 export type ServiceTokenAlias = typeof ServiceTokenAlias.Type;
 
@@ -36,10 +44,14 @@ export const ServiceTokensApi = HttpApiGroup.make("serviceTokens")
   )
   .add(
     HttpApiEndpoint.post("alias", "/aliases", {
-      // The subject is NOT in the payload: the alias always targets the calling
-      // user's own subject (server reads it from the request principal), so a
-      // user can only ever alias a token to themselves.
-      payload: Schema.Struct({ commonName: Schema.String }),
+      // The subject/email/name are NOT in the payload: the alias always targets
+      // the calling user's own identity (server reads it from the request
+      // principal), so a user can only ever alias a token to themselves. Only
+      // the optional friendly `machineName` is client-supplied.
+      payload: Schema.Struct({
+        commonName: Schema.String,
+        machineName: Schema.optional(Schema.String),
+      }),
       success: ServiceTokenAlias,
       error: InternalError,
     }),
