@@ -328,6 +328,18 @@ function DetailContent(props: {
               <MetaCard label="Duration">
                 {run.durationMs != null ? formatDuration(run.durationMs) : "—"}
               </MetaCard>
+              <MetaCard label="Actor">
+                {run.actorId !== null ? (
+                  <span className="font-mono text-xs break-all">
+                    {run.actorLabel ?? run.actorId}
+                    {run.actorKind !== null ? (
+                      <span className="text-muted-foreground/60"> · {run.actorKind}</span>
+                    ) : null}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground/60">—</span>
+                )}
+              </MetaCard>
               <MetaCard label="Started">{formatDateTime(run.startedAt)}</MetaCard>
               <MetaCard label="Completed">{formatDateTime(run.completedAt)}</MetaCard>
             </div>

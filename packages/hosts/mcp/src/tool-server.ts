@@ -578,7 +578,9 @@ const createMcpAssembly = <E extends Cause.YieldableError>(
           return yield* Effect.promise(() => nativeInputRequired(services, paused));
         }
 
-        const outcome = yield* services.engine.executeWithPause(services.code);
+        const outcome = yield* services.engine.executeWithPause(services.code, {
+          trigger: services.trigger,
+        });
         if (outcome.status === "completed") return services.complete(outcome.result);
         yield* services.executionPaused(outcome.execution);
         return yield* Effect.promise(() => nativeInputRequired(services, outcome.execution));
