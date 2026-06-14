@@ -141,6 +141,7 @@ const propsForPrincipal = (
       session: {
         organizationId: principal.organizationId,
         userId: principal.accountId,
+        actor: principal.actor,
         elicitationMode: readElicitationMode(request),
         artifactsEnabled: readArtifactsEnabled(request),
         // host-cloudflare only routes the bare `/mcp` endpoint to the session
