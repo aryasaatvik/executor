@@ -50,7 +50,7 @@ export const formatRelative = (timestamp: number): string => {
 };
 
 export const formatDuration = (value: number | null): string => {
-  if (value == null) return "—";
+  if (value == null) return "running";
   if (value < 1000) return `${value}ms`;
   if (value < 60_000) return `${(value / 1000).toFixed(1)}s`;
   return `${(value / 60_000).toFixed(1)}m`;

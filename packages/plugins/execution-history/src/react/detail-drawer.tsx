@@ -157,14 +157,28 @@ function ToolCallItem(props: {
 function ToolCallsTab(props: { readonly run: RunRow }) {
   const toolCalls = useAtomValue(runToolCallsAtom(props.run.executionId));
   const windowStart = props.run.startedAt;
-  const windowEnd = props.run.completedAt ?? Date.now();
   return AsyncResult.match(toolCalls, {
     onInitial: () => <p className="text-sm text-muted-foreground">Loading tool calls...</p>,
     onFailure: () => <p className="text-sm text-destructive">Unable to load tool calls.</p>,
-    onSuccess: ({ value }) =>
-      value.toolCalls.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No tool calls recorded.</p>
-      ) : (
+    onSuccess: ({ value }) => {
+      if (value.toolCalls.length === 0) {
+        return <p className="text-sm text-muted-foreground">No tool calls recorded.</p>;
+      }
+      // Derive the window end from the tool-call data rather than only
+      // `run.completedAt` — the two atoms refresh independently, so a fresher
+      // tool call can outrun a stale run end; covering it here avoids clamping
+      // that bar to a 1% sliver.
+      const callsEnd = value.toolCalls.reduce(
+        (max, call) =>
+          Math.max(
+            max,
+            call.completedAt ??
+              (call.durationMs != null ? call.startedAt + call.durationMs : call.startedAt),
+          ),
+        windowStart,
+      );
+      const windowEnd = Math.max(props.run.completedAt ?? Date.now(), callsEnd);
+      return (
         <div className="space-y-2">
           {value.toolCalls.map((call) => (
             <ToolCallItem
@@ -175,7 +189,8 @@ function ToolCallsTab(props: { readonly run: RunRow }) {
             />
           ))}
         </div>
-      ),
+      );
+    },
   });
 }
 
@@ -234,7 +249,17 @@ function DetailContent(props: {
   const { run } = props;
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
-  const hasPending = props.interactions.some((interaction) => interaction.status === "pending");
+  const pendingCount = props.interactions.filter(
+    (interaction) => interaction.status === "pending",
+  ).length;
+  // Singular/plural only when every interaction is pending; a mix gets the
+  // neutral "Interactions" so the heading never misrepresents the block.
+  const interactionsHeading =
+    pendingCount > 0 && pendingCount === props.interactions.length
+      ? pendingCount === 1
+        ? "Pending interaction"
+        : "Pending interactions"
+      : "Interactions";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SheetHeader className="border-b border-border px-5 py-3">
@@ -298,7 +323,9 @@ function DetailContent(props: {
                   <span className={tone.text}>{statusLabel(run.status)}</span>
                 </span>
               </MetaCard>
-              <MetaCard label="Duration">{formatDuration(run.durationMs)}</MetaCard>
+              <MetaCard label="Duration">
+                {run.durationMs != null ? formatDuration(run.durationMs) : "—"}
+              </MetaCard>
               <MetaCard label="Started">{formatDateTime(run.startedAt)}</MetaCard>
               <MetaCard label="Completed">{formatDateTime(run.completedAt)}</MetaCard>
             </div>
@@ -325,7 +352,7 @@ function DetailContent(props: {
             {props.interactions.length > 0 && (
               <div className="space-y-2">
                 <p className="text-[10px] font-medium uppercase text-muted-foreground">
-                  {hasPending ? "Pending interaction" : "Interactions"}
+                  {interactionsHeading}
                 </p>
                 {props.interactions.map((interaction) => (
                   <InteractionBlock key={interaction.interactionId} interaction={interaction} />
