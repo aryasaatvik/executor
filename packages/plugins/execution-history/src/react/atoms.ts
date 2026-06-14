@@ -16,6 +16,7 @@ import { ExecutionHistoryClient } from "./client";
 export interface RunsQuery {
   readonly status?: string;
   readonly trigger?: string;
+  readonly actor?: string;
   readonly from?: number;
   readonly to?: number;
   readonly interaction?: string;

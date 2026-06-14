@@ -22,6 +22,8 @@
 
 import { Context, Effect, Schema } from "effect";
 
+import type { ExecutionActor } from "@executor-js/sdk/core";
+
 /**
  * The provider-neutral resolved identity. Both self-host's AuthProvider impls
  * (single-admin, Better Auth) and cloud's WorkOS path produce this. Self-host's
@@ -36,6 +38,15 @@ export interface Principal {
   readonly name: string | null;
   readonly avatarUrl: string | null;
   readonly roles: readonly string[];
+  /**
+   * The credential identity this principal acts AS, for run attribution. Most
+   * providers leave it unset — the run is attributed to the user
+   * (`executionActorFromPrincipal` derives a `"user"` actor from `accountId`).
+   * A host that authenticates a non-human credential which then acts as a human
+   * (a Cloudflare Access service token aliased to a subject) sets this so the
+   * machine credential stays distinguishable from the human it impersonates.
+   */
+  readonly actor?: ExecutionActor;
 }
 
 /**
@@ -52,8 +63,24 @@ export class AuthContext extends Context.Service<
     readonly name: string | null;
     readonly avatarUrl: string | null;
     readonly roles: readonly string[];
+    /** The resolved actor for run attribution (always present — derived when the
+     *  principal did not supply one). See `executionActorFromPrincipal`. */
+    readonly actor: ExecutionActor;
   }
 >()("@executor-js/api/AuthContext") {}
+
+/**
+ * Resolve the `ExecutionActor` a run started by this principal acts as. When the
+ * principal supplies its own `actor` (a host that knows the credential is, e.g.,
+ * a service token) that wins; otherwise the run is attributed to the user — a
+ * `"user"` actor keyed by the stable `accountId`, labelled by name or email.
+ */
+export const executionActorFromPrincipal = (principal: Principal): ExecutionActor =>
+  principal.actor ?? {
+    kind: "user",
+    id: principal.accountId,
+    label: principal.name ?? (principal.email.length > 0 ? principal.email : null),
+  };
 
 /** Build the shared `AuthContext` value from a resolved `Principal`. */
 export const authContextFromPrincipal = (principal: Principal): AuthContext["Service"] => ({
@@ -63,6 +90,7 @@ export const authContextFromPrincipal = (principal: Principal): AuthContext["Ser
   name: principal.name,
   avatarUrl: principal.avatarUrl,
   roles: principal.roles,
+  actor: executionActorFromPrincipal(principal),
 });
 
 // Optional per-failure render hints. Self-host produces the bare error (these

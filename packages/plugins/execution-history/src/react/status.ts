@@ -93,3 +93,28 @@ export const triggerTone = (kind: string | null | undefined): TriggerTone => {
   }
   return { dot: "bg-muted-foreground/40", text: "text-muted-foreground", label: "unknown" };
 };
+
+// ---------------------------------------------------------------------------
+// Actor tones — colour the dot in the Actor facet/column by credential class
+// (`actorKind`: "user", "service-token", …). The label itself is the actor's
+// own display string (machine name, email), not a fixed vocabulary, so there is
+// no ACTOR_ORDER — facet keys come from `meta.actorCounts`.
+// ---------------------------------------------------------------------------
+
+export interface ActorTone {
+  readonly dot: string;
+  readonly text: string;
+}
+
+export const ACTOR_TONES: Record<string, ActorTone> = {
+  user: { dot: "bg-sky-500", text: "text-foreground/80" },
+  "service-token": { dot: "bg-violet-500", text: "text-foreground/80" },
+};
+
+export const actorTone = (kind: string | null | undefined): ActorTone => {
+  if (kind != null) {
+    const known = ACTOR_TONES[kind];
+    if (known) return known;
+  }
+  return { dot: "bg-muted-foreground/40", text: "text-muted-foreground" };
+};

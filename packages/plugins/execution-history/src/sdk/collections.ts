@@ -47,6 +47,14 @@ export const RunRow = Schema.Struct({
   logsJson: Schema.NullOr(Schema.String),
   triggerKind: Schema.NullOr(Schema.String),
   triggerMetaJson: Schema.NullOr(Schema.String),
+  // Who/what the run acted as (from the trigger's `ExecutionActor`). `actorId`
+  // is the STABLE filter/facet key (a token client id, a user subject);
+  // `actorLabel` is the display snapshot at run time (machine name, email);
+  // `actorKind` is the credential class ("user", "service-token"). Null on runs
+  // recorded before a trigger actor was supplied.
+  actorId: Schema.NullOr(Schema.String),
+  actorLabel: Schema.NullOr(Schema.String),
+  actorKind: Schema.NullOr(Schema.String),
   startedAt: Schema.Number,
   completedAt: Schema.NullOr(Schema.Number),
   durationMs: Schema.NullOr(Schema.Number),
@@ -56,7 +64,7 @@ export const RunRow = Schema.Struct({
 export type RunRow = typeof RunRow.Type;
 
 export const runs = definePluginStorageCollection("runs", RunRow, {
-  indexes: ["status", "triggerKind", "startedAt", "durationMs", "hadInteraction"],
+  indexes: ["status", "triggerKind", "actorId", "startedAt", "durationMs", "hadInteraction"],
 });
 
 export const ToolCallRow = Schema.Struct({

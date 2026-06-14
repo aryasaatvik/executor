@@ -9,7 +9,14 @@ import { Button } from "@executor-js/react/components/button";
 import { cn } from "@executor-js/react/lib/utils";
 
 import type { ExecutionListMeta } from "../sdk/store";
-import { STATUS_ORDER, STATUS_LABELS, TRIGGER_ORDER, statusTone, triggerTone } from "./status";
+import {
+  STATUS_ORDER,
+  STATUS_LABELS,
+  TRIGGER_ORDER,
+  actorTone,
+  statusTone,
+  triggerTone,
+} from "./status";
 import type { RunsFilters } from "./use-runs-list";
 
 // ---------------------------------------------------------------------------
@@ -58,6 +65,7 @@ const toggle = <T,>(arr: readonly T[], item: T): readonly T[] =>
 const isFiltersActive = (filters: RunsFilters): boolean =>
   filters.status.length > 0 ||
   filters.trigger.length > 0 ||
+  filters.actor.length > 0 ||
   filters.interaction !== null ||
   filters.from !== null ||
   filters.to !== null;
@@ -234,7 +242,7 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
       <div className="flex-1 overflow-y-auto px-2 pb-4">
         <Accordion
           type="multiple"
-          defaultValue={["status", "trigger", "interaction", "time-range"]}
+          defaultValue={["status", "trigger", "actor", "interaction", "time-range"]}
           className="w-full"
         >
           {/* Status facet */}
@@ -288,6 +296,35 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
               })}
             </ul>
           </FacetSection>
+
+          {/* Actor facet — dynamic keys (token client ids / user subjects) from
+              the run set; only filterable (non-null) actors are shown. */}
+          {meta?.actorCounts && meta.actorCounts.some((entry) => entry.actorId !== null) ? (
+            <FacetSection value="actor" label="Actor">
+              <ul className="space-y-0">
+                {meta.actorCounts.map((entry) => {
+                  const id = entry.actorId;
+                  // null actor (unattributed runs) isn't filterable — skip it.
+                  if (id === null) return null;
+                  const tone = actorTone(entry.actorKind);
+                  const checked = filters.actor.includes(id);
+                  return (
+                    <li key={id}>
+                      <FacetRow
+                        checked={checked}
+                        onToggle={() => onChange({ ...filters, actor: toggle(filters.actor, id) })}
+                        onOnly={() => onChange({ ...filters, actor: [id] })}
+                        dotClass={tone.dot}
+                        label={entry.actorLabel ?? id}
+                        count={entry.count}
+                        monoLabel
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            </FacetSection>
+          ) : null}
 
           {/* Interaction facet */}
           <FacetSection value="interaction" label="Interactions">
