@@ -6,10 +6,11 @@ import { cn } from "@executor-js/react/lib/utils";
 // RunsShell — two-column layout (filter rail + main pane) with infinite scroll.
 //
 // The left <aside> renders the filter rail at ~15rem wide and can be collapsed
-// via railCollapsed. The right main pane stacks: sticky toolbar → optional
-// chart → sticky column header → scrollable body. The body fires onLoadMore
-// when the user scrolls within 320px of the bottom, guarded against re-firing
-// while already loading.
+// via railCollapsed. The right main pane stacks the full-width toolbar + chart
+// above a single table scroller that owns both axes: an inner min-width wrapper
+// pins the column grid so the sticky header and the rows share one horizontal
+// scroll and never collapse. The scroller fires onLoadMore when the user
+// scrolls within 320px of the bottom, guarded against re-firing while loading.
 // ---------------------------------------------------------------------------
 
 export interface RunsShellProps {
@@ -43,25 +44,6 @@ export function RunsShell(props: RunsShellProps) {
     railCollapsed,
   } = props;
 
-  const toolbarRef = React.useRef<HTMLDivElement>(null);
-  const columnHeaderRef = React.useRef<HTMLDivElement>(null);
-  const [stickyTop, setStickyTop] = React.useState(0);
-
-  // Track combined height of toolbar + chart so the column header can stick
-  // directly below them.
-  React.useEffect(() => {
-    const toolbar = toolbarRef.current;
-    if (!toolbar) return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
-      setStickyTop(height);
-    });
-    observer.observe(toolbar);
-    return () => observer.disconnect();
-  }, []);
-
   const onScroll = React.useCallback(
     (event: React.UIEvent<HTMLDivElement>) => {
       if (!hasMore || isLoadingMore || isEmpty) return;
@@ -89,49 +71,47 @@ export function RunsShell(props: RunsShellProps) {
 
       {/* Main pane */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {/* Sticky toolbar + chart */}
-        <div
-          ref={toolbarRef}
-          className="sticky top-0 z-30 flex flex-col border-b border-border bg-background"
-        >
+        {/* Toolbar + chart — full-width controls, do not scroll with the table */}
+        <div className="z-30 flex flex-col border-b border-border bg-background">
           <div className="flex flex-col">{toolbar}</div>
           {chart != null && <div className="flex flex-col">{chart}</div>}
         </div>
 
-        {/* Sticky column header */}
-        <div
-          ref={columnHeaderRef}
-          className="sticky z-20 border-b border-border/60 bg-background"
-          style={{ top: stickyTop }}
-        >
-          {columnHeader}
-        </div>
-
-        {/* Scrollable body */}
-        <div className="flex-1 overflow-y-auto" onScroll={onScroll}>
-          {isEmpty ? (
-            <div className="flex h-full min-h-48 items-center justify-center px-4 py-8">
-              {emptyState ?? (
-                <p className="font-mono text-xs text-muted-foreground">
-                  No runs match the current filters.
-                </p>
-              )}
+        {/* Table scroller — owns both axes. The inner min-width wrapper pins the
+            column grid: above it the code column flexes to fill, below it the
+            body scrolls horizontally instead of collapsing columns. The header
+            sticks to the top of this scroller and rides the same horizontal
+            scroll as the rows (top-only sticky), so the two stay aligned. */}
+        <div className="min-h-0 flex-1 overflow-auto" onScroll={onScroll}>
+          <div className="min-w-[1200px]">
+            <div className="sticky top-0 z-20 border-b border-border/60 bg-background">
+              {columnHeader}
             </div>
-          ) : (
-            <>
-              {children}
-              {isLoadingMore && (
-                <div className="flex w-full items-center justify-center border-t border-border/50 py-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/60">
-                  Loading more…
-                </div>
-              )}
-              {!hasMore && !isLoadingMore && (
-                <div className="flex w-full items-center justify-center border-t border-border/40 py-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/40">
-                  End of history
-                </div>
-              )}
-            </>
-          )}
+
+            {isEmpty ? (
+              <div className="flex min-h-48 items-center justify-center px-4 py-8">
+                {emptyState ?? (
+                  <p className="font-mono text-xs text-muted-foreground">
+                    No runs match the current filters.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <>
+                {children}
+                {isLoadingMore && (
+                  <div className="flex w-full items-center justify-center border-t border-border/50 py-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/60">
+                    Loading more…
+                  </div>
+                )}
+                {!hasMore && !isLoadingMore && (
+                  <div className="flex w-full items-center justify-center border-t border-border/40 py-3 font-mono text-[11px] uppercase tracking-wider text-muted-foreground/40">
+                    End of history
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>
