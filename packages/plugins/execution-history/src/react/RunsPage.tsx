@@ -26,7 +26,7 @@ import { ViewOptions } from "./view-options";
 // Execution-history runs page — openstatus-style.
 //
 // A faceted filter rail, a stacked-by-status timeline, a cmdk filter palette,
-// live tailing, keyset infinite scroll, sortable columns, and a 4-tab detail
+// live tailing, keyset infinite scroll, sortable columns, and a 3-tab detail
 // drawer. All list data + accumulation flows through `useRunsList` (atoms);
 // this component is filter/UI state + composition only.
 // ---------------------------------------------------------------------------
@@ -199,6 +199,16 @@ export function RunsPage() {
     rowItems
   );
 
+  // Prev/next drawer navigation mirrors the ArrowUp/ArrowDown keyboard handler:
+  // index-1 is the row above (newer in descending sort), index+1 the row below.
+  const selectedIndex =
+    selected == null ? -1 : view.rows.findIndex((run) => run.executionId === selected);
+  const prevId = selectedIndex > 0 ? (view.rows[selectedIndex - 1]?.executionId ?? null) : null;
+  const nextId =
+    selectedIndex >= 0 && selectedIndex < view.rows.length - 1
+      ? (view.rows[selectedIndex + 1]?.executionId ?? null)
+      : null;
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <RunsShell
@@ -234,7 +244,12 @@ export function RunsPage() {
         {body}
       </RunsShell>
 
-      <DetailDrawer executionId={selected} onClose={() => setSelected(null)} />
+      <DetailDrawer
+        executionId={selected}
+        onClose={() => setSelected(null)}
+        onPrev={prevId != null ? () => setSelected(prevId) : undefined}
+        onNext={nextId != null ? () => setSelected(nextId) : undefined}
+      />
     </div>
   );
 }
