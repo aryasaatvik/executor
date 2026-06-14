@@ -18,6 +18,7 @@ import type { TransportState } from "agents/mcp";
 
 import { jsonRpcErrorBody } from "@executor-js/host-mcp";
 import { RequestWebOrigin } from "@executor-js/api/server";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 import {
   formatPausedExecution,
   type ExecutionEngine,
@@ -140,6 +141,10 @@ export interface SessionMeta {
   /** Public origin captured at session create — used to derive the runtime's
    *  web base URL when the host configures no static one. */
   readonly webOrigin?: string;
+  /** The session's run actor (carried from the create init), so the host's
+   *  `buildMcpServer` can stamp it as the MCP trigger actor. Persisted with the
+   *  meta so a cold isolate rebuilds the runtime with the same attribution. */
+  readonly actor?: ExecutionActor;
 }
 
 /** What a host's `buildMcpServer` seam returns: the connected MCP server plus
@@ -559,12 +564,15 @@ export abstract class McpSessionDOBase<
     const self = this;
     return Effect.gen(function* () {
       const resolved = yield* self.resolveSessionMeta(token);
-      // Carry the create request's origin onto the persisted meta (the host's
-      // resolveSessionMeta is identity-only and doesn't see it), so a cold
-      // isolate rebuilds the runtime with the same web base URL.
-      const sessionMeta: SessionMeta = token.webOrigin
-        ? { ...resolved, webOrigin: token.webOrigin }
-        : resolved;
+      // Carry the create request's origin + run actor onto the persisted meta
+      // (the host's resolveSessionMeta is identity-only and sees neither), so a
+      // cold isolate rebuilds the runtime with the same web base URL + the same
+      // run attribution.
+      const sessionMeta: SessionMeta = {
+        ...resolved,
+        ...(token.webOrigin ? { webOrigin: token.webOrigin } : {}),
+        ...(token.actor ? { actor: token.actor } : {}),
+      };
       yield* Effect.promise(() => self.saveSessionMeta(sessionMeta)).pipe(
         Effect.withSpan("mcp.session.save_meta"),
       );

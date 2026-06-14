@@ -1,3 +1,5 @@
+import type { ExecutionActor } from "@executor-js/sdk/core";
+
 import type { IncomingPropagationHeaders, McpElicitationMode } from "./do-headers";
 
 // ---------------------------------------------------------------------------
@@ -14,6 +16,11 @@ export interface McpSessionInit {
   /** Public origin of the create request (`https://host`), so the DO derives a
    *  web base URL zero-config when the host configures no static one. */
   readonly webOrigin?: string;
+  /** The credential identity this session's runs act as — set from the gate's
+   *  resolved principal so MCP runs attribute to the actual actor (a service
+   *  token stays distinct from the human subject it shares a partition with).
+   *  Session-stable, so it rides the create init rather than per-request headers. */
+  readonly actor?: ExecutionActor;
 }
 
 /**

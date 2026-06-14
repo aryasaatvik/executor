@@ -77,7 +77,14 @@ export class McpSessionDO extends McpSessionDOBase<CfSessionDbHandle> {
         sessionMeta.organizationId,
         sessionMeta.organizationName,
       ).pipe(Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle)));
-      const mcpServer = yield* createExecutorMcpServer({ engine });
+      // Attribute every run from this MCP session to its actor — carried from the
+      // gate's principal (a host that sets a non-user actor, e.g. a service token)
+      // when present, else the session user. Makes MCP runs filterable by actor.
+      const actor = sessionMeta.actor ?? { kind: "user", id: sessionMeta.userId, label: null };
+      const mcpServer = yield* createExecutorMcpServer({
+        engine,
+        trigger: { kind: "mcp", actor },
+      });
       return { mcpServer, engine } satisfies BuiltMcpServer;
     }).pipe(
       Effect.withSpan("McpSessionDO.buildMcpServer"),
