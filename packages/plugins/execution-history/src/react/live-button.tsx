@@ -9,6 +9,7 @@ export function LiveButton(props: { readonly active: boolean; readonly onToggle:
       variant="outline"
       size="sm"
       aria-pressed={props.active}
+      title={props.active ? "Pause live refresh (j)" : "Start live refresh (j)"}
       onClick={props.onToggle}
       className={cn(
         "gap-1.5",

@@ -10,6 +10,7 @@ export interface RunColumns {
   readonly duration: boolean;
   readonly tools: boolean;
   readonly interaction: boolean;
+  readonly log: boolean;
 }
 
 export type RunColumnKey = keyof RunColumns;
@@ -20,6 +21,7 @@ export const DEFAULT_COLUMNS: RunColumns = {
   duration: true,
   tools: true,
   interaction: true,
+  log: false,
 };
 
 export const RUN_COLUMN_LABELS: Record<RunColumnKey, string> = {
@@ -28,4 +30,5 @@ export const RUN_COLUMN_LABELS: Record<RunColumnKey, string> = {
   duration: "Duration",
   tools: "Tools",
   interaction: "Interaction",
+  log: "Log",
 };
