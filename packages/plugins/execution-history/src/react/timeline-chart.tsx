@@ -180,6 +180,9 @@ export function RunsTimelineChart(props: {
             stackId="runs"
             fill={STATUS_CHART_HEX[status]}
             isAnimationActive={false}
+            // Cap the width so a handful of buckets render as slim columns
+            // rather than band-filling slabs; wide bands center the bar.
+            maxBarSize={28}
           />
         ))}
         {dragStart != null && dragEnd != null && dragStart !== dragEnd ? (
