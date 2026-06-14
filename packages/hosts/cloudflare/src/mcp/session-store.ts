@@ -26,6 +26,7 @@ import {
   type McpDispatchInput,
   type McpDispatchResult,
 } from "@executor-js/host-mcp";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 
 import {
   currentPropagationHeaders,
@@ -87,6 +88,7 @@ const createSession = (
   config: DurableObjectStoreConfig,
   request: Request,
   token: VerifiedTokenHeaders,
+  actor: ExecutionActor | undefined,
 ): Effect.Effect<Response> =>
   Effect.gen(function* () {
     const stub = config.newStub();
@@ -101,6 +103,8 @@ const createSession = (
           // base URL with no static config (we read the real URL, not a spoofable
           // forwarded host).
           webOrigin: new URL(request.url).origin,
+          // Stamp the session's run actor once at create (session-stable).
+          actor,
         },
         propagation,
       ),
@@ -167,7 +171,7 @@ export const makeDurableObjectMcpSessionStore = (
       };
       return sessionId
         ? forwardToExistingSession(config, request, sessionId, request.method !== "GET", token)
-        : createSession(config, request, token);
+        : createSession(config, request, token, principal.actor);
     },
     dispose: (sessionId, request) => clearExistingSession(config, sessionId, request),
   });
