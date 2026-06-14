@@ -83,6 +83,7 @@ const propsForPrincipal = (
         organizationId: principal.organizationId,
         ...sessionOrgRoleMetadata(principal),
         userId: principal.accountId,
+        actor: principal.actor,
         elicitationMode: readElicitationMode(request),
         artifactsEnabled: readArtifactsEnabled(request),
         searchToolsEnabled: readSearchToolsEnabled(request),

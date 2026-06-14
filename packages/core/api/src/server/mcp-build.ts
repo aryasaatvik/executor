@@ -15,6 +15,7 @@ import {
 import { ErrorCapture } from "../observability";
 import { CodeExecutorProvider, EngineDecorator, makeExecutionStack } from "./execution-stack";
 import { DbProvider } from "./executor-fuma-db";
+import { executionActorFromPrincipal } from "./identity";
 import { HostConfig, PluginsProvider, RequestOrgSlug } from "./scoped-executor";
 
 // ---------------------------------------------------------------------------
@@ -86,6 +87,7 @@ export const makeMcpBuildServer =
             ? { artifactUrl: artifactUrlFor(webBaseUrl, principal.organizationSlug) }
             : {}),
           ...(options ?? {}),
+          trigger: { kind: "mcp", actor: executionActorFromPrincipal(principal) },
         }).pipe(
           Effect.withSpan("mcp.server.create"),
           Effect.map((mcpServer) => ({ mcpServer, engine })),

@@ -27,7 +27,9 @@
     "@types/node": "catalog:",
     "@types/react": "catalog:",
     "bun-types": "catalog:",
+    "lucide-react": "^1.7.0",
     "react": "catalog:",
+    "recharts": "3.8.0",
     "tsup": "catalog:",
     "vitest": "catalog:"
   },
@@ -36,7 +38,9 @@
     "@executor-js/api": "workspace:*",
     "@executor-js/react": "workspace:*",
     "@tanstack/react-router": "catalog:",
-    "react": "catalog:"
+    "lucide-react": "^1.7.0",
+    "react": "catalog:",
+    "recharts": "3.8.0"
   },
   "peerDependenciesMeta": {
     "react": {
@@ -49,6 +53,12 @@
       "optional": true
     },
     "@executor-js/react": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
+    "recharts": {
       "optional": true
     }
   }

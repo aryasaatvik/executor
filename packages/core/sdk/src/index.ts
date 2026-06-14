@@ -250,6 +250,7 @@ export {
   ignoreExecutionObserverErrors,
   composeExecutionObservers,
   type ExecutionTrigger,
+  type ExecutionActor,
   type ToolCallStatus,
   type InteractionStatus,
   type ExecutionStatus,
