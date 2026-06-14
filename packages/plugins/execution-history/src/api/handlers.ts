@@ -84,6 +84,7 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
             // must not reach the storage `where` clause.
             const statusFilter = splitCsv(query.status).filter(isRunStatus);
             const triggerFilter = splitCsv(query.trigger);
+            const actorFilter = splitCsv(query.actor);
             const timeRange =
               query.from !== undefined || query.to !== undefined
                 ? { from: query.from, to: query.to }
@@ -96,6 +97,7 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
             const options: ExecutionHistoryListOptions = {
               statusFilter: statusFilter.length > 0 ? statusFilter : undefined,
               triggerFilter: triggerFilter.length > 0 ? triggerFilter : undefined,
+              actorFilter: actorFilter.length > 0 ? actorFilter : undefined,
               timeRange,
               hadInteraction: parseBooleanFlag(query.interaction),
               after: query.after,

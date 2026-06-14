@@ -32,6 +32,7 @@ import type {
   SaveArtifactInput,
   ToolFileValue,
 } from "@executor-js/sdk";
+import type { ExecutionTrigger } from "@executor-js/sdk/core";
 import type * as Tracer from "effect/Tracer";
 import {
   createExecutionEngine,
@@ -232,6 +233,12 @@ type SharedMcpServerConfig = {
    * restore. Best-effort: failures are swallowed and never affect the session.
    */
   readonly onAppsEnabledChange?: (appsEnabled: boolean) => Effect.Effect<void>;
+  /**
+   * What kicked off runs from this MCP connection, recorded on every
+   * `ExecutionStarted` for attribution. The principal-aware build site supplies
+   * `{ kind: "mcp", actor }`; absent it, runs carry no trigger.
+   */
+  readonly trigger?: ExecutionTrigger;
 };
 
 /**
@@ -1054,6 +1061,7 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
 ): Effect.Effect<McpServer> =>
   Effect.gen(function* () {
     const engine = "engine" in config ? config.engine : createExecutionEngine(config);
+    const trigger = config.trigger;
     const description =
       config.description ??
       (yield* engine.getDescription.pipe(Effect.withSpan("mcp.host.get_description")));
@@ -1180,10 +1188,11 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
         if (elicitationMode.mode === "native") {
           const result = yield* engine.execute(code, {
             onElicitation: makeMcpElicitationHandler(server, debugLog),
+            trigger,
           });
           return toMcpResult(result);
         }
-        const outcome = yield* engine.executeWithPause(code);
+        const outcome = yield* engine.executeWithPause(code, { trigger });
         debugLog("execute.paused_flow_result", {
           status: outcome.status,
           executionId: outcome.status === "paused" ? outcome.execution.id : undefined,
