@@ -10,6 +10,7 @@ import { createExecutorMcpServer } from "@executor-js/host-mcp/tool-server";
 import { ErrorCapture } from "../observability";
 import { CodeExecutorProvider, EngineDecorator, makeExecutionStack } from "./execution-stack";
 import { DbProvider } from "./executor-fuma-db";
+import { executionActorFromPrincipal } from "./identity";
 import { HostConfig, PluginsProvider } from "./scoped-executor";
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,14 @@ export const makeMcpBuildServer =
       Effect.map(({ engine }) => engine),
       Effect.provide(executionStack),
       Effect.mapError((cause) => new McpEngineBuildError({ cause })),
-      Effect.flatMap((engine) => createExecutorMcpServer({ engine })),
+      Effect.flatMap((engine) =>
+        // Every run from this session is an MCP-triggered run acting as this
+        // session's principal (a user, or a host-supplied service-token actor).
+        createExecutorMcpServer({
+          engine,
+          trigger: { kind: "mcp", actor: executionActorFromPrincipal(principal) },
+        }),
+      ),
     );
 
 /**

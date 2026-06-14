@@ -103,6 +103,13 @@ export const OrgAuthLive = Layer.effect(
             // plane does not resolve them here, so pass an empty list (no cloud
             // handler reads roles today).
             roles: [],
+            // Attribute runs to the WorkOS user (cloud has no service-token
+            // actors); mirrors `executionActorFromPrincipal`'s user default.
+            actor: {
+              kind: "user",
+              id: session.accountId,
+              label: session.name ?? (session.email.length > 0 ? session.email : null),
+            },
           };
 
           return yield* Effect.provideService(httpEffect, AuthContext, auth);
