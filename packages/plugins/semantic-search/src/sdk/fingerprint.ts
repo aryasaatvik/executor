@@ -1,0 +1,48 @@
+// ---------------------------------------------------------------------------
+// Deterministic content hash over the five fields that define a tool's
+// semantic identity. Used by the incremental reindex to detect changes and
+// skip unchanged tools.
+// ---------------------------------------------------------------------------
+
+export interface FingerprintInput {
+  readonly path: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly inputTypeScript?: string;
+  readonly outputTypeScript?: string;
+}
+
+// cyrb53 — a fast, stable 53-bit hash with good avalanche properties.
+// Produces a consistent unsigned integer across all JS environments.
+// Source: https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js
+function cyrb53(str: string, seed = 0): number {
+  let h1 = 0xdeadbeef ^ seed;
+  let h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+// Field separator: the NUL byte cannot appear in TypeScript source or
+// natural-language text, so adjacent field values can never blur across the
+// boundary. A space separator would let e.g. {name:"a b"} and
+// {name:"a", description:"b"} hash to the same value.
+const FIELD_SEPARATOR = String.fromCharCode(0);
+
+/** Stable, deterministic fingerprint over all five semantic fields of a tool.
+ *  Changes when ANY field changes and is identical for identical input. */
+export const fingerprintTool = (input: FingerprintInput): string => {
+  const content = [
+    input.path,
+    input.name,
+    input.description ?? "",
+    input.inputTypeScript ?? "",
+    input.outputTypeScript ?? "",
+  ].join(FIELD_SEPARATOR);
+  return cyrb53(content).toString(36);
+};

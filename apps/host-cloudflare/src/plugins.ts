@@ -18,6 +18,12 @@ import {
 } from "@executor-js/plugin-execution-metrics/cloudflare";
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
+import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
+import {
+  makeVectorizeStore,
+  withCloudflareLimits,
+  type VectorizeIndex,
+} from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -36,6 +42,12 @@ import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 // fleet), so the local Prometheus scrape is deliberately NOT mounted here; WAE
 // is the durable sink. To enable: uncomment `analytics_engine_datasets` in
 // wrangler.jsonc.
+//
+// Semantic search follows the same opt-in-by-binding shape: the plugin is
+// always in the tuple (its reindex route keeps the API shape stable), but it is
+// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
+// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
+// Vectorize index + add the binding in wrangler.jsonc and set the secret.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
@@ -44,9 +56,15 @@ export const makeCloudflarePlugins = (
     readonly activeToolkitSlug?: string;
     readonly allowLocalNetwork?: boolean;
     readonly analytics?: AnalyticsEngineDataset;
+    readonly vectorize?: VectorizeIndex;
+    readonly geminiApiKey?: string;
+    readonly searchNamespace?: string;
   } = {},
-) =>
-  [
+) => {
+  const store = options.vectorize
+    ? withCloudflareLimits(makeVectorizeStore(options.vectorize))
+    : undefined;
+  return [
     openApiHttpPlugin({
       presets: [...googleCatalog, ...microsoftCatalog],
       specFormats: [googleDiscoveryAdapter, microsoftGraphAdapter],
@@ -60,6 +78,12 @@ export const makeCloudflarePlugins = (
         options.analytics ? createWaeMetricsObserver(options.analytics) : noopExecutionObserver,
     }),
     serviceTokensPlugin(),
+    semanticSearchHttpPlugin({
+      store,
+      geminiApiKey: options.geminiApiKey,
+      namespace: options.searchNamespace,
+    }),
   ] as const;
+};
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;
