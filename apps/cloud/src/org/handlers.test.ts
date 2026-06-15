@@ -45,7 +45,7 @@ const stubWorkOS = (overrides: StubOverrides = {}) =>
   Layer.succeed(
     WorkOSClient,
     new Proxy({} as WorkOSClientService, {
-      get: (_target, prop) => {
+      get: (target, prop) => {
         if (typeof prop === "string" && prop in overrides) {
           return overrides[prop as keyof StubOverrides];
         }

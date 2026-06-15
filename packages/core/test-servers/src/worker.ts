@@ -301,11 +301,11 @@ const yoga = createYoga({
     `,
     resolvers: {
       Query: {
-        hello: (_source: unknown, args: { readonly name?: string }) =>
+        hello: (source: unknown, args: { readonly name?: string }) =>
           `Hello ${args.name ?? "world"}`,
       },
       Mutation: {
-        setGreeting: (_source: unknown, args: { readonly message: string }) => args.message,
+        setGreeting: (source: unknown, args: { readonly message: string }) => args.message,
       },
     },
   }),

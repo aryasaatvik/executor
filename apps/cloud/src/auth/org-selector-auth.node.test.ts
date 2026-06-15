@@ -92,7 +92,7 @@ const stubApiKeys = Layer.succeed(ApiKeyService)({
 const stubWorkOS = Layer.succeed(
   WorkOSClient,
   new Proxy({} as WorkOSClientService, {
-    get: (_t, prop) => {
+    get: (target, prop) => {
       if (prop === "authenticateRequest") {
         return () =>
           Effect.succeed({
