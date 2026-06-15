@@ -1,10 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
-import type { Executor, Tool } from "@executor-js/sdk/core";
-
 import type { ToolEmbedder } from "./embedder";
-import { reindexToolCatalog } from "./indexer";
 import { makeVectorizeToolDiscoveryProvider } from "./provider";
 import { makeVectorizeStore } from "./vectorize";
 import type {
@@ -36,15 +33,6 @@ const matchIn = (path: string, integration: string, score: number): VectorizeMat
 });
 
 const match = (path: string, score: number): VectorizeMatch => matchIn(path, "github", score);
-
-// Minimal stubs — the indexer only calls `tools.list()` and reads a few Tool
-// fields, so a full branded Tool/Executor is unnecessary for these unit tests.
-const stubTool = (address: string, name: string, integration: string, description: string): Tool =>
-  // oxlint-disable-next-line executor/no-double-cast -- test stub: the indexer reads only these Tool fields
-  ({ address, name, integration, description }) as unknown as Tool;
-const stubExecutor = (tools: readonly Tool[]): Executor =>
-  // oxlint-disable-next-line executor/no-double-cast -- test stub: only tools.list() is exercised
-  ({ tools: { list: () => Effect.succeed(tools) } }) as unknown as Executor;
 
 describe("makeVectorizeToolDiscoveryProvider", () => {
   it.effect("maps Vectorize matches to ToolDiscoveryResult", () =>
@@ -182,61 +170,6 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
       });
       expect(page.items).toHaveLength(0);
       expect(page.total).toBe(0);
-    }),
-  );
-});
-
-describe("reindexToolCatalog", () => {
-  it.effect("projects the catalog and upserts namespaced records", () =>
-    Effect.gen(function* () {
-      const upserts: VectorizeVectorInput[][] = [];
-      const store: VectorizeStore = {
-        query: () => Effect.succeed([]),
-        upsert: (vectors) =>
-          Effect.sync(() => {
-            upserts.push([...vectors]);
-          }),
-        deleteByIds: () => Effect.void,
-      };
-      const tool = stubTool("tools.github.repos.get", "repos.get", "github", "Get a repository");
-      const executor = stubExecutor([tool]);
-
-      const result = yield* reindexToolCatalog({
-        namespace: "org",
-        executor,
-        embedder: fakeEmbedder,
-        store,
-      });
-
-      expect(result.indexedToolCount).toBe(1);
-      expect(upserts).toHaveLength(1);
-      const record = upserts[0]![0]!;
-      expect(record.id).toBe("org#github.repos.get");
-      expect(record.namespace).toBe("org");
-      expect(record.values).toEqual([0.1, 0.2, 0.3]);
-      expect(record.metadata).toMatchObject({
-        path: "github.repos.get",
-        integration: "github",
-        name: "repos.get",
-      });
-    }),
-  );
-
-  it.effect("no-ops on an empty catalog", () =>
-    Effect.gen(function* () {
-      const store: VectorizeStore = {
-        query: () => Effect.succeed([]),
-        upsert: () => Effect.die("upsert must not be called for an empty catalog") as never,
-        deleteByIds: () => Effect.void,
-      };
-      const executor = stubExecutor([]);
-      const result = yield* reindexToolCatalog({
-        namespace: "org",
-        executor,
-        embedder: fakeEmbedder,
-        store,
-      });
-      expect(result.indexedToolCount).toBe(0);
     }),
   );
 });

@@ -6,8 +6,12 @@ import {
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
-import { MAX_TOP_K } from "./vectorize";
 import type { VectorizeMatch, VectorizeStore } from "./vectorize";
+
+/** Cloudflare caps `topK` at 20 when `returnMetadata:"all"` is set.
+ *  The vector store always queries with full metadata, so the provider must
+ *  never exceed this limit on the Vectorize path. */
+export const MAX_METADATA_TOP_K = 20;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
 
@@ -68,7 +72,10 @@ export const makeVectorizeToolDiscoveryProvider = (deps: {
       const matches = yield* deps.store.query({
         vector,
         namespace: deps.namespace,
-        topK: MAX_TOP_K,
+        // Cloudflare caps topK at 20 when returnMetadata:"all" is used (the
+        // store always sets it).  MAX_TOP_K (100) is kept for non-metadata
+        // paths; the metadata path must respect MAX_METADATA_TOP_K.
+        topK: MAX_METADATA_TOP_K,
       });
       const ranked = matches
         .filter((match) => asString(match.metadata?.path).length > 0)
