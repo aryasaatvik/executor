@@ -94,6 +94,23 @@ describe("withCloudflareLimits", () => {
         expect(state.upsertCalls).toHaveLength(0);
       }),
     );
+
+    it.effect("counts UTF-8 bytes, not characters (multibyte id over the limit)", () =>
+      Effect.gen(function* () {
+        const { store, state } = makeFakeStore();
+        const wrapped = withCloudflareLimits(store);
+        // "é" is 2 UTF-8 bytes: 33 characters = 66 bytes, so it is over the
+        // 64-byte limit despite being well under 64 *characters*.
+        const id = "é".repeat(33);
+        expect(id.length).toBe(33);
+        expect(Buffer.byteLength(id, "utf8")).toBe(66);
+
+        const exit = yield* wrapped.upsert([{ id, values: [1, 0, 0] }]).pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(state.upsertCalls).toHaveLength(0);
+      }),
+    );
   });
 
   describe("query — topK cap guard", () => {

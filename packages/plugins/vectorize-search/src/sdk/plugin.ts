@@ -120,7 +120,11 @@ export const vectorizeSearchPlugin = definePlugin((options?: VectorizeSearchPlug
     pluginStorage: { toolFingerprints },
     storage: (deps) => ({
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
-      owner: deps.owner.subject != null ? ("user" as const) : ("org" as const),
+      // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
+      // org-scoped. Scoping by the triggering principal (user vs cron) would
+      // split the fingerprint store into disjoint partitions, so each reindex
+      // would see an empty store and re-embed the whole catalog.
+      owner: "org" as const,
     }),
     extension: (ctx) =>
       makeVectorizeSearchExtension({

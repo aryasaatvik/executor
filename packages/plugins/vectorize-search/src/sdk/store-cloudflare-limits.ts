@@ -21,16 +21,21 @@ import type { VectorizeStore, VectorizeVectorInput } from "./vectorize";
 const MAX_ID_BYTES = 64;
 const MAX_QUERY_TOP_K = 20;
 
+// UTF-8 byte length via the Web-standard TextEncoder — available in the
+// Cloudflare Workers runtime (and Node) without the `nodejs_compat` flag that
+// `Buffer` would require.
+const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).length;
+
 /** Wraps `inner` with Cloudflare Vectorize runtime-limit validation. Any call
  *  that would violate a limit fails immediately with `VectorizeSearchError`
  *  before the inner store is touched. All other calls pass through unchanged. */
 export const withCloudflareLimits = (inner: VectorizeStore): VectorizeStore => ({
   upsert: (vectors: readonly VectorizeVectorInput[]) => {
-    const offending = vectors.find((v) => Buffer.byteLength(v.id, "utf8") > MAX_ID_BYTES);
+    const offending = vectors.find((v) => utf8ByteLength(v.id) > MAX_ID_BYTES);
     if (offending !== undefined) {
       return Effect.fail(
         new VectorizeSearchError({
-          message: `Vector id exceeds the Cloudflare Vectorize 64-byte limit (${Buffer.byteLength(offending.id, "utf8")} bytes): "${offending.id}".`,
+          message: `Vector id exceeds the Cloudflare Vectorize 64-byte limit (${utf8ByteLength(offending.id)} bytes): "${offending.id}".`,
         }),
       );
     }
