@@ -190,6 +190,18 @@ export {
   type ExecutionObserver,
 } from "./execution-observer";
 
+// Tool discovery — the backend behind the sandbox `tools.search` call. Plugins
+// supply a custom provider (e.g. semantic Vectorize search) via
+// `runtime.toolDiscoveryProvider`; `composeToolDiscoveryProviders` picks it.
+export {
+  ExecutionToolError,
+  composeToolDiscoveryProviders,
+  type ToolDiscoveryProvider,
+  type ToolDiscoveryInput,
+  type ToolDiscoveryResult,
+  type PagedResult,
+} from "./tool-discovery";
+
 // Blob store — the plugin-facing contract (`BlobStore`/`PluginBlobStore`)
 // plus the platform-neutral backends (`makeFumaBlobStore` default,
 // `makeInMemoryBlobStore` for tests). Platform-specific backends live with

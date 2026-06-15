@@ -39,6 +39,7 @@ import type {
   InvalidConnectionInputError,
 } from "./errors";
 import type { ExecutionObserver } from "./execution-observer";
+import type { ToolDiscoveryProvider } from "./tool-discovery";
 import type { OAuthService } from "./oauth-client";
 import type { CredentialProvider, ProviderEntry } from "./provider";
 import type { PluginStorageConfig, PluginStorageFacade } from "./plugin-storage";
@@ -502,9 +503,18 @@ export interface PluginSpec<
 
   /** Runtime hooks invoked while the engine executes code. `executionObserver`
    *  receives this plugin's extension and returns an observer that is fanned
-   *  every {@link ExecutionEvent} — the seam history/metrics sinks build on. */
+   *  every {@link ExecutionEvent} — the seam history/metrics sinks build on.
+   *  `toolDiscoveryProvider` supplies the backend for the sandbox `tools.search`
+   *  call (e.g. a semantic search): the first plugin to provide one wins, else
+   *  the engine keeps its built-in lexical scorer. */
   readonly runtime?: {
     readonly executionObserver?: (self: NoInfer<TExtension>) => ExecutionObserver<unknown>;
+    /** Returns this plugin's `tools.search` backend, or `undefined` to opt out
+     *  (e.g. the binding it needs is unbound) — letting a later provider or the
+     *  engine's lexical default answer instead. */
+    readonly toolDiscoveryProvider?: (
+      self: NoInfer<TExtension>,
+    ) => ToolDiscoveryProvider | undefined;
   };
 
   readonly close?: () => Effect.Effect<void, unknown>;
