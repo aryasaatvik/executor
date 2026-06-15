@@ -3,7 +3,7 @@ import { cn } from "@executor-js/react/lib/utils";
 import { Badge } from "@executor-js/react/components/badge";
 
 import type { RunRow } from "../sdk/collections";
-import { formatDuration, formatRelative, logLines, statusLabel } from "./format";
+import { formatDuration, formatRelative, statusLabel } from "./format";
 import { actorTone, STATUS_TONES, triggerTone } from "./status";
 import { HoverCardTimestamp } from "./hover-card-timestamp";
 import type { RunColumns } from "./view";
@@ -39,9 +39,11 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const trigger = triggerTone(run.triggerKind);
   const actor = actorTone(run.actorKind);
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
-  const logs = columns.log ? logLines(run.logsJson) : [];
-  const logErrors = logs.filter((line) => line.toLowerCase().includes("[error]")).length;
-  const logWarns = logs.filter((line) => line.toLowerCase().includes("[warn]")).length;
+  // Log error/warn counts are denormalized onto the slim row at write time, so
+  // the list never fetches/parses the full logs (now in the R2 detail object).
+  // `?? 0` covers pre-migration rows whose optional keys decode to undefined.
+  const logErrors = run.logErrorCount ?? 0;
+  const logWarns = run.logWarnCount ?? 0;
 
   return (
     <Button
@@ -154,7 +156,7 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
       {/* Log error/warn counts (optional) */}
       {columns.log ? (
         <span className={cn(COL_LOG, "tabular-nums")}>
-          {logs.length === 0 ? (
+          {logErrors === 0 && logWarns === 0 ? (
             <span className="text-muted-foreground/50">—</span>
           ) : (
             <span className="inline-flex gap-1.5">
@@ -173,11 +175,12 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         </span>
       ) : null}
 
-      {/* Code snippet (always visible, fills remaining space) */}
+      {/* Code preview (always visible, fills remaining space). Pre-normalized at
+          write time; sliced here only to bound the rendered width. */}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
         <span className="text-muted-foreground/50">code: </span>
         <span className="text-foreground/70">
-          &quot;{run.code.trim().replace(/\s+/g, " ").slice(0, 160)}&quot;
+          &quot;{(run.codePreview ?? "").slice(0, 160)}&quot;
         </span>
       </span>
     </Button>
