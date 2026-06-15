@@ -85,15 +85,18 @@ export const ListRunsResponse = Schema.Struct({
   meta: Schema.NullOr(ExecutionListMeta),
 });
 
-/** Mirrors `ExecutionHistoryDetail` from the store. */
+/** Mirrors `ExecutionHistoryDetail` from the store: the slim run row plus the
+ *  bulky detail (full code, result/error/logs/trigger-metadata, tool calls,
+ *  interactions) flat-merged from the R2 detail object. */
 export const RunDetailResponse = Schema.Struct({
   run: RunRow,
+  code: Schema.String,
+  resultJson: Schema.NullOr(Schema.String),
+  errorText: Schema.NullOr(Schema.String),
+  logsJson: Schema.NullOr(Schema.String),
+  triggerMetaJson: Schema.NullOr(Schema.String),
   toolCalls: Schema.Array(ToolCallRow),
   interactions: Schema.Array(InteractionRow),
-});
-
-export const ListToolCallsResponse = Schema.Struct({
-  toolCalls: Schema.Array(ToolCallRow),
 });
 
 // ---------------------------------------------------------------------------
@@ -144,13 +147,6 @@ export const ExecutionHistoryGroup = HttpApiGroup.make("executionHistory")
     HttpApiEndpoint.get("get", "/execution-history/runs/:executionId", {
       params: RunParams,
       success: Schema.NullOr(RunDetailResponse),
-      error: InternalError,
-    }),
-  )
-  .add(
-    HttpApiEndpoint.get("listToolCalls", "/execution-history/runs/:executionId/tool-calls", {
-      params: RunParams,
-      success: ListToolCallsResponse,
       error: InternalError,
     }),
   );
