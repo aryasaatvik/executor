@@ -26,10 +26,7 @@ const encodeCursor = Schema.encodeUnknownOption(RunsCursorFromString);
 // matches the group's `error: InternalError`.
 // ---------------------------------------------------------------------------
 
-export type ExecutionHistoryExtension = Pick<
-  ExecutionHistoryStore,
-  "list" | "get" | "listToolCalls"
->;
+export type ExecutionHistoryExtension = Pick<ExecutionHistoryStore, "list" | "get">;
 
 export class ExecutionHistoryExtensionService extends Context.Service<
   ExecutionHistoryExtensionService,
@@ -121,23 +118,9 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
         capture(
           Effect.gen(function* () {
             const history = yield* ExecutionHistoryExtensionService;
-            const detail = yield* history.get(params.executionId);
-            return detail === null
-              ? null
-              : {
-                  run: detail.run,
-                  toolCalls: detail.toolCalls,
-                  interactions: detail.interactions,
-                };
-          }),
-        ),
-      )
-      .handle("listToolCalls", ({ params }) =>
-        capture(
-          Effect.gen(function* () {
-            const history = yield* ExecutionHistoryExtensionService;
-            const toolCalls = yield* history.listToolCalls(params.executionId);
-            return { toolCalls };
+            // `ExecutionHistoryDetail` already matches `RunDetailResponse` (slim
+            // run + flat-merged R2 detail), so it returns directly.
+            return yield* history.get(params.executionId);
           }),
         ),
       ),
