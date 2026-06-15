@@ -50,24 +50,14 @@ export const RunRow = Schema.Struct({
   status: RunStatus,
   // Bounded list-snippet of the code (full source lives in the R2 detail blob).
   // Normalized + truncated at write time so the list renders it directly.
-  //
-  // Optional-key + decoding default (same tolerance as the actor fields below):
-  // rows written before this slim-index migration have no such key. A required
-  // field would fail the response encoder on a pre-migration doc and 400 the
-  // whole list; defaulting an absent key keeps old docs renderable until they
-  // are wiped/age out. New rows always carry these (the store writes them).
-  codePreview: Schema.optional(Schema.String).pipe(
-    Schema.withDecodingDefaultType(Effect.succeed("")),
-  ),
+  // Required: this is a breaking change with no backfill — the cutover clears
+  // pre-migration rows, so every row the store writes carries these.
+  codePreview: Schema.String,
   triggerKind: Schema.NullOr(Schema.String),
   // Denormalized log-line counts for the list's optional log column, so the
   // list never has to fetch + parse the full `logsJson` (now in R2).
-  logErrorCount: Schema.optional(Schema.Number).pipe(
-    Schema.withDecodingDefaultType(Effect.succeed(0)),
-  ),
-  logWarnCount: Schema.optional(Schema.Number).pipe(
-    Schema.withDecodingDefaultType(Effect.succeed(0)),
-  ),
+  logErrorCount: Schema.Number,
+  logWarnCount: Schema.Number,
   // Who/what the run acted as (from the trigger's `ExecutionActor`). `actorId`
   // is the STABLE filter/facet key (a token client id, a user subject);
   // `actorLabel` is the display snapshot at run time (machine name, email);

@@ -41,9 +41,8 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
   // Log error/warn counts are denormalized onto the slim row at write time, so
   // the list never fetches/parses the full logs (now in the R2 detail object).
-  // `?? 0` covers pre-migration rows whose optional keys decode to undefined.
-  const logErrors = run.logErrorCount ?? 0;
-  const logWarns = run.logWarnCount ?? 0;
+  const logErrors = run.logErrorCount;
+  const logWarns = run.logWarnCount;
 
   return (
     <Button
@@ -179,9 +178,7 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
           write time; sliced here only to bound the rendered width. */}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
         <span className="text-muted-foreground/50">code: </span>
-        <span className="text-foreground/70">
-          &quot;{(run.codePreview ?? "").slice(0, 160)}&quot;
-        </span>
+        <span className="text-foreground/70">&quot;{run.codePreview.slice(0, 160)}&quot;</span>
       </span>
     </Button>
   );

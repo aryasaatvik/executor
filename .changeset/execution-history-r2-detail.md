@@ -15,5 +15,4 @@ and `runToolCallsAtom` are removed, and the `toolCalls`/`interactions`
 collections are gone.
 
 Breaking: the runs list/detail response shapes change and past runs are cleared
-(no backfill). New slim fields are optional-with-default so pre-migration rows
-degrade gracefully instead of failing the response encoder.
+(no backfill, no compatibility shim — the cutover wipe is authoritative).
