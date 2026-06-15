@@ -7,7 +7,17 @@ import type {
   ToolError,
   Tool,
   ToolSchemaView,
+  PagedResult,
+  ToolDiscoveryInput,
+  ToolDiscoveryProvider,
+  ToolDiscoveryResult,
 } from "@executor-js/sdk/core";
+
+// The tool-discovery contract moved to `@executor-js/sdk` (so the plugin spec
+// can name it without a cycle). Re-export from this module's prior home so
+// in-package importers (`engine.ts`, tests) and `@executor-js/execution/core`
+// keep their import paths.
+export type { PagedResult, ToolDiscoveryInput, ToolDiscoveryProvider, ToolDiscoveryResult };
 import {
   annotateToolResultOutcome,
   authToolFailure,
@@ -445,7 +455,6 @@ export type PagedResult<T> = {
   readonly hasMore: boolean;
   readonly nextOffset: number | null;
 };
-
 const paginate = <T>(all: readonly T[], offset: number, limit: number): PagedResult<T> => {
   const total = all.length;
   const start = Math.min(Math.max(offset, 0), total);

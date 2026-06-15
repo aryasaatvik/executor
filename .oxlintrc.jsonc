@@ -3,6 +3,16 @@
   "jsPlugins": [{ "name": "executor", "specifier": "./scripts/oxlint-plugin-executor.js" }],
   "rules": {
     "typescript/no-explicit-any": "error",
+    // Unused function parameters are allowed with their real names (no `_`
+    // prefix required) — keep a descriptive name for params retained for
+    // signature/interface reasons. Unused *variables* and imports are still
+    // flagged. Same for unused catch bindings. Destructuring-skip variables
+    // (e.g. `{ type: _type, ...rest }`) keep the `_` convention since they
+    // cannot be omitted structurally.
+    "no-unused-vars": [
+      "error",
+      { "args": "none", "caughtErrors": "none", "varsIgnorePattern": "^_" },
+    ],
     "executor/no-vitest-import": "error",
     "executor/no-conditional-tests": "error",
     "executor/no-double-cast": "error",

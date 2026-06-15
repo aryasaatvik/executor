@@ -45,7 +45,7 @@ export function PlacementEditor(props: {
     onChange(placements.map((p: Placement, j: number) => (j === index ? { ...p, ...patch } : p)));
 
   const remove = (index: number): void =>
-    onChange(placements.filter((_p: Placement, j: number) => j !== index));
+    onChange(placements.filter((p: Placement, j: number) => j !== index));
 
   // A non-empty prefix with no trailing space is sent JOINED to the credential
   // (e.g. "Bearer" + token -> "Bearertoken"). Almost always a mistake: warn.
