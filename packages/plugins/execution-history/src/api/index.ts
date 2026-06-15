@@ -4,12 +4,7 @@ import { executionHistoryPlugin } from "../sdk/plugin";
 import { ExecutionHistoryGroup } from "./group";
 import { ExecutionHistoryExtensionService, ExecutionHistoryHandlers } from "./handlers";
 
-export {
-  ExecutionHistoryGroup,
-  ListRunsResponse,
-  RunDetailResponse,
-  ListToolCallsResponse,
-} from "./group";
+export { ExecutionHistoryGroup, ListRunsResponse, RunDetailResponse } from "./group";
 export {
   ExecutionHistoryHandlers,
   ExecutionHistoryExtensionService,
