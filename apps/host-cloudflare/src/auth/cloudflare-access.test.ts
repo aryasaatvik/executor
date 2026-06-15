@@ -75,12 +75,16 @@ describe("principalFromAccessClaims", () => {
   });
 
   it("ignores an alias for a human (sub present) — no token hijack", () => {
-    const p = principalFromAccessClaims({ sub: "real-human", email: "person@example.com" }, config, {
-      subject: "someone-else",
-      machineName: null,
-      email: null,
-      name: null,
-    });
+    const p = principalFromAccessClaims(
+      { sub: "real-human", email: "person@example.com" },
+      config,
+      {
+        subject: "someone-else",
+        machineName: null,
+        email: null,
+        name: null,
+      },
+    );
     expect(p.accountId).toBe("real-human");
     expect(p.actor).toBeUndefined(); // humans get the default user actor downstream
   });

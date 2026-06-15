@@ -61,24 +61,25 @@ const makeServiceTokensExtension = (ctx: {
   readonly pluginStorage: PluginStorageFacade;
 }) => ({
   list: (): Effect.Effect<readonly ServiceTokenAlias[], StorageFailure> =>
-    ctx.pluginStorage
-      .list<AliasData>({ collection: COLLECTION })
-      .pipe(
-        Effect.map((entries) =>
-          entries.map((entry) => ({
-            commonName: entry.key,
-            subject: entry.data.subject,
-            machineName: entry.data.machineName ?? null,
-            email: entry.data.email ?? null,
-            name: entry.data.name ?? null,
-          })),
-        ),
+    ctx.pluginStorage.list<AliasData>({ collection: COLLECTION }).pipe(
+      Effect.map((entries) =>
+        entries.map((entry) => ({
+          commonName: entry.key,
+          subject: entry.data.subject,
+          machineName: entry.data.machineName ?? null,
+          email: entry.data.email ?? null,
+          name: entry.data.name ?? null,
+        })),
       ),
+    ),
 
   // Alias the given token to the CALLER's own identity — a user can only map a
   // token to themselves. `fields` carries the caller's email/name (captured from
   // their principal by the handler) + the typed machine name.
-  alias: (commonName: string, fields: AliasFields): Effect.Effect<ServiceTokenAlias, StorageFailure> =>
+  alias: (
+    commonName: string,
+    fields: AliasFields,
+  ): Effect.Effect<ServiceTokenAlias, StorageFailure> =>
     Effect.gen(function* () {
       const subject = ctx.owner.subject;
       if (subject == null) {
