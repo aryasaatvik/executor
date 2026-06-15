@@ -11,7 +11,8 @@
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "eval": "bun run src/sdk/eval.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.80",
@@ -24,6 +25,7 @@
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
     "@types/node": "catalog:",
+    "@zvec/zvec": "^0.4.1",
     "bun-types": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
