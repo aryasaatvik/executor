@@ -51,6 +51,13 @@ function ServiceTokensPage() {
   const [machineName, setMachineName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Inline edit of an existing alias's machine name. `editing` holds the
+  // commonName of the card in edit mode (null = none). Saving reuses the `alias`
+  // upsert, so it also re-captures the editor's acts-as identity — fine here
+  // because you only ever edit your own aliases.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   const aliasesResult = useAtomValue(aliasesAtom);
   const refresh = useAtomRefresh(aliasesAtom);
@@ -103,6 +110,32 @@ function ServiceTokensPage() {
       reactivityKeys: [],
     });
     if (!Exit.isFailure(exit)) refresh();
+  };
+
+  const startEdit = (alias: ServiceTokenAlias) => {
+    setEditing(alias.commonName);
+    setEditValue(alias.machineName ?? "");
+    setError(null);
+  };
+
+  const handleSaveEdit = async (commonNameToEdit: string) => {
+    const machine = editValue.trim();
+    setEditBusy(true);
+    setError(null);
+    const exit = await doAlias({
+      payload: {
+        commonName: commonNameToEdit,
+        ...(machine ? { machineName: machine } : {}),
+      },
+      reactivityKeys: [],
+    });
+    setEditBusy(false);
+    if (Exit.isFailure(exit)) {
+      setError("Failed to update machine name");
+      return;
+    }
+    setEditing(null);
+    refresh();
   };
 
   return (
@@ -176,36 +209,88 @@ function ServiceTokensPage() {
             </CardStackEntryContent>
           </CardStackEntry>
         ) : (
-          aliases.map((alias) => (
-            <CardStackEntry key={alias.commonName}>
-              <CardStackEntryContent>
-                <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
-                  {alias.machineName ? (
+          aliases.map((alias) => {
+            const isEditing = editing === alias.commonName;
+            return (
+              <CardStackEntry key={alias.commonName}>
+                <CardStackEntryContent>
+                  <div className="grid grid-cols-[auto_1fr] items-center gap-x-6 gap-y-1 text-[12px]">
+                    {isEditing ? (
+                      <>
+                        <span className="text-muted-foreground/60">Name</span>
+                        <Input
+                          autoFocus
+                          placeholder="machine name"
+                          value={editValue}
+                          onChange={(e) => setEditValue((e.target as HTMLInputElement).value)}
+                          className="h-7 text-[12px]"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void handleSaveEdit(alias.commonName);
+                            if (e.key === "Escape") setEditing(null);
+                          }}
+                        />
+                      </>
+                    ) : alias.machineName ? (
+                      <>
+                        <span className="text-muted-foreground/60">Name</span>
+                        <span className="truncate text-foreground/90">{alias.machineName}</span>
+                      </>
+                    ) : null}
+                    <span className="text-muted-foreground/60">Token</span>
+                    <span className="truncate font-mono text-foreground/80">
+                      {alias.commonName}
+                    </span>
+                    <span className="text-muted-foreground/60">Acts as</span>
+                    <span className="truncate font-mono text-foreground/80">
+                      {alias.email ?? alias.name ?? alias.subject}
+                    </span>
+                  </div>
+                </CardStackEntryContent>
+                <CardStackEntryActions>
+                  {isEditing ? (
                     <>
-                      <span className="text-muted-foreground/60">Name</span>
-                      <span className="truncate text-foreground/90">{alias.machineName}</span>
+                      <Button
+                        size="sm"
+                        className="h-7 px-2.5 text-[12px]"
+                        onClick={() => handleSaveEdit(alias.commonName)}
+                        disabled={editBusy}
+                      >
+                        {editBusy ? "Saving…" : "Save"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2.5 text-[12px]"
+                        onClick={() => setEditing(null)}
+                        disabled={editBusy}
+                      >
+                        Cancel
+                      </Button>
                     </>
-                  ) : null}
-                  <span className="text-muted-foreground/60">Token</span>
-                  <span className="truncate font-mono text-foreground/80">{alias.commonName}</span>
-                  <span className="text-muted-foreground/60">Acts as</span>
-                  <span className="truncate font-mono text-foreground/80">
-                    {alias.email ?? alias.name ?? alias.subject}
-                  </span>
-                </div>
-              </CardStackEntryContent>
-              <CardStackEntryActions>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
-                  onClick={() => handleUnalias(alias.commonName)}
-                >
-                  Remove
-                </Button>
-              </CardStackEntryActions>
-            </CardStackEntry>
-          ))
+                  ) : (
+                    <>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2.5 text-[12px]"
+                        onClick={() => startEdit(alias)}
+                      >
+                        {alias.machineName ? "Edit" : "Add name"}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
+                        onClick={() => handleUnalias(alias.commonName)}
+                      >
+                        Remove
+                      </Button>
+                    </>
+                  )}
+                </CardStackEntryActions>
+              </CardStackEntry>
+            );
+          })
         )}
       </div>
     </div>
