@@ -169,8 +169,12 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         </td>
       ) : null}
 
-      {/* Code preview (left, capped + truncated) */}
-      <td className={cn(CELL, "max-w-[320px] truncate text-left text-muted-foreground")}>
+      {/* Code preview (left, capped + truncated; hover reveals the full
+          write-bounded preview) */}
+      <td
+        className={cn(CELL, "max-w-[320px] truncate text-left text-muted-foreground")}
+        title={run.codePreview}
+      >
         <span className="text-muted-foreground/50">code: </span>
         <span className="text-foreground/70">&quot;{run.codePreview}&quot;</span>
       </td>
