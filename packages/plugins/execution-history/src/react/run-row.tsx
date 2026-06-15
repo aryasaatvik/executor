@@ -1,5 +1,6 @@
 import { cn } from "@executor-js/react/lib/utils";
 import { Badge } from "@executor-js/react/components/badge";
+import { useResolveActorLabel } from "@executor-js/react/lib/actor-labels";
 
 import type { RunRow } from "../sdk/collections";
 import { formatDuration, formatRelative, statusLabel } from "./format";
@@ -27,6 +28,10 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
   const actor = actorTone(run.actorKind);
+  // Prefer the live friendly label (e.g. a service-token machine name) over the
+  // snapshot captured at run time, falling back to the snapshot then the id.
+  const resolveActorLabel = useResolveActorLabel();
+  const actorLabel = resolveActorLabel(run.actorKind, run.actorId) ?? run.actorLabel ?? run.actorId;
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
   const logErrors = run.logErrorCount;
   const logWarns = run.logWarnCount;
@@ -90,11 +95,8 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
           {run.actorId !== null ? (
             <span className="flex items-center gap-1">
               <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", actor.dot)} />
-              <span
-                className={cn("min-w-0 truncate", actor.text)}
-                title={run.actorLabel ?? run.actorId ?? undefined}
-              >
-                {run.actorLabel ?? run.actorId}
+              <span className={cn("min-w-0 truncate", actor.text)} title={actorLabel ?? undefined}>
+                {actorLabel}
               </span>
             </span>
           ) : (

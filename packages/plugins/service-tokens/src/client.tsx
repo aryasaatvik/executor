@@ -17,6 +17,7 @@ import { useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Exit from "effect/Exit";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import { createPluginAtomClient, defineClientPlugin } from "@executor-js/sdk/client";
 import {
   getExecutorApiBaseUrl,
@@ -32,6 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@executor-js/react/components/table";
+import { actorLabelKey, registerActorLabelSource } from "@executor-js/react/lib/actor-labels";
 
 import type { ServiceTokenAlias } from "./shared";
 import { ServiceTokensApi } from "./shared";
@@ -47,6 +49,32 @@ const aliasesAtom = Client.query("serviceTokens", "list", {
 });
 const aliasMutation = Client.mutation("serviceTokens", "alias");
 const unaliasMutation = Client.mutation("serviceTokens", "unalias");
+
+// Publish `commonName → machineName` into the shared actor-label registry so the
+// execution-history runs UI renders the machine name for service-token actors
+// (run actorKind "service-token", actorId = the token's commonName). Only
+// aliases WITH a machine name are published — runs without one fall back to the
+// client id. Registered at module load (this module is imported eagerly as a
+// plugin), and resolved live, so a rename updates past and future runs alike.
+const serviceTokenActorLabelsAtom: Atom.Atom<ReadonlyMap<string, string>> = Atom.make((get) =>
+  AsyncResult.match(
+    get(aliasesAtom) as AsyncResult.AsyncResult<readonly ServiceTokenAlias[], unknown>,
+    {
+      onInitial: () => new Map<string, string>(),
+      onFailure: () => new Map<string, string>(),
+      onSuccess: ({ value }) => {
+        const map = new Map<string, string>();
+        for (const alias of value) {
+          if (alias.machineName) {
+            map.set(actorLabelKey("service-token", alias.commonName), alias.machineName);
+          }
+        }
+        return map;
+      },
+    },
+  ),
+);
+registerActorLabelSource(serviceTokenActorLabelsAtom);
 
 function ServiceTokensPage() {
   const [commonName, setCommonName] = useState("");
