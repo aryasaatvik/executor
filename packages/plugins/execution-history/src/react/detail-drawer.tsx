@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Badge } from "@executor-js/react/components/badge";
 import { Button } from "@executor-js/react/components/button";
+import { useResolveActorLabel } from "@executor-js/react/lib/actor-labels";
 import { CodeBlock } from "@executor-js/react/components/code-block";
 import { CopyButton } from "@executor-js/react/components/copy-button";
 import { ScrollArea } from "@executor-js/react/components/scroll-area";
@@ -247,6 +248,10 @@ function DetailContent(props: {
   const { run } = props;
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
+  // Prefer the live friendly label (e.g. a service-token machine name) over the
+  // run-time snapshot, falling back to the snapshot then the id.
+  const resolveActorLabel = useResolveActorLabel();
+  const actorLabel = resolveActorLabel(run.actorKind, run.actorId) ?? run.actorLabel ?? run.actorId;
   const pendingCount = props.interactions.filter(
     (interaction) => interaction.status === "pending",
   ).length;
@@ -329,7 +334,7 @@ function DetailContent(props: {
               <MetaCard label="Actor">
                 {run.actorId !== null ? (
                   <span className="font-mono text-xs break-all">
-                    {run.actorLabel ?? run.actorId}
+                    {actorLabel}
                     {run.actorKind !== null ? (
                       <span className="text-muted-foreground/60"> · {run.actorKind}</span>
                     ) : null}
