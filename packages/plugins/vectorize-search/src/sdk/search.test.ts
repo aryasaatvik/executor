@@ -172,6 +172,31 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
       expect(page.total).toBe(0);
     }),
   );
+
+  it.effect("dedupes multi-facet matches by path, keeping the best score", () =>
+    Effect.gen(function* () {
+      // The facet chunker indexes a tool as several chunks, so the same path can
+      // come back more than once — the provider must collapse to the best score.
+      const provider = makeVectorizeToolDiscoveryProvider({
+        embedder: fakeEmbedder,
+        store: makeQueryStore([
+          match("repos.get", 0.6), // identity-facet chunk
+          match("repos.list", 0.7),
+          match("repos.get", 0.9), // a higher-scoring facet chunk of the same tool
+        ]),
+        namespace: "org",
+      });
+      const page = yield* provider.searchTools({
+        executor: undefined as never,
+        query: "x",
+        limit: 10,
+        offset: 0,
+      });
+      expect(page.items.map((item) => item.path)).toEqual(["repos.get", "repos.list"]);
+      expect(page.items[0]!.score).toBe(0.9);
+      expect(page.total).toBe(2);
+    }),
+  );
 });
 
 describe("makeVectorizeStore", () => {

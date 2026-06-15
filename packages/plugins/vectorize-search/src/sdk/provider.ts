@@ -77,10 +77,23 @@ export const makeVectorizeToolDiscoveryProvider = (deps: {
         // paths; the metadata path must respect MAX_METADATA_TOP_K.
         topK: MAX_METADATA_TOP_K,
       });
-      const ranked = matches
+      const mapped = matches
         .filter((match) => asString(match.metadata?.path).length > 0)
         .map(toResult)
         .filter((result) => matchesNamespace(result, namespace));
+      // The facet chunker indexes a tool as several chunks (identity, input,
+      // output, description), so one tool can surface as multiple matches.
+      // Collapse to the best-scoring chunk per `path` before paginating —
+      // otherwise a tool occupies several result slots and, on the hybrid path,
+      // accrues inflated RRF weight from its repeated ranks.
+      const bestByPath = new Map<string, ToolDiscoveryResult>();
+      for (const result of mapped) {
+        const prev = bestByPath.get(result.path);
+        if (prev === undefined || result.score > prev.score) {
+          bestByPath.set(result.path, result);
+        }
+      }
+      const ranked = [...bestByPath.values()].sort((a, b) => b.score - a.score);
       const start = Math.min(safeOffset, ranked.length);
       const items = ranked.slice(start, start + limit);
       const hasMore = ranked.length > start + items.length;

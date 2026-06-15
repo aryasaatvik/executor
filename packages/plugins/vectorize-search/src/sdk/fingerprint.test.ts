@@ -65,6 +65,14 @@ describe("fingerprintTool", () => {
     expect(tool1).not.toBe(tool2);
   });
 
+  it("does not blur field boundaries — shifting content across fields changes the hash", () => {
+    // Under a space separator these collide ("a" + " " + "b c" === "a b" + " " + "c");
+    // the NUL separator keeps the boundary distinct.
+    const a = fingerprintTool({ path: "a", name: "b c" });
+    const b = fingerprintTool({ path: "a b", name: "c" });
+    expect(a).not.toBe(b);
+  });
+
   it("treats absent optional fields the same as empty strings", () => {
     const withEmpty = fingerprintTool({
       path: "x.y",
