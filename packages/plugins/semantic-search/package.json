@@ -1,0 +1,47 @@
+{
+  "name": "@executor-js/plugin-semantic-search",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/sdk/index.ts",
+    "./api": "./src/api/index.ts"
+  },
+  "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "eval": "bun run src/sdk/eval.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "^3.0.80",
+    "@executor-js/sdk": "workspace:*",
+    "ai": "^6.0.191"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "@effect/vitest": "catalog:",
+    "@executor-js/api": "workspace:*",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "catalog:",
+    "@zvec/zvec": "^0.4.1",
+    "bun-types": "catalog:",
+    "effect": "catalog:",
+    "tsup": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@executor-js/api": "workspace:*",
+    "effect": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "@executor-js/api": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.9.0",
+    "sqlite-vec": "^0.1.7"
+  }
+}
