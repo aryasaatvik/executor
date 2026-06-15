@@ -4,20 +4,16 @@ import { cn } from "@executor-js/react/lib/utils";
 
 import type { RunsSortField } from "./use-runs-list";
 import type { RunColumns } from "./view";
-import {
-  COL_ACTOR,
-  COL_DURATION,
-  COL_INTERACTION,
-  COL_LOG,
-  COL_TOOLS,
-  COL_TRIGGER,
-} from "./run-row";
 
 // ---------------------------------------------------------------------------
-// RunsColumnHeader — sticky header row aligned to RunListRow's layout.
-// Imports the shared column slot classes from run-row so that header and rows
-// use the same widths and breakpoints.
+// RunsColumnHeader — the <thead> row. Cells are <th> with no fixed widths; the
+// table's content-fit layout sizes each column to its widest cell across the
+// header and all rows. Alignment matches RunListRow (short/numeric center, text
+// left). `bg-background` keeps rows from bleeding through the sticky header.
 // ---------------------------------------------------------------------------
+
+const HEAD =
+  "border-b border-border/60 bg-background px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 whitespace-nowrap";
 
 interface SortButtonProps {
   readonly label: string;
@@ -25,17 +21,9 @@ interface SortButtonProps {
   readonly sortField: RunsSortField;
   readonly sortDirection: "asc" | "desc";
   readonly onSort: (field: RunsSortField) => void;
-  readonly className?: string;
 }
 
-function SortButton({
-  label,
-  field,
-  sortField,
-  sortDirection,
-  onSort,
-  className,
-}: SortButtonProps) {
+function SortButton({ label, field, sortField, sortDirection, onSort }: SortButtonProps) {
   const isActive = sortField === field;
   const Icon = isActive ? (sortDirection === "desc" ? ArrowDown : ArrowUp) : ArrowUpDown;
 
@@ -46,11 +34,10 @@ function SortButton({
       size="sm"
       onClick={() => onSort(field)}
       className={cn(
-        "h-auto p-0 inline-flex items-center gap-1 text-left",
+        "inline-flex h-auto items-center gap-1 p-0 text-left",
         "text-[10px] font-medium uppercase tracking-wider",
-        "text-muted-foreground/60 hover:text-foreground hover:bg-transparent",
+        "text-muted-foreground/60 hover:bg-transparent hover:text-foreground",
         isActive && "text-foreground",
-        className,
       )}
     >
       <span>{label}</span>
@@ -73,52 +60,78 @@ export function RunsColumnHeader({
   columns,
 }: RunsColumnHeaderProps) {
   return (
-    <div className="flex min-w-0 items-center gap-2 overflow-hidden px-4 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-      {/* dot spacer */}
-      <span aria-hidden className="size-2 shrink-0" />
+    <tr>
+      {/* dot column (no label) */}
+      <th aria-hidden scope="col" className={HEAD} />
 
-      {/* Started (sortable) */}
-      <SortButton
-        label="started"
-        field="startedAt"
-        sortField={sortField}
-        sortDirection={sortDirection}
-        onSort={onSort}
-        className="w-[180px] shrink-0"
-      />
-
-      {/* Status */}
-      <span className="w-[120px] shrink-0">status</span>
-
-      {/* Trigger */}
-      {columns.trigger ? <span className={COL_TRIGGER}>trigger</span> : null}
-
-      {/* Actor */}
-      {columns.actor ? <span className={COL_ACTOR}>actor</span> : null}
-
-      {/* Duration (sortable) */}
-      {columns.duration ? (
+      {/* Started (sortable, left) */}
+      <th scope="col" className={cn(HEAD, "text-left")}>
         <SortButton
-          label="duration"
-          field="durationMs"
+          label="started"
+          field="startedAt"
           sortField={sortField}
           sortDirection={sortDirection}
           onSort={onSort}
-          className={COL_DURATION}
         />
+      </th>
+
+      {/* Status (centered) */}
+      <th scope="col" className={cn(HEAD, "text-center")}>
+        status
+      </th>
+
+      {/* Trigger (left) */}
+      {columns.trigger ? (
+        <th scope="col" className={cn(HEAD, "text-left")}>
+          trigger
+        </th>
       ) : null}
 
-      {/* Tools */}
-      {columns.tools ? <span className={COL_TOOLS}>tools</span> : null}
+      {/* Actor (left) */}
+      {columns.actor ? (
+        <th scope="col" className={cn(HEAD, "text-left")}>
+          actor
+        </th>
+      ) : null}
 
-      {/* Interaction */}
-      {columns.interaction ? <span className={COL_INTERACTION}>interaction</span> : null}
+      {/* Duration (sortable, centered) */}
+      {columns.duration ? (
+        <th scope="col" className={cn(HEAD, "text-center")}>
+          <SortButton
+            label="duration"
+            field="durationMs"
+            sortField={sortField}
+            sortDirection={sortDirection}
+            onSort={onSort}
+          />
+        </th>
+      ) : null}
 
-      {/* Log */}
-      {columns.log ? <span className={COL_LOG}>log</span> : null}
+      {/* Tools (centered) */}
+      {columns.tools ? (
+        <th scope="col" className={cn(HEAD, "text-center")}>
+          tools
+        </th>
+      ) : null}
 
-      {/* Code */}
-      <span className="min-w-0 flex-1 truncate">code</span>
-    </div>
+      {/* Interaction (centered) */}
+      {columns.interaction ? (
+        <th scope="col" className={cn(HEAD, "text-center")}>
+          interaction
+        </th>
+      ) : null}
+
+      {/* Log (centered) */}
+      {columns.log ? (
+        <th scope="col" className={cn(HEAD, "text-center")}>
+          log
+        </th>
+      ) : null}
+
+      {/* Code (left) */}
+      <th scope="col" className={cn(HEAD, "text-left")}>
+        code
+      </th>
+    </tr>
   );
 }
