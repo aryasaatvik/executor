@@ -1,5 +1,6 @@
 import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
+import type { VectorizeIndex } from "@executor-js/plugin-vectorize-search";
 
 import { isValidOrgSlug } from "@executor-js/api";
 import { missingPublicOriginWarning, resolvePublicOrigin } from "@executor-js/sdk/public-origin";
@@ -26,6 +27,15 @@ export interface CloudflareEnv {
    *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
    *  finished execution/tool call writes a data point; absent, metrics are off. */
   readonly ANALYTICS?: AnalyticsEngineDataset;
+  /** Vectorize index binding — opt-in semantic `tools.search`. When bound (add a
+   *  `vectorize` binding in wrangler.jsonc) the vectorize-search plugin embeds
+   *  the tool catalog and answers `tools.search` from it; absent, the engine
+   *  keeps its built-in lexical search. */
+  readonly VECTORIZE?: VectorizeIndex;
+  /** Gemini API key (a `wrangler secret`) powering the embeddings for the
+   *  Vectorize search. Absent → vectorize search stays inert even if the index
+   *  is bound. */
+  readonly GEMINI_API_KEY?: string;
   /** MCP session Durable Object namespace — one addressable isolate per MCP
    *  session (the DO id IS the session id), so a session survives across the
    *  Worker's stateless isolates. */
@@ -69,6 +79,9 @@ export interface CloudflareConfig {
   /** URL slug for org-prefixed console paths (`/<slug>/policies`). */
   readonly organizationSlug: string;
   readonly secretKey: string;
+  /** Gemini API key for the Vectorize search embeddings (a `wrangler secret`).
+   *  Unset → vectorize search is inert. */
+  readonly geminiApiKey?: string;
   readonly allowLocalNetwork: boolean;
   /** Explicit web base URL (`VITE_PUBLIC_SITE_URL`). Unset on a Worker with no
    *  static URL — the per-request origin is used instead (see RequestWebOrigin). */
@@ -126,6 +139,7 @@ export const loadConfig = (env: CloudflareEnv): CloudflareConfig => {
     organizationName: env.SELF_HOSTED_ORG_NAME ?? "Default",
     organizationSlug: resolveOrgSlug(env.SELF_HOSTED_ORG_SLUG),
     secretKey,
+    geminiApiKey: env.GEMINI_API_KEY?.trim() || undefined,
     allowLocalNetwork: env.ALLOW_LOCAL_NETWORK === "true",
     // Pinned origin via the shared resolver. A Worker receives no PaaS platform
     // vars (env: {} — there is nothing to detect), so only the explicit
