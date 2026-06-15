@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Handler-level integration test for the execution-history HTTP group.
 //
-// Drives the three read endpoints end-to-end through the HttpApi layer: the
+// Drives the two read endpoints end-to-end through the HttpApi layer: the
 // handlers pull the read surface from the extension service, map query/path
 // params onto the store options, and the wire schemas encode the row shapes. A
 // stub extension stands in for the store so the test exercises the HTTP edge +
@@ -39,12 +39,10 @@ const UnusedExecutionEngine = Layer.succeed(ExecutionEngineService)(
 const runRow = (overrides: Partial<RunRow>): RunRow => ({
   executionId: "exec_1",
   status: "completed",
-  code: "noop",
-  resultJson: null,
-  errorText: null,
-  logsJson: null,
+  codePreview: "noop",
   triggerKind: "manual",
-  triggerMetaJson: null,
+  logErrorCount: 0,
+  logWarnCount: 0,
   actorId: null,
   actorLabel: null,
   actorKind: null,
@@ -82,10 +80,18 @@ const makeStubExtension = (captured: {
   get: (executionId): Effect.Effect<ExecutionHistoryDetail | null> =>
     Effect.succeed(
       executionId === "exec_1"
-        ? { run: runRow({}), toolCalls: [toolCallRow({})], interactions: [] }
+        ? {
+            run: runRow({}),
+            code: "noop",
+            resultJson: null,
+            errorText: null,
+            logsJson: null,
+            triggerMetaJson: null,
+            toolCalls: [toolCallRow({})],
+            interactions: [],
+          }
         : null,
     ),
-  listToolCalls: (): Effect.Effect<readonly ToolCallRow[]> => Effect.succeed([toolCallRow({})]),
 });
 
 const webHandlerFor = (extension: ExecutionHistoryExtension) =>
@@ -183,19 +189,6 @@ describe("ExecutionHistoryHandlers", () => {
       expect(miss.status).toBe(200);
       const missBody = yield* Effect.promise(() => miss.json());
       expect(missBody).toBeNull();
-    }),
-  );
-
-  it.effect("listToolCalls returns the run's tool calls", () =>
-    Effect.gen(function* () {
-      const web = yield* webHandlerFor(makeStubExtension({}));
-
-      const res = yield* get(web, "http://localhost/execution-history/runs/exec_1/tool-calls");
-      expect(res.status).toBe(200);
-      const body = (yield* Effect.promise(() => res.json())) as {
-        toolCalls: { toolCallId: string }[];
-      };
-      expect(body.toolCalls.map((c) => c.toolCallId)).toEqual(["call_1"]);
     }),
   );
 });
