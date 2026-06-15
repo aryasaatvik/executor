@@ -17,7 +17,10 @@ import { useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Exit from "effect/Exit";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { createPluginAtomClient, defineClientPlugin } from "@executor-js/sdk/client";
+import {
+  createPluginAtomClient,
+  defineClientPlugin,
+} from "@executor-js/sdk/client";
 import {
   getExecutorApiBaseUrl,
   getExecutorServerAuthorizationHeader,
@@ -57,7 +60,10 @@ function ServiceTokensPage() {
   const doAlias = useAtomSet(aliasMutation, { mode: "promiseExit" });
   const doUnalias = useAtomSet(unaliasMutation, { mode: "promiseExit" });
 
-  const typed = aliasesResult as AsyncResult.AsyncResult<readonly ServiceTokenAlias[], unknown>;
+  const typed = aliasesResult as AsyncResult.AsyncResult<
+    readonly ServiceTokenAlias[],
+    unknown
+  >;
   const aliases = AsyncResult.match(typed, {
     onInitial: () => [] as readonly ServiceTokenAlias[],
     onFailure: () => [] as readonly ServiceTokenAlias[],
@@ -81,7 +87,10 @@ function ServiceTokensPage() {
     setBusy(true);
     setError(null);
     const exit = await doAlias({
-      payload: { commonName: name, ...(machine ? { machineName: machine } : {}) },
+      payload: {
+        commonName: name,
+        ...(machine ? { machineName: machine } : {}),
+      },
       reactivityKeys: [],
     });
     setBusy(false);
@@ -95,7 +104,10 @@ function ServiceTokensPage() {
   };
 
   const handleUnalias = async (name: string) => {
-    const exit = await doUnalias({ payload: { commonName: name }, reactivityKeys: [] });
+    const exit = await doUnalias({
+      payload: { commonName: name },
+      reactivityKeys: [],
+    });
     if (!Exit.isFailure(exit)) refresh();
   };
 
@@ -107,35 +119,47 @@ function ServiceTokensPage() {
             Service Tokens
           </h1>
           <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-            Map a Cloudflare Access service token to your identity. A machine token that presents{" "}
+            Map a Cloudflare Access service token to your identity. A machine
+            token that presents{" "}
             <span className="font-mono text-[12px]">Cf-Access-Client-Id</span>/
-            <span className="font-mono text-[12px]">-Secret</span> headers then acts as you —
-            resolving your Personal connections instead of its own empty partition.
+            <span className="font-mono text-[12px]">-Secret</span> headers then
+            acts as you — resolving your Personal connections instead of its own
+            empty partition.
           </p>
         </div>
 
-        <div className="mb-8 flex gap-2">
+        <div className="mb-8 space-y-2">
           <Input
             placeholder="service-token common_name (Client ID)"
             value={commonName}
-            onChange={(e) => setCommonName((e.target as HTMLInputElement).value)}
-            className="h-9 flex-[2] font-mono text-[13px]"
+            onChange={(e) =>
+              setCommonName((e.target as HTMLInputElement).value)
+            }
+            className="h-9 w-full font-mono text-[13px]"
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleAlias();
             }}
           />
-          <Input
-            placeholder="machine name (optional)"
-            value={machineName}
-            onChange={(e) => setMachineName((e.target as HTMLInputElement).value)}
-            className="h-9 flex-1 text-[13px]"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void handleAlias();
-            }}
-          />
-          <Button size="sm" onClick={handleAlias} disabled={!commonName.trim() || busy}>
-            {busy ? "Aliasing…" : "Alias to me"}
-          </Button>
+          <div className="flex gap-2">
+            <Input
+              placeholder="machine name (optional)"
+              value={machineName}
+              onChange={(e) =>
+                setMachineName((e.target as HTMLInputElement).value)
+              }
+              className="h-9 min-w-0 flex-1 text-[13px]"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void handleAlias();
+              }}
+            />
+            <Button
+              size="sm"
+              onClick={handleAlias}
+              disabled={!commonName.trim() || busy}
+            >
+              {busy ? "Aliasing…" : "Alias to me"}
+            </Button>
+          </div>
         </div>
 
         {error && (
@@ -162,8 +186,8 @@ function ServiceTokensPage() {
           <CardStackEntry>
             <CardStackEntryContent>
               <CardStackEntryDescription>
-                No service-token aliases yet. Create a token in Cloudflare Access, then paste its
-                Client ID above.
+                No service-token aliases yet. Create a token in Cloudflare
+                Access, then paste its Client ID above.
               </CardStackEntryDescription>
             </CardStackEntryContent>
           </CardStackEntry>
@@ -175,11 +199,15 @@ function ServiceTokensPage() {
                   {alias.machineName ? (
                     <>
                       <span className="text-muted-foreground/60">Name</span>
-                      <span className="truncate text-foreground/90">{alias.machineName}</span>
+                      <span className="truncate text-foreground/90">
+                        {alias.machineName}
+                      </span>
                     </>
                   ) : null}
                   <span className="text-muted-foreground/60">Token</span>
-                  <span className="truncate font-mono text-foreground/80">{alias.commonName}</span>
+                  <span className="truncate font-mono text-foreground/80">
+                    {alias.commonName}
+                  </span>
                   <span className="text-muted-foreground/60">Acts as</span>
                   <span className="truncate font-mono text-foreground/80">
                     {alias.email ?? alias.name ?? alias.subject}
