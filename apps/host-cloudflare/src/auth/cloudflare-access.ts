@@ -188,8 +188,7 @@ export const makeAccessVerifier = (
       // A service token (common_name, no sub) may be aliased to a human subject.
       // Resolve it before building the principal so the token acts as that user.
       const id = accessIdentity(claims);
-      const alias =
-        isServiceToken(id) && aliasLookup ? yield* aliasLookup(id.commonName) : null;
+      const alias = isServiceToken(id) && aliasLookup ? yield* aliasLookup(id.commonName) : null;
 
       return principalFromAccessClaims(claims, config, alias);
     });
