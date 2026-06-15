@@ -9,6 +9,8 @@ import {
 } from "@executor-js/plugin-execution-metrics/cloudflare";
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
+import { vectorizeSearchHttpPlugin } from "@executor-js/plugin-vectorize-search/api";
+import type { VectorizeIndex } from "@executor-js/plugin-vectorize-search";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -27,9 +29,21 @@ import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 // fleet), so the local Prometheus scrape is deliberately NOT mounted here; WAE
 // is the durable sink. To enable: uncomment `analytics_engine_datasets` in
 // wrangler.jsonc.
+//
+// Vectorize search follows the same opt-in-by-binding shape: the plugin is
+// always in the tuple (its reindex route keeps the API shape stable), but it is
+// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
+// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
+// Vectorize index + add the binding in wrangler.jsonc and set the secret.
 // ---------------------------------------------------------------------------
 
-export const makeCloudflarePlugins = (secretKey: string, analytics?: AnalyticsEngineDataset) =>
+export const makeCloudflarePlugins = (
+  secretKey: string,
+  analytics?: AnalyticsEngineDataset,
+  vectorize?: VectorizeIndex,
+  geminiApiKey?: string,
+  searchNamespace?: string,
+) =>
   [
     openApiHttpPlugin(),
     mcpHttpPlugin({ dangerouslyAllowStdioMCP: false }),
@@ -39,6 +53,7 @@ export const makeCloudflarePlugins = (secretKey: string, analytics?: AnalyticsEn
       observer: () => (analytics ? createWaeMetricsObserver(analytics) : noopExecutionObserver),
     }),
     serviceTokensPlugin(),
+    vectorizeSearchHttpPlugin({ vectorize, geminiApiKey, namespace: searchNamespace }),
   ] as const;
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;
