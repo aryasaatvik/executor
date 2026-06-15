@@ -8,7 +8,7 @@ const stubWorkOS = (overrides: Partial<WorkOSClientService>) =>
   Layer.succeed(
     WorkOSClient,
     new Proxy({} as WorkOSClientService, {
-      get: (_target, prop) => {
+      get: (target, prop) => {
         if (prop in overrides) return overrides[prop as keyof WorkOSClientService];
         return () => Effect.die(`unexpected WorkOSClient.${String(prop)} call`);
       },

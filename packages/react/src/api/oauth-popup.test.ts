@@ -55,7 +55,7 @@ describe("openOAuthPopup", () => {
       location: { origin: "https://app.example" },
       addEventListener: () => {},
       removeEventListener: () => {},
-      open: (url: string, _name: string, requestedFeatures: string) => {
+      open: (url: string, name: string, requestedFeatures: string) => {
         opened = url;
         features = requestedFeatures;
         return popup;
