@@ -1,3 +1,3 @@
 export { RunsPage } from "./RunsPage";
 export { ExecutionHistoryClient } from "./client";
-export { runsAtom, runDetailAtom, runToolCallsAtom, type RunsQuery } from "./atoms";
+export { runsAtom, runDetailAtom, type RunsQuery } from "./atoms";

@@ -1,9 +1,7 @@
 export { executionHistoryPlugin } from "./plugin";
 
 export {
-  interactions,
   runs,
-  toolCalls,
   InteractionRow,
   InteractionStatus,
   RunRow,
@@ -11,6 +9,8 @@ export {
   ToolCallRow,
   ToolCallStatus,
 } from "./collections";
+
+export { RunDetail, RunDetailFromJsonString } from "./detail-types";
 
 export {
   makeExecutionHistoryObserver,

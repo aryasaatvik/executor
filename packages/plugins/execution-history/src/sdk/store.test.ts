@@ -83,21 +83,20 @@ describe("execution-history store", () => {
       expect(run?.toolCallCount).toBe(1);
       expect(run?.durationMs).toBe(2000);
       expect(run?.hadInteraction).toBe(false);
-      // code + trigger from ExecutionStarted survive the terminal re-write.
-      expect(run?.code).toBe("await tools.shell({ command: 'ls' })");
+      // codePreview + trigger from ExecutionStarted survive the terminal re-write.
+      expect(run?.codePreview).toBe("await tools.shell({ command: 'ls' })");
       expect(run?.triggerKind).toBe("manual");
 
       const detail = yield* executor.executionHistory.get("exec_1");
       expect(detail?.run.status).toBe("completed");
+      // Full code + the tool call now come from the R2 detail object.
+      expect(detail?.code).toBe("await tools.shell({ command: 'ls' })");
       expect(detail?.toolCalls).toHaveLength(1);
       expect(detail?.toolCalls[0]?.toolCallId).toBe("call_1");
       expect(detail?.toolCalls[0]?.status).toBe("completed");
       expect(detail?.toolCalls[0]?.durationMs).toBe(1000);
+      expect(detail?.toolCalls[0]?.path).toBe("tools.shell.org.default.run");
       expect(detail?.interactions).toHaveLength(0);
-
-      const toolCallRows = yield* executor.executionHistory.listToolCalls("exec_1");
-      expect(toolCallRows).toHaveLength(1);
-      expect(toolCallRows[0]?.path).toBe("tools.shell.org.default.run");
     }),
   );
 });
