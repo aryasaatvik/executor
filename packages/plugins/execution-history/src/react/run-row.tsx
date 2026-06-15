@@ -1,4 +1,3 @@
-import { Button } from "@executor-js/react/components/button";
 import { cn } from "@executor-js/react/lib/utils";
 import { Badge } from "@executor-js/react/components/badge";
 
@@ -8,23 +7,13 @@ import { actorTone, STATUS_TONES, triggerTone } from "./status";
 import { HoverCardTimestamp } from "./hover-card-timestamp";
 import type { RunColumns } from "./view";
 
-// Column slot classes — RunListRow and RunsColumnHeader both apply these
-// fixed-width slots (after the dot/started/status base columns) so the header
-// and rows stay pixel-aligned. Every column is always rendered; when the
-// viewport is narrower than the table's natural width the body scrolls
-// horizontally (see RunsShell's min-width wrapper) instead of hiding columns.
-//
-// Trigger/duration/actor carry inline content (a dot+label, a sort button), so
-// their display must be `flex` — composing `block` with an element's own
-// `inline-flex` makes tailwind-merge collapse to one display value, which
-// silently desyncs the header slot from the row slot (trigger) or wraps the
-// sort label onto a second line (duration). A `flex` slot keeps both in lockstep.
-export const COL_TRIGGER = "flex w-[120px] shrink-0";
-export const COL_ACTOR = "flex w-[170px] shrink-0";
-export const COL_DURATION = "flex w-[100px] shrink-0";
-export const COL_TOOLS = "block w-[80px] shrink-0";
-export const COL_INTERACTION = "block w-[100px] shrink-0";
-export const COL_LOG = "block w-[80px] shrink-0";
+// One semantic <table> row per run. Columns are content-fit — widths come from
+// the browser's `table-layout: auto` over all rows + the header (see RunsShell),
+// so there are no fixed column widths. Short / numeric / badge columns center;
+// text columns left-align. The two columns that can run long — `actor` (a token
+// id / email) and `code` — are width-capped and truncated (hover shows the full
+// value) so content-fit can't blow the table out.
+const CELL = "border-b border-border/40 px-3 py-2 align-middle whitespace-nowrap";
 
 export interface RunListRowProps {
   readonly run: RunRow;
@@ -39,106 +28,112 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const trigger = triggerTone(run.triggerKind);
   const actor = actorTone(run.actorKind);
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
-  // Log error/warn counts are denormalized onto the slim row at write time, so
-  // the list never fetches/parses the full logs (now in the R2 detail object).
   const logErrors = run.logErrorCount;
   const logWarns = run.logWarnCount;
 
   return (
-    <Button
-      type="button"
-      variant="ghost"
+    <tr
+      role="button"
+      tabIndex={0}
       onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
       className={cn(
-        "group h-auto w-full justify-start",
-        "flex min-w-0 items-center gap-2 overflow-hidden border-b border-border/40 px-4 py-2",
-        "text-left font-mono text-xs transition-colors",
-        "hover:bg-foreground/[0.03]",
+        "group cursor-pointer font-mono text-xs outline-none transition-colors",
+        "hover:bg-foreground/[0.03] focus-visible:bg-foreground/[0.05]",
         selected && "bg-foreground/[0.05] hover:bg-foreground/[0.05]",
         isPast && "opacity-50",
       )}
     >
-      {/* Status dot */}
-      <span
-        aria-hidden
-        className={cn("size-2 shrink-0 rounded-full", tone.dot, tone.pulse && "animate-pulse")}
-      />
+      {/* Status dot (centered) */}
+      <td className={cn(CELL, "text-center")}>
+        <span
+          aria-hidden
+          className={cn(
+            "inline-block size-2 rounded-full align-middle",
+            tone.dot,
+            tone.pulse && "animate-pulse",
+          )}
+        />
+      </td>
 
-      {/* Started */}
-      <HoverCardTimestamp
-        timestamp={run.startedAt}
-        display={formatRelative(run.startedAt)}
-        className="w-[180px] shrink-0 tabular-nums text-muted-foreground"
-      />
+      {/* Started (left) */}
+      <td className={cn(CELL, "text-left tabular-nums text-muted-foreground")}>
+        <HoverCardTimestamp timestamp={run.startedAt} display={formatRelative(run.startedAt)} />
+      </td>
 
-      {/* Status label */}
-      <span className={cn("inline-flex w-[120px] shrink-0 gap-1", tone.text)}>
+      {/* Status (centered) */}
+      <td className={cn(CELL, "text-center", tone.text)}>
         {statusLabel(run.status)}
-        {isLive && (
-          <span className="text-muted-foreground/50">
-            {run.status === "waiting_for_interaction" ? " ·" : ""}
-          </span>
-        )}
-      </span>
+        {isLive && run.status === "waiting_for_interaction" ? (
+          <span className="text-muted-foreground/50"> ·</span>
+        ) : null}
+      </td>
 
-      {/* Trigger (optional) */}
+      {/* Trigger (left, optional) */}
       {columns.trigger ? (
-        <span className={cn(COL_TRIGGER, "items-center gap-1")}>
-          <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
-          <span className={cn("truncate", trigger.text)}>{trigger.label}</span>
-        </span>
+        <td className={cn(CELL, "text-left")}>
+          <span className="inline-flex items-center gap-1">
+            <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
+            <span className={trigger.text}>{trigger.label}</span>
+          </span>
+        </td>
       ) : null}
 
-      {/* Actor (optional) */}
+      {/* Actor (left, capped + truncated, optional) */}
       {columns.actor ? (
-        <span className={cn(COL_ACTOR, "items-center gap-1")}>
+        <td className={cn(CELL, "max-w-[160px] text-left")}>
           {run.actorId !== null ? (
-            <>
+            <span className="flex items-center gap-1">
               <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", actor.dot)} />
               <span
-                className={cn("truncate", actor.text)}
+                className={cn("min-w-0 truncate", actor.text)}
                 title={run.actorLabel ?? run.actorId ?? undefined}
               >
                 {run.actorLabel ?? run.actorId}
               </span>
-            </>
+            </span>
           ) : (
             <span className="text-muted-foreground/50">—</span>
           )}
-        </span>
+        </td>
       ) : null}
 
-      {/* Duration (optional) — slow runs (>5s) flagged. */}
+      {/* Duration (centered, optional) — slow runs (>5s) flagged */}
       {columns.duration ? (
-        <span
+        <td
           className={cn(
-            COL_DURATION,
-            "tabular-nums",
+            CELL,
+            "text-center tabular-nums",
             run.durationMs != null && run.durationMs > 5000
               ? "text-destructive"
               : "text-muted-foreground",
           )}
         >
           {formatDuration(run.durationMs)}
-        </span>
+        </td>
       ) : null}
 
-      {/* Tool call count (optional) */}
+      {/* Tool call count (centered, optional) */}
       {columns.tools ? (
-        <span
+        <td
           className={cn(
-            COL_TOOLS,
-            "tabular-nums",
+            CELL,
+            "text-center tabular-nums",
             run.toolCallCount > 0 ? "text-foreground/80" : "text-muted-foreground/60",
           )}
         >
           {run.toolCallCount}
-        </span>
+        </td>
       ) : null}
 
-      {/* Interaction (optional) */}
+      {/* Interaction (centered, optional) */}
       {columns.interaction ? (
-        <span className={cn(COL_INTERACTION)}>
+        <td className={cn(CELL, "text-center")}>
           {run.hadInteraction ? (
             <Badge
               variant="outline"
@@ -149,12 +144,12 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
           ) : (
             <span className="text-muted-foreground/50">—</span>
           )}
-        </span>
+        </td>
       ) : null}
 
-      {/* Log error/warn counts (optional) */}
+      {/* Log error/warn counts (centered, optional) */}
       {columns.log ? (
-        <span className={cn(COL_LOG, "tabular-nums")}>
+        <td className={cn(CELL, "text-center tabular-nums")}>
           {logErrors === 0 && logWarns === 0 ? (
             <span className="text-muted-foreground/50">—</span>
           ) : (
@@ -171,15 +166,18 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
               </span>
             </span>
           )}
-        </span>
+        </td>
       ) : null}
 
-      {/* Code preview (always visible, fills remaining space). Pre-normalized at
-          write time; sliced here only to bound the rendered width. */}
-      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+      {/* Code preview (left, capped + truncated; hover reveals the full
+          write-bounded preview) */}
+      <td
+        className={cn(CELL, "max-w-[320px] truncate text-left text-muted-foreground")}
+        title={run.codePreview}
+      >
         <span className="text-muted-foreground/50">code: </span>
-        <span className="text-foreground/70">&quot;{run.codePreview.slice(0, 160)}&quot;</span>
-      </span>
-    </Button>
+        <span className="text-foreground/70">&quot;{run.codePreview}&quot;</span>
+      </td>
+    </tr>
   );
 }
