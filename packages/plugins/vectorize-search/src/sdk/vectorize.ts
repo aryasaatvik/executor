@@ -44,6 +44,20 @@ export interface VectorizeVectorInput {
  *  offset+limit never trips the binding. */
 const MAX_TOP_K = 100;
 
+/** Vectorize caps a single upsert at ~1000 vectors / ~2 MB. At 1536-d a few
+ *  dozen vectors already approach the size cap, so chunk conservatively well
+ *  under both limits and upsert the batches sequentially. */
+const UPSERT_BATCH_SIZE = 50;
+
+const chunk = <A>(items: readonly A[], size: number): readonly (readonly A[])[] => {
+  const safe = Math.max(1, Math.floor(size));
+  const out: A[][] = [];
+  for (let i = 0; i < items.length; i += safe) {
+    out.push(items.slice(i, i + safe));
+  }
+  return out;
+};
+
 /** Effect-wrapped, plugin-facing view over a Vectorize binding. */
 export interface VectorizeStore {
   readonly query: (input: {
@@ -71,11 +85,16 @@ export const makeVectorizeStore = (index: VectorizeIndex): VectorizeStore => ({
   upsert: (vectors) =>
     vectors.length === 0
       ? Effect.void
-      : Effect.tryPromise({
-          try: () => index.upsert([...vectors]),
-          catch: (cause) =>
-            new VectorizeSearchError({ message: "Vectorize upsert failed.", cause }),
-        }).pipe(Effect.asVoid),
+      : Effect.forEach(
+          chunk([...vectors], UPSERT_BATCH_SIZE),
+          (batch) =>
+            Effect.tryPromise({
+              try: () => index.upsert(batch),
+              catch: (cause) =>
+                new VectorizeSearchError({ message: "Vectorize upsert failed.", cause }),
+            }),
+          { concurrency: 1, discard: true },
+        ),
   deleteByIds: (ids) =>
     ids.length === 0
       ? Effect.void

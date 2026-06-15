@@ -6,7 +6,13 @@ import type { Executor, Tool } from "@executor-js/sdk/core";
 import type { ToolEmbedder } from "./embedder";
 import { reindexToolCatalog } from "./indexer";
 import { makeVectorizeToolDiscoveryProvider } from "./provider";
-import type { VectorizeMatch, VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import { makeVectorizeStore } from "./vectorize";
+import type {
+  VectorizeIndex,
+  VectorizeMatch,
+  VectorizeStore,
+  VectorizeVectorInput,
+} from "./vectorize";
 
 const fakeEmbedder: ToolEmbedder = {
   model: "test",
@@ -15,17 +21,21 @@ const fakeEmbedder: ToolEmbedder = {
   embedQuery: () => Effect.succeed([1, 0, 0]),
 };
 
+// The fake store honours topK (slicing to it) so the probe-one-ahead pagination
+// is actually exercised — a store that ignored topK would mask the hasMore bug.
 const makeQueryStore = (matches: readonly VectorizeMatch[]): VectorizeStore => ({
-  query: () => Effect.succeed(matches),
+  query: ({ topK }) => Effect.succeed(matches.slice(0, topK)),
   upsert: () => Effect.void,
   deleteByIds: () => Effect.void,
 });
 
-const match = (path: string, score: number): VectorizeMatch => ({
+const matchIn = (path: string, integration: string, score: number): VectorizeMatch => ({
   id: `org#${path}`,
   score,
-  metadata: { path, name: path, description: `desc ${path}`, integration: "github" },
+  metadata: { path, name: path, description: `desc ${path}`, integration },
 });
+
+const match = (path: string, score: number): VectorizeMatch => matchIn(path, "github", score);
 
 // Minimal stubs — the indexer only calls `tools.list()` and reads a few Tool
 // fields, so a full branded Tool/Executor is unnecessary for these unit tests.
@@ -80,6 +90,51 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
       expect(page.items.map((item) => item.path)).toEqual(["b"]);
       expect(page.hasMore).toBe(true);
       expect(page.nextOffset).toBe(2);
+    }),
+  );
+
+  it.effect("reports hasMore via probe-one-ahead on a full first page", () =>
+    Effect.gen(function* () {
+      const provider = makeVectorizeToolDiscoveryProvider({
+        embedder: fakeEmbedder,
+        store: makeQueryStore([match("a", 0.9), match("b", 0.8), match("c", 0.7)]),
+        namespace: "org",
+      });
+      const page = yield* provider.searchTools({
+        executor: undefined as never,
+        query: "x",
+        limit: 2,
+        offset: 0,
+      });
+      expect(page.items.map((item) => item.path)).toEqual(["a", "b"]);
+      expect(page.hasMore).toBe(true);
+      expect(page.nextOffset).toBe(2);
+    }),
+  );
+
+  it.effect("narrows results to input.namespace (integration prefix)", () =>
+    Effect.gen(function* () {
+      const provider = makeVectorizeToolDiscoveryProvider({
+        embedder: fakeEmbedder,
+        store: makeQueryStore([
+          matchIn("github.repos.get", "github", 0.9),
+          matchIn("slack.chat.post", "slack", 0.8),
+          matchIn("github.issues.list", "github", 0.7),
+        ]),
+        namespace: "org",
+      });
+      const page = yield* provider.searchTools({
+        executor: undefined as never,
+        query: "x",
+        namespace: "github",
+        limit: 10,
+        offset: 0,
+      });
+      expect(page.items.every((item) => item.integration === "github")).toBe(true);
+      expect(page.items.map((item) => item.path)).toEqual([
+        "github.repos.get",
+        "github.issues.list",
+      ]);
     }),
   );
 
@@ -156,6 +211,32 @@ describe("reindexToolCatalog", () => {
         store,
       });
       expect(result.indexedToolCount).toBe(0);
+    }),
+  );
+});
+
+describe("makeVectorizeStore", () => {
+  it.effect("chunks upserts under the Vectorize per-call cap", () =>
+    Effect.gen(function* () {
+      const batches: number[] = [];
+      const index: VectorizeIndex = {
+        query: () => Promise.resolve({ matches: [] }),
+        upsert: (vectors) => {
+          batches.push(vectors.length);
+          return Promise.resolve({});
+        },
+        deleteByIds: () => Promise.resolve({}),
+      };
+      const store = makeVectorizeStore(index);
+      const vectors: readonly VectorizeVectorInput[] = Array.from({ length: 120 }, (_, i) => ({
+        id: `v${i}`,
+        values: [0, 0, 0],
+      }));
+
+      yield* store.upsert(vectors);
+
+      // 120 records at batch size 50 -> [50, 50, 20]; never a single 120 call.
+      expect(batches).toEqual([50, 50, 20]);
     }),
   );
 });
