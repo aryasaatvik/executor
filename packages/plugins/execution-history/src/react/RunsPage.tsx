@@ -10,7 +10,7 @@ import { LiveButton } from "./live-button";
 import { LiveDivider } from "./live-row";
 import { RefreshButton } from "./refresh-button";
 import { RunListRow } from "./run-row";
-import { RunsShell } from "./shell";
+import { RunsShell, RUNS_TABLE_COLSPAN } from "./shell";
 import { RunsTimelineChart } from "./timeline-chart";
 import {
   emptyRunsFilters,
@@ -165,15 +165,16 @@ export function RunsPage() {
 
   if (view.isLoadMoreError) {
     rowItems.push(
-      <div
-        key="load-more-error"
-        className="flex w-full flex-col items-center justify-center gap-2 border-t border-border/50 py-4 text-center"
-      >
-        <p className="font-mono text-xs text-destructive">Failed to load more</p>
-        <Button type="button" variant="outline" size="sm" onClick={view.retry}>
-          Retry
-        </Button>
-      </div>,
+      <tr key="load-more-error">
+        <td colSpan={RUNS_TABLE_COLSPAN} className="border-t border-border/50 py-4 text-center">
+          <span className="flex flex-col items-center justify-center gap-2">
+            <span className="font-mono text-xs text-destructive">Failed to load more</span>
+            <Button type="button" variant="outline" size="sm" onClick={view.retry}>
+              Retry
+            </Button>
+          </span>
+        </td>
+      </tr>,
     );
   }
 
@@ -226,9 +227,17 @@ export function RunsPage() {
     ) : undefined;
 
   const body = view.isLoading ? (
-    <div className="p-6 text-sm text-muted-foreground">Loading runs…</div>
+    <tr>
+      <td colSpan={RUNS_TABLE_COLSPAN} className="p-6 text-center text-sm text-muted-foreground">
+        Loading runs…
+      </td>
+    </tr>
   ) : view.isError ? (
-    <div className="p-6 text-sm text-destructive">Unable to load runs.</div>
+    <tr>
+      <td colSpan={RUNS_TABLE_COLSPAN} className="p-6 text-center text-sm text-destructive">
+        Unable to load runs.
+      </td>
+    </tr>
   ) : (
     rowItems
   );
