@@ -37,7 +37,12 @@ import { preloadQuickJs } from "./quickjs";
 
 export const makeCloudflareApp = async (env: CloudflareEnv) => {
   const config = loadConfig(env);
-  const plugins = makeCloudflarePlugins(config.secretKey, { analytics: env.ANALYTICS });
+  const plugins = makeCloudflarePlugins(config.secretKey, {
+    analytics: env.ANALYTICS,
+    vectorize: env.VECTORIZE,
+    geminiApiKey: config.geminiApiKey,
+    searchNamespace: config.organizationId,
+  });
 
   // Load the Workers-compatible (WASM-inlined) QuickJS variant before any
   // executor is built, the default variant cannot fetch its .wasm on Workers.
