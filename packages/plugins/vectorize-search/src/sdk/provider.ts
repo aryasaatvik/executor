@@ -6,6 +6,7 @@ import {
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
+import { MAX_TOP_K } from "./vectorize";
 import type { VectorizeMatch, VectorizeStore } from "./vectorize";
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
@@ -40,10 +41,12 @@ const matchesNamespace = (result: ToolDiscoveryResult, namespace: string | undef
  * `ToolDiscoveryResult` straight from the stored metadata (no per-tool describe
  * round-trip).
  *
- * Pagination uses probe-one-ahead: Vectorize is queried for `offset + limit + 1`
- * (clamped to its topK cap), and the extra item — if present — sets `hasMore`
- * without being shown, so the model can page even though Vectorize never reports
- * a true total. Deep pagination past the topK cap is out of scope for v1.
+ * Pagination fetches the full topK window (Vectorize never reports a true total)
+ * and slices it: `hasMore` means "the filtered window holds more than this page".
+ * Fetching the whole window — rather than probing one item past the page — keeps
+ * `hasMore` correct even when the `input.namespace` filter discards the item that
+ * would otherwise have been the probe. Deep pagination past the topK cap is out
+ * of scope for v1.
  *
  * `input.executor` is unused — results come from the index, not a live catalog
  * scan. `input.namespace` narrows the page to an integration/path prefix.
@@ -60,12 +63,12 @@ export const makeVectorizeToolDiscoveryProvider = (deps: {
       }
       const safeOffset = Math.max(offset, 0);
       const vector = yield* deps.embedder.embedQuery(query);
-      // Probe one past the page so a "next" item is visible even though Vectorize
-      // never reports a true total.
+      // Fetch the whole topK window (not a tight probe) so the post-fetch
+      // namespace filter can't drop the one item that signals hasMore.
       const matches = yield* deps.store.query({
         vector,
         namespace: deps.namespace,
-        topK: safeOffset + limit + 1,
+        topK: MAX_TOP_K,
       });
       const ranked = matches
         .filter((match) => asString(match.metadata?.path).length > 0)

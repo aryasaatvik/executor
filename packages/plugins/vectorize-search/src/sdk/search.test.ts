@@ -21,8 +21,8 @@ const fakeEmbedder: ToolEmbedder = {
   embedQuery: () => Effect.succeed([1, 0, 0]),
 };
 
-// The fake store honours topK (slicing to it) so the probe-one-ahead pagination
-// is actually exercised — a store that ignored topK would mask the hasMore bug.
+// The fake store honours topK (slicing to it) so pagination is exercised against
+// a realistic window — a store that ignored topK would mask hasMore bugs.
 const makeQueryStore = (matches: readonly VectorizeMatch[]): VectorizeStore => ({
   query: ({ topK }) => Effect.succeed(matches.slice(0, topK)),
   upsert: () => Effect.void,
@@ -93,7 +93,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
     }),
   );
 
-  it.effect("reports hasMore via probe-one-ahead on a full first page", () =>
+  it.effect("reports hasMore on a full first page", () =>
     Effect.gen(function* () {
       const provider = makeVectorizeToolDiscoveryProvider({
         embedder: fakeEmbedder,
@@ -135,6 +135,32 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
         "github.repos.get",
         "github.issues.list",
       ]);
+    }),
+  );
+
+  it.effect("keeps hasMore correct when the namespace filter drops interspersed items", () =>
+    Effect.gen(function* () {
+      // Greptile scenario: a non-matching item sits where a tight probe would be.
+      const provider = makeVectorizeToolDiscoveryProvider({
+        embedder: fakeEmbedder,
+        store: makeQueryStore([
+          matchIn("github.a", "github", 0.9),
+          matchIn("slack.b", "slack", 0.8),
+          matchIn("github.c", "github", 0.7),
+          matchIn("github.d", "github", 0.6),
+        ]),
+        namespace: "org",
+      });
+      const page = yield* provider.searchTools({
+        executor: undefined as never,
+        query: "x",
+        namespace: "github",
+        limit: 2,
+        offset: 0,
+      });
+      expect(page.items.map((item) => item.path)).toEqual(["github.a", "github.c"]);
+      expect(page.hasMore).toBe(true);
+      expect(page.nextOffset).toBe(2);
     }),
   );
 

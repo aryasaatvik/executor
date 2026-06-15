@@ -40,9 +40,9 @@ export interface VectorizeVectorInput {
   readonly metadata?: Record<string, unknown>;
 }
 
-/** Vectorize caps `topK` at 100 (with metadata). Clamp so a large
- *  offset+limit never trips the binding. */
-const MAX_TOP_K = 100;
+/** Vectorize caps `topK` at 100 (with metadata). The provider fetches this full
+ *  window and paginates within it, so the store clamps any request to it. */
+export const MAX_TOP_K = 100;
 
 /** Vectorize caps a single upsert at ~1000 vectors / ~2 MB. At 1536-d a few
  *  dozen vectors already approach the size cap, so chunk conservatively well
