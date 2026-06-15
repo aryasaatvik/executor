@@ -294,7 +294,7 @@ describe("json filter LIKE-wildcard parity (memory vs sqlite)", () => {
     ["eq", statusCompare("=", "a_b%c")],
     ["starts with", statusCompare("starts with", "a_")],
     ["ends with", statusCompare("ends with", "%c")],
-  ] as const)("matches identically for %s", async (_label, filter) => {
+  ] as const)("matches identically for %s", async (label, filter) => {
     const fromMemory = await idsFor(memory.orm, filter);
     const fromSqlite = await idsFor(sqlite.orm, filter);
     expect(fromSqlite).toEqual(fromMemory);
