@@ -18,7 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@executor-js/react/com
 import { cn } from "@executor-js/react/lib/utils";
 
 import type { InteractionRow, InteractionStatus, RunRow, ToolCallRow } from "../sdk/collections";
-import { runDetailAtom, runToolCallsAtom } from "./atoms";
+import { runDetailAtom } from "./atoms";
 import { formatDateTime, formatDuration, logLines, prettyJson, statusLabel } from "./format";
 import { HoverCardTimestamp } from "./hover-card-timestamp";
 import { STATUS_TONES, triggerTone } from "./status";
@@ -155,44 +155,36 @@ function ToolCallItem(props: {
   );
 }
 
-function ToolCallsTab(props: { readonly run: RunRow }) {
-  const toolCalls = useAtomValue(runToolCallsAtom(props.run.executionId));
+function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonly ToolCallRow[] }) {
   const windowStart = props.run.startedAt;
-  return AsyncResult.match(toolCalls, {
-    onInitial: () => <p className="text-sm text-muted-foreground">Loading tool calls...</p>,
-    onFailure: () => <p className="text-sm text-destructive">Unable to load tool calls.</p>,
-    onSuccess: ({ value }) => {
-      if (value.toolCalls.length === 0) {
-        return <p className="text-sm text-muted-foreground">No tool calls recorded.</p>;
-      }
-      // Derive the window end from the tool-call data rather than only
-      // `run.completedAt` — the two atoms refresh independently, so a fresher
-      // tool call can outrun a stale run end; covering it here avoids clamping
-      // that bar to a 1% sliver.
-      const callsEnd = value.toolCalls.reduce(
-        (max, call) =>
-          Math.max(
-            max,
-            call.completedAt ??
-              (call.durationMs != null ? call.startedAt + call.durationMs : call.startedAt),
-          ),
-        windowStart,
-      );
-      const windowEnd = Math.max(props.run.completedAt ?? Date.now(), callsEnd);
-      return (
-        <div className="space-y-2">
-          {value.toolCalls.map((call) => (
-            <ToolCallItem
-              key={call.toolCallId}
-              call={call}
-              windowStart={windowStart}
-              windowEnd={windowEnd}
-            />
-          ))}
-        </div>
-      );
-    },
-  });
+  if (props.toolCalls.length === 0) {
+    return <p className="text-sm text-muted-foreground">No tool calls recorded.</p>;
+  }
+  // Derive the window end from the tool-call data as well as `run.completedAt`
+  // so a fresher tool call can't outrun a stale run end and clamp its bar to a
+  // 1% sliver.
+  const callsEnd = props.toolCalls.reduce(
+    (max, call) =>
+      Math.max(
+        max,
+        call.completedAt ??
+          (call.durationMs != null ? call.startedAt + call.durationMs : call.startedAt),
+      ),
+    windowStart,
+  );
+  const windowEnd = Math.max(props.run.completedAt ?? Date.now(), callsEnd);
+  return (
+    <div className="space-y-2">
+      {props.toolCalls.map((call) => (
+        <ToolCallItem
+          key={call.toolCallId}
+          call={call}
+          windowStart={windowStart}
+          windowEnd={windowEnd}
+        />
+      ))}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -243,6 +235,11 @@ function InteractionBlock(props: { readonly interaction: InteractionRow }) {
 
 function DetailContent(props: {
   readonly run: RunRow;
+  readonly code: string;
+  readonly resultJson: string | null;
+  readonly errorText: string | null;
+  readonly logsJson: string | null;
+  readonly toolCalls: readonly ToolCallRow[];
   readonly interactions: readonly InteractionRow[];
   readonly onPrev?: () => void;
   readonly onNext?: () => void;
@@ -361,13 +358,13 @@ function DetailContent(props: {
               <span className="text-muted-foreground">· tools {run.toolCallCount}</span>
             </div>
 
-            <CodeBlock code={run.code} lang="typescript" title="Code" />
-            <JsonBlock title="Result" value={run.resultJson} />
-            {run.errorText && (
+            <CodeBlock code={props.code} lang="typescript" title="Code" />
+            <JsonBlock title="Result" value={props.resultJson} />
+            {props.errorText && (
               <div className="space-y-1">
                 <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
                 <pre className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
-                  {run.errorText}
+                  {props.errorText}
                 </pre>
               </div>
             )}
@@ -384,10 +381,10 @@ function DetailContent(props: {
             )}
           </TabsContent>
           <TabsContent value="tools">
-            <ToolCallsTab run={run} />
+            <ToolCallsTab run={run} toolCalls={props.toolCalls} />
           </TabsContent>
           <TabsContent value="logs">
-            <LogsBlock logsJson={run.logsJson} />
+            <LogsBlock logsJson={props.logsJson} />
           </TabsContent>
         </ScrollArea>
       </Tabs>
@@ -410,6 +407,11 @@ function DetailLoader(props: {
       value ? (
         <DetailContent
           run={value.run}
+          code={value.code}
+          resultJson={value.resultJson}
+          errorText={value.errorText}
+          logsJson={value.logsJson}
+          toolCalls={value.toolCalls}
           interactions={value.interactions}
           onPrev={props.onPrev}
           onNext={props.onNext}

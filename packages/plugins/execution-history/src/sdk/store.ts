@@ -11,6 +11,7 @@ import {
   type PluginStorageFacade,
   type StorageDeps,
   type StorageFailure,
+  StorageError,
 } from "@executor-js/sdk/core";
 
 import {
@@ -20,26 +21,33 @@ import {
   type ToolCallRow,
   type ToolCallStatus,
   RunStatus,
-  interactions,
   runs,
-  toolCalls,
 } from "./collections";
+import { type RunDetail, RunDetailFromJsonString } from "./detail-types";
 
 // ---------------------------------------------------------------------------
-// Execution-history store. Translates the engine's ExecutionEvent stream into
-// durable run/tool-call/interaction rows and exposes the read surface.
+// Execution-history store. Translates the engine's ExecutionEvent stream into a
+// slim D1 `runs` index row + an append-only R2 detail object, and exposes the
+// read surface.
+//
+// Storage split:
+// - D1 `runs` row (via pluginStorage): slim, indexed, list-renderable — status,
+//   trigger, actor, timing, counts, plus `codePreview` and `logErrorCount`/
+//   `logWarnCount` so the list never fetches a blob.
+// - R2 detail object (via `deps.blobs`, keyed `run-detail/<executionId>`): the
+//   bulky drawer-only payload — full code, result/error/logs/trigger-metadata,
+//   and the per-tool-call / per-interaction rows. Written once.
 //
 // Write model — buffered batch: tool-call and interaction detail is held in an
-// in-memory buffer keyed by executionId and only flushed when the execution
-// finishes, so a completed run lands as one batch of writes rather than a
-// write-per-event. Two points are written eagerly for durability even before
-// the buffer flushes: the `runs` row on ExecutionStarted (status "running") and
-// again on InteractionStarted (status "waiting_for_interaction"), so a paused
-// run survives a restart while it waits on the user.
+// in-memory buffer keyed by executionId and flushed into the R2 detail object
+// when the execution finishes. Eager writes for durability: on ExecutionStarted
+// the slim "running" row AND a code-only stub detail blob (so a live/paused run
+// shows its code immediately and survives a restart); on InteractionStarted the
+// "waiting_for_interaction" row.
 //
-// Every `unknown` payload (tool args/results, interaction payload/response,
-// execution result/logs) is serialized to a JSON string via Effect Schema
-// (`Schema.UnknownFromJsonString`) — no raw `JSON.stringify` in domain code.
+// Every `unknown` payload is serialized to a JSON string via Effect Schema
+// (`Schema.UnknownFromJsonString`); the detail object round-trips via
+// `Schema.fromJsonString` — no raw `JSON.stringify`/`JSON.parse` in domain code.
 // ---------------------------------------------------------------------------
 
 /** Serialize an arbitrary value to a JSON string, or null when absent or when
@@ -59,6 +67,35 @@ const namespaceOf = (path: string): string | null => {
   const index = path.indexOf(".");
   return index > 0 ? path.slice(0, index) : null;
 };
+
+/** Bounded, whitespace-normalized snippet of the code for the list column. The
+ *  full code lives in the R2 detail object. */
+const codePreviewOf = (code: string): string => code.trim().replace(/\s+/g, " ").slice(0, 256);
+
+/** Count `[error]` / `[warn]` log lines (case-insensitive substring, counted
+ *  independently — matches the list's prior logsJson parsing) so the list reads
+ *  precomputed scalars instead of fetching + parsing the full logs from R2. */
+const logCountsOf = (logs: unknown): { errors: number; warns: number } => {
+  if (!Array.isArray(logs)) return { errors: 0, warns: 0 };
+  let errors = 0;
+  let warns = 0;
+  for (const line of logs) {
+    if (typeof line !== "string") continue;
+    const lower = line.toLowerCase();
+    if (lower.includes("[error]")) errors += 1;
+    if (lower.includes("[warn]")) warns += 1;
+  }
+  return { errors, warns };
+};
+
+/** R2 blob key for a run's detail object. */
+const detailBlobKey = (executionId: string): string => `run-detail/${executionId}`;
+
+/** Detail codec helpers (Schema-based; never raw JSON). Encode runs in the
+ *  Effect channel so a (never-in-practice) failure maps to a typed StorageError
+ *  rather than a `die`; decode reads gracefully as an `Option`. */
+const encodeDetail = Schema.encodeUnknownEffect(RunDetailFromJsonString);
+const decodeDetail = Schema.decodeUnknownOption(RunDetailFromJsonString);
 
 interface BufferedToolCall {
   toolCallId: ExecutionToolCallId;
@@ -195,6 +232,14 @@ export interface ExecutionHistoryListResult {
 
 export interface ExecutionHistoryDetail {
   readonly run: RunRow;
+  /** Bulky drawer payload, sourced from the R2 detail object (flat-merged onto
+   *  the slim run row). For in-flight or detail-less runs these are the
+   *  stub/empty values. */
+  readonly code: string;
+  readonly resultJson: string | null;
+  readonly errorText: string | null;
+  readonly logsJson: string | null;
+  readonly triggerMetaJson: string | null;
   readonly toolCalls: readonly ToolCallRow[];
   readonly interactions: readonly InteractionRow[];
 }
@@ -207,9 +252,6 @@ export interface ExecutionHistoryStore {
   readonly get: (
     executionId: string,
   ) => Effect.Effect<ExecutionHistoryDetail | null, StorageFailure>;
-  readonly listToolCalls: (
-    executionId: string,
-  ) => Effect.Effect<readonly ToolCallRow[], StorageFailure>;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,15 +317,35 @@ const chooseBucketMs = (timeRange: { from?: number; to?: number } | undefined): 
 export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistoryStore => {
   const pluginStorage: PluginStorageFacade = deps.pluginStorage;
   const runsC: PluginStorageCollectionFacade<typeof runs> = pluginStorage.collection(runs);
-  const toolCallsC: PluginStorageCollectionFacade<typeof toolCalls> =
-    pluginStorage.collection(toolCalls);
-  const interactionsC: PluginStorageCollectionFacade<typeof interactions> =
-    pluginStorage.collection(interactions);
+  const blobs = deps.blobs;
 
   const buffers = new Map<string, RunBuffer>();
 
   const putRun = (owner: Owner, row: RunRow): Effect.Effect<void, StorageFailure> =>
     runsC.put({ owner, key: row.executionId, data: row }).pipe(Effect.asVoid);
+
+  /** Write the run's R2 detail object. A (never-in-practice) encode failure maps
+   *  to a typed StorageError so it stays in the storage error channel. */
+  const putDetail = (
+    owner: Owner,
+    executionId: string,
+    detail: RunDetail,
+  ): Effect.Effect<void, StorageFailure> =>
+    encodeDetail(detail).pipe(
+      Effect.mapError(
+        (cause) =>
+          new StorageError({ message: "execution-history: failed to encode run detail", cause }),
+      ),
+      Effect.flatMap((json) => blobs.put(detailBlobKey(executionId), json, { owner })),
+    );
+
+  /** Read + decode the run's R2 detail object; `None` when absent or malformed. */
+  const readDetail = (
+    executionId: string,
+  ): Effect.Effect<Option.Option<RunDetail>, StorageFailure> =>
+    blobs
+      .get(detailBlobKey(executionId))
+      .pipe(Effect.map((raw) => (raw === null ? Option.none<RunDetail>() : decodeDetail(raw))));
 
   const onExecutionStarted = (event: Extract<ExecutionEvent, { _tag: "ExecutionStarted" }>) => {
     const owner = ownerOf(event.owner);
@@ -307,24 +369,38 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       toolCalls: new Map(),
       interactions: new Map(),
     });
-    return putRun(owner, {
-      executionId: event.executionId,
-      status: "running",
-      code: event.code,
-      resultJson: null,
-      errorText: null,
-      logsJson: null,
-      triggerKind,
-      triggerMetaJson,
-      actorId,
-      actorLabel,
-      actorKind,
-      startedAt,
-      completedAt: null,
-      durationMs: null,
-      toolCallCount: 0,
-      hadInteraction: false,
-    });
+    return Effect.all(
+      [
+        putRun(owner, {
+          executionId: event.executionId,
+          status: "running",
+          codePreview: codePreviewOf(event.code),
+          triggerKind,
+          logErrorCount: 0,
+          logWarnCount: 0,
+          actorId,
+          actorLabel,
+          actorKind,
+          startedAt,
+          completedAt: null,
+          durationMs: null,
+          toolCallCount: 0,
+          hadInteraction: false,
+        }),
+        // Eager code-only stub: the drawer shows code while the run is live, and
+        // the code survives a restart that loses the in-memory buffer.
+        putDetail(owner, event.executionId, {
+          code: event.code,
+          resultJson: null,
+          errorText: null,
+          logsJson: null,
+          triggerMetaJson,
+          toolCalls: [],
+          interactions: [],
+        }),
+      ],
+      { concurrency: "unbounded", discard: true },
+    );
   };
 
   const onToolCallStarted = (event: Extract<ExecutionEvent, { _tag: "ToolCallStarted" }>) => {
@@ -390,12 +466,10 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     return putRun(buffer.owner, {
       executionId: event.executionId,
       status: "waiting_for_interaction",
-      code: buffer.code,
-      resultJson: null,
-      errorText: null,
-      logsJson: null,
+      codePreview: codePreviewOf(buffer.code),
       triggerKind: buffer.triggerKind,
-      triggerMetaJson: buffer.triggerMetaJson,
+      logErrorCount: 0,
+      logWarnCount: 0,
       actorId: buffer.actorId,
       actorLabel: buffer.actorLabel,
       actorKind: buffer.actorKind,
@@ -434,30 +508,29 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     const completedAt = event.completedAt.getTime();
     const toolCallEntries = buffer ? Array.from(buffer.toolCalls.values()) : [];
     const interactionEntries = buffer ? Array.from(buffer.interactions.values()) : [];
+    const { errors: logErrorCount, warns: logWarnCount } = logCountsOf(event.logs);
 
     return Effect.gen(function* () {
-      // Preserve code/trigger/startedAt from the buffer, or from the persisted
-      // "running" row if the buffer was lost (e.g. a restart mid-run).
+      // Recover slim fields from the persisted "running" row if the buffer was
+      // lost (restart mid-run). Full code/trigger-metadata live only in the
+      // buffer + the start-stub blob.
       const existing = buffer ? null : yield* runsC.get({ key: event.executionId });
-      const code = buffer?.code ?? existing?.data.code ?? "";
       const triggerKind = buffer?.triggerKind ?? existing?.data.triggerKind ?? null;
-      const triggerMetaJson = buffer?.triggerMetaJson ?? existing?.data.triggerMetaJson ?? null;
       const actorId = buffer?.actorId ?? existing?.data.actorId ?? null;
       const actorLabel = buffer?.actorLabel ?? existing?.data.actorLabel ?? null;
       const actorKind = buffer?.actorKind ?? existing?.data.actorKind ?? null;
       const startedAt = buffer?.startedAt ?? existing?.data.startedAt ?? completedAt;
+      const codePreview = buffer ? codePreviewOf(buffer.code) : (existing?.data.codePreview ?? "");
       const hadInteraction =
         buffer?.hadInteraction ?? (existing?.data.hadInteraction || interactionEntries.length > 0);
 
       yield* putRun(owner, {
         executionId: event.executionId,
         status: event.status,
-        code,
-        resultJson: toJson(event.result),
-        errorText: event.error ?? null,
-        logsJson: toJson(event.logs),
+        codePreview,
         triggerKind,
-        triggerMetaJson,
+        logErrorCount,
+        logWarnCount,
         actorId,
         actorLabel,
         actorKind,
@@ -468,13 +541,18 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         hadInteraction,
       });
 
-      yield* Effect.forEach(
-        toolCallEntries,
-        (entry) =>
-          toolCallsC.put({
-            owner,
-            key: entry.toolCallId,
-            data: {
+      // Write the full detail object. Normal path: assembled from the buffer.
+      // Buffer-lost path: preserve the start-stub's code + trigger-metadata and
+      // attach the terminal result/error/logs (per-call children are
+      // unrecoverable after a restart).
+      const detail: RunDetail = buffer
+        ? {
+            code: buffer.code,
+            resultJson: toJson(event.result),
+            errorText: event.error ?? null,
+            logsJson: toJson(event.logs),
+            triggerMetaJson: buffer.triggerMetaJson,
+            toolCalls: toolCallEntries.map((entry) => ({
               executionId: event.executionId,
               toolCallId: entry.toolCallId,
               status: entry.status,
@@ -486,18 +564,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
               startedAt: entry.startedAt,
               completedAt: entry.completedAt,
               durationMs: entry.durationMs,
-            },
-          }),
-        { discard: true },
-      );
-
-      yield* Effect.forEach(
-        interactionEntries,
-        (entry) =>
-          interactionsC.put({
-            owner,
-            key: entry.interactionId,
-            data: {
+            })),
+            interactions: interactionEntries.map((entry) => ({
               executionId: event.executionId,
               interactionId: entry.interactionId,
               status: entry.status,
@@ -508,10 +576,24 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
               errorText: entry.errorText,
               startedAt: entry.startedAt,
               completedAt: entry.completedAt,
-            },
-          }),
-        { discard: true },
-      );
+            })),
+          }
+        : yield* readDetail(event.executionId).pipe(
+            Effect.map((stubOpt) => {
+              const stub = Option.getOrNull(stubOpt);
+              return {
+                code: stub?.code ?? "",
+                resultJson: toJson(event.result),
+                errorText: event.error ?? null,
+                logsJson: toJson(event.logs),
+                triggerMetaJson: stub?.triggerMetaJson ?? null,
+                toolCalls: [],
+                interactions: [],
+              };
+            }),
+          );
+
+      yield* putDetail(owner, event.executionId, detail);
     }).pipe(
       // Always release the buffer, even if a write fails or is interrupted —
       // otherwise a StorageFailure during the flush leaks the RunBuffer forever.
@@ -738,29 +820,22 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     Effect.gen(function* () {
       const run = yield* runsC.get({ key: executionId });
       if (run === null) return null;
-      const toolCallRows = yield* toolCallsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
-      });
-      const interactionRows = yield* interactionsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
-      });
+      // Detail comes from the R2 object. Absent/malformed (or an in-flight run
+      // whose stub is gone) → empty detail so the drawer still renders the row.
+      const detail = Option.getOrNull(yield* readDetail(executionId));
       return {
         run: run.data,
-        toolCalls: toolCallRows.map((entry) => entry.data),
-        interactions: interactionRows.map((entry) => entry.data),
+        code: detail?.code ?? "",
+        resultJson: detail?.resultJson ?? null,
+        errorText: detail?.errorText ?? null,
+        logsJson: detail?.logsJson ?? null,
+        triggerMetaJson: detail?.triggerMetaJson ?? null,
+        toolCalls: detail?.toolCalls ?? [],
+        interactions: detail?.interactions ?? [],
       };
     });
 
-  const listToolCalls = (
-    executionId: string,
-  ): Effect.Effect<readonly ToolCallRow[], StorageFailure> =>
-    toolCallsC
-      .query({ where: { executionId }, orderBy: [{ field: "startedAt" }] })
-      .pipe(Effect.map((rows) => rows.map((entry) => entry.data)));
-
-  return { handleEvent, list, get, listToolCalls };
+  return { handleEvent, list, get };
 };
 
 /** Build an ExecutionObserver over a store instance — every engine event is
