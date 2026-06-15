@@ -30,5 +30,13 @@ export const selfHostDataMigrations: readonly SqliteDataMigration[] = [
   // migrate-specs-to-blobs script.
   openApiSpecBlobDataMigration,
   graphqlIntrospectionBlobDataMigration,
+  // Slim-index + R2-detail cutover (m21): the runs collection schema changed
+  // (bulky fields moved to an R2 detail object; the toolCalls/interactions
+  // collections were removed). Clear all pre-migration execution-history rows —
+  // no backfill — so stale fat rows and orphaned child rows don't linger. New
+  // runs land in the slim shape; older rows decode tolerantly in the meantime.
+  sqliteDataMigration("2026-06-15-clear-execution-history-for-r2", (client) =>
+    client.execute("DELETE FROM plugin_storage WHERE plugin_id = 'executionHistory'"),
+  ),
   googleOpenApiOwnershipDataMigration,
 ];
