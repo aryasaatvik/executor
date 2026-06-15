@@ -27,7 +27,7 @@ import { Context, Effect, Layer } from "effect";
 import type * as Cause from "effect/Cause";
 
 import type { McpResource } from "@executor-js/host-mcp";
-import { composeExecutionObservers } from "@executor-js/sdk";
+import { composeExecutionObservers, composeToolDiscoveryProviders } from "@executor-js/sdk";
 import type { AnyPlugin, Executor, StorageFailure } from "@executor-js/sdk";
 import {
   createExecutionEngine,
@@ -130,9 +130,10 @@ export const makeExecutionStack = <
     const { decorate } = yield* EngineDecorator.asEffect();
     const { plugins } = yield* PluginsProvider;
     const observer = composeExecutionObservers(plugins() as TPlugins, executor);
+    const toolDiscoveryProvider = composeToolDiscoveryProviders(plugins() as TPlugins, executor);
     const engine = yield* Effect.sync(() =>
       decorate(
-        createExecutionEngine({ executor, codeExecutor, observer }),
+        createExecutionEngine({ executor, codeExecutor, observer, toolDiscoveryProvider }),
         {
           accountId,
           organizationId,
