@@ -26,7 +26,7 @@
 import { Context, Effect, Layer } from "effect";
 import type * as Cause from "effect/Cause";
 
-import { composeExecutionObservers } from "@executor-js/sdk";
+import { composeExecutionObservers, composeToolDiscoveryProviders } from "@executor-js/sdk";
 import type { AnyPlugin, Executor, StorageFailure } from "@executor-js/sdk";
 import {
   createExecutionEngine,
@@ -118,11 +118,18 @@ export const makeExecutionStack = <
     // PluginsProvider erases the tuple to AnyPlugin[]; recover the caller's
     // TPlugins phantom so the extensions arg (the executor) lines up.
     const observer = composeExecutionObservers(plugins() as TPlugins, executor);
+    // Pick a plugin-supplied `tools.search` backend (e.g. semantic Vectorize
+    // search). `undefined` when no plugin provides one, so the engine falls
+    // back to its built-in lexical scorer.
+    const toolDiscoveryProvider = composeToolDiscoveryProviders(plugins() as TPlugins, executor);
 
-    const engine = decorate(createExecutionEngine({ executor, codeExecutor, observer }), {
-      accountId,
-      organizationId,
-      organizationName,
-    });
+    const engine = decorate(
+      createExecutionEngine({ executor, codeExecutor, observer, toolDiscoveryProvider }),
+      {
+        accountId,
+        organizationId,
+        organizationName,
+      },
+    );
     return { executor, engine };
   });
