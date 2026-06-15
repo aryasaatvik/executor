@@ -17,6 +17,7 @@ import { useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import * as Exit from "effect/Exit";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import { createPluginAtomClient, defineClientPlugin } from "@executor-js/sdk/client";
 import {
   getExecutorApiBaseUrl,
@@ -25,11 +26,14 @@ import {
 import { Button } from "@executor-js/react/components/button";
 import { Input } from "@executor-js/react/components/input";
 import {
-  CardStackEntry,
-  CardStackEntryActions,
-  CardStackEntryContent,
-  CardStackEntryDescription,
-} from "@executor-js/react/components/card-stack";
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@executor-js/react/components/table";
+import { actorLabelKey, registerActorLabelSource } from "@executor-js/react/lib/actor-labels";
 
 import type { ServiceTokenAlias } from "./shared";
 import { ServiceTokensApi } from "./shared";
@@ -46,11 +50,44 @@ const aliasesAtom = Client.query("serviceTokens", "list", {
 const aliasMutation = Client.mutation("serviceTokens", "alias");
 const unaliasMutation = Client.mutation("serviceTokens", "unalias");
 
+// Publish `commonName → machineName` into the shared actor-label registry so the
+// execution-history runs UI renders the machine name for service-token actors
+// (run actorKind "service-token", actorId = the token's commonName). Only
+// aliases WITH a machine name are published — runs without one fall back to the
+// client id. Registered at module load (this module is imported eagerly as a
+// plugin), and resolved live, so a rename updates past and future runs alike.
+const serviceTokenActorLabelsAtom: Atom.Atom<ReadonlyMap<string, string>> = Atom.make((get) =>
+  AsyncResult.match(
+    get(aliasesAtom) as AsyncResult.AsyncResult<readonly ServiceTokenAlias[], unknown>,
+    {
+      onInitial: () => new Map<string, string>(),
+      onFailure: () => new Map<string, string>(),
+      onSuccess: ({ value }) => {
+        const map = new Map<string, string>();
+        for (const alias of value) {
+          if (alias.machineName) {
+            map.set(actorLabelKey("service-token", alias.commonName), alias.machineName);
+          }
+        }
+        return map;
+      },
+    },
+  ),
+);
+registerActorLabelSource(serviceTokenActorLabelsAtom);
+
 function ServiceTokensPage() {
   const [commonName, setCommonName] = useState("");
   const [machineName, setMachineName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Inline edit of an existing alias's machine name. `editing` holds the
+  // commonName of the card in edit mode (null = none). Saving reuses the `alias`
+  // upsert, so it also re-captures the editor's acts-as identity — fine here
+  // because you only ever edit your own aliases.
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   const aliasesResult = useAtomValue(aliasesAtom);
   const refresh = useAtomRefresh(aliasesAtom);
@@ -105,10 +142,36 @@ function ServiceTokensPage() {
     if (!Exit.isFailure(exit)) refresh();
   };
 
+  const startEdit = (alias: ServiceTokenAlias) => {
+    setEditing(alias.commonName);
+    setEditValue(alias.machineName ?? "");
+    setError(null);
+  };
+
+  const handleSaveEdit = async (commonNameToEdit: string) => {
+    const machine = editValue.trim();
+    setEditBusy(true);
+    setError(null);
+    const exit = await doAlias({
+      payload: {
+        commonName: commonNameToEdit,
+        ...(machine ? { machineName: machine } : {}),
+      },
+      reactivityKeys: [],
+    });
+    setEditBusy(false);
+    if (Exit.isFailure(exit)) {
+      setError("Failed to update machine name");
+      return;
+    }
+    setEditing(null);
+    refresh();
+  };
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-3xl px-6 py-10 lg:px-8 lg:py-14">
-        <div className="mb-10">
+      <div className="mx-auto max-w-5xl px-6 py-10 lg:px-8 lg:py-14">
+        <div className="mb-10 max-w-2xl">
           <h1 className="font-display text-[2rem] tracking-tight text-foreground leading-none">
             Service Tokens
           </h1>
@@ -120,7 +183,7 @@ function ServiceTokensPage() {
           </p>
         </div>
 
-        <div className="mb-8 space-y-2">
+        <div className="mb-8 max-w-2xl space-y-2">
           <Input
             placeholder="service-token common_name (Client ID)"
             value={commonName}
@@ -147,66 +210,127 @@ function ServiceTokensPage() {
         </div>
 
         {error && (
-          <div className="mb-6 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2">
+          <div className="mb-6 max-w-2xl rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2">
             <p className="text-[12px] text-destructive">{error}</p>
           </div>
         )}
 
-        {isLoading ? (
-          <CardStackEntry>
-            <CardStackEntryContent>
-              <CardStackEntryDescription>Loading…</CardStackEntryDescription>
-            </CardStackEntryContent>
-          </CardStackEntry>
-        ) : isError ? (
-          <CardStackEntry>
-            <CardStackEntryContent>
-              <CardStackEntryDescription className="text-destructive">
-                Failed to load aliases
-              </CardStackEntryDescription>
-            </CardStackEntryContent>
-          </CardStackEntry>
-        ) : aliases.length === 0 ? (
-          <CardStackEntry>
-            <CardStackEntryContent>
-              <CardStackEntryDescription>
-                No service-token aliases yet. Create a token in Cloudflare Access, then paste its
-                Client ID above.
-              </CardStackEntryDescription>
-            </CardStackEntryContent>
-          </CardStackEntry>
-        ) : (
-          aliases.map((alias) => (
-            <CardStackEntry key={alias.commonName}>
-              <CardStackEntryContent>
-                <div className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-[12px]">
-                  {alias.machineName ? (
-                    <>
-                      <span className="text-muted-foreground/60">Name</span>
-                      <span className="truncate text-foreground/90">{alias.machineName}</span>
-                    </>
-                  ) : null}
-                  <span className="text-muted-foreground/60">Token</span>
-                  <span className="truncate font-mono text-foreground/80">{alias.commonName}</span>
-                  <span className="text-muted-foreground/60">Acts as</span>
-                  <span className="truncate font-mono text-foreground/80">
-                    {alias.email ?? alias.name ?? alias.subject}
-                  </span>
-                </div>
-              </CardStackEntryContent>
-              <CardStackEntryActions>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
-                  onClick={() => handleUnalias(alias.commonName)}
-                >
-                  Remove
-                </Button>
-              </CardStackEntryActions>
-            </CardStackEntry>
-          ))
-        )}
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-[180px] text-xs font-normal text-muted-foreground/60">
+                Name
+              </TableHead>
+              <TableHead className="text-xs font-normal text-muted-foreground/60">Token</TableHead>
+              <TableHead className="text-xs font-normal text-muted-foreground/60">
+                Acts as
+              </TableHead>
+              <TableHead className="w-[1%]" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {isLoading ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={4} className="py-6 text-center text-xs text-muted-foreground">
+                  Loading…
+                </TableCell>
+              </TableRow>
+            ) : isError ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={4} className="py-6 text-center text-xs text-destructive">
+                  Failed to load aliases
+                </TableCell>
+              </TableRow>
+            ) : aliases.length === 0 ? (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={4} className="py-6 text-center text-xs text-muted-foreground">
+                  No service-token aliases yet. Create a token in Cloudflare Access, then paste its
+                  Client ID above.
+                </TableCell>
+              </TableRow>
+            ) : (
+              aliases.map((alias) => {
+                const isEditing = editing === alias.commonName;
+                const actsAs = alias.email ?? alias.name ?? alias.subject;
+                return (
+                  <TableRow key={alias.commonName} className="group">
+                    <TableCell>
+                      {isEditing ? (
+                        <Input
+                          autoFocus
+                          placeholder="machine name"
+                          value={editValue}
+                          onChange={(e) => setEditValue((e.target as HTMLInputElement).value)}
+                          className="h-7 max-w-[180px] text-xs"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void handleSaveEdit(alias.commonName);
+                            if (e.key === "Escape") setEditing(null);
+                          }}
+                        />
+                      ) : alias.machineName ? (
+                        <span className="text-foreground/90">{alias.machineName}</span>
+                      ) : (
+                        <span className="text-muted-foreground/40">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-foreground/70">
+                      <span className="block max-w-[360px] truncate" title={alias.commonName}>
+                        {alias.commonName}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      <span className="block max-w-[300px] truncate" title={actsAs}>
+                        {actsAs}
+                      </span>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-right">
+                      {isEditing ? (
+                        <div className="flex justify-end gap-1">
+                          <Button
+                            size="sm"
+                            className="h-7 px-2.5 text-[12px]"
+                            onClick={() => handleSaveEdit(alias.commonName)}
+                            disabled={editBusy}
+                          >
+                            {editBusy ? "Saving…" : "Save"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2.5 text-[12px]"
+                            onClick={() => setEditing(null)}
+                            disabled={editBusy}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2.5 text-[12px]"
+                            onClick={() => startEdit(alias)}
+                          >
+                            {alias.machineName ? "Edit" : "Add name"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2.5 text-[12px] text-destructive/70 hover:text-destructive"
+                            onClick={() => handleUnalias(alias.commonName)}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );
