@@ -7,6 +7,7 @@ import {
 } from "@executor-js/react/components/accordion";
 import { Button } from "@executor-js/react/components/button";
 import { cn } from "@executor-js/react/lib/utils";
+import { useResolveActorLabel } from "@executor-js/react/lib/actor-labels";
 
 import type { ExecutionListMeta } from "../sdk/store";
 import {
@@ -194,6 +195,7 @@ export interface RunsFilterRailProps {
 
 export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterRailProps) {
   const filtersActive = isFiltersActive(filters);
+  const resolveActorLabel = useResolveActorLabel();
 
   const triggerKeys = React.useMemo(() => {
     const set = new Set<string>(TRIGGER_ORDER);
@@ -316,7 +318,7 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
                         onToggle={() => onChange({ ...filters, actor: toggle(filters.actor, id) })}
                         onOnly={() => onChange({ ...filters, actor: [id] })}
                         dotClass={tone.dot}
-                        label={entry.actorLabel ?? id}
+                        label={resolveActorLabel(entry.actorKind, id) ?? entry.actorLabel ?? id}
                         count={entry.count}
                         monoLabel
                       />
