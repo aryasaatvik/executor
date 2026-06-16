@@ -1097,11 +1097,13 @@
         "@types/better-sqlite3": "^7.6.13",
         "@types/node": "catalog:",
         "@zvec/zvec": "^0.4.1",
-        "better-sqlite3": "^11.10.0",
         "bun-types": "catalog:",
-        "sqlite-vec": "^0.1.7",
         "tsup": "catalog:",
         "vitest": "catalog:",
+      },
+      "optionalDependencies": {
+        "better-sqlite3": "^11.10.0",
+        "sqlite-vec": "^0.1.7",
       },
       "peerDependencies": {
         "@executor-js/api": "workspace:*",

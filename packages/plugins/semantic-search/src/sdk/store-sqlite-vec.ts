@@ -141,27 +141,38 @@ export const makeSqliteVecStore = (options: SqliteVecStoreOptions): VectorStore 
               Effect.try({
                 try: () => {
                   const stmts = buildUpsertStatements(db);
-                  for (const v of vectors) {
-                    // Delete existing row if present (vector + bridge).
-                    const existing = stmts.rowForId.get(v.id) as
-                      | { readonly vectorRowid?: unknown }
-                      | undefined;
-                    if (typeof existing?.vectorRowid === "number") {
-                      stmts.deleteVector.run(existing.vectorRowid);
+                  // Atomic batch: each vector is delete+delete+insert+insert across two
+                  // tables, so a mid-loop failure must not leave the index half-written.
+                  db.exec("BEGIN");
+                  let committed = false;
+                  // oxlint-disable-next-line executor/no-try-catch-or-throw -- adapter boundary: roll the batch back on partial failure
+                  try {
+                    for (const v of vectors) {
+                      // Delete existing row if present (vector + bridge).
+                      const existing = stmts.rowForId.get(v.id) as
+                        | { readonly vectorRowid?: unknown }
+                        | undefined;
+                      if (typeof existing?.vectorRowid === "number") {
+                        stmts.deleteVector.run(existing.vectorRowid);
+                      }
+                      stmts.deleteBridge.run(v.id);
+
+                      // Insert new vector and capture its rowid.
+                      const result = stmts.insertVector.run(vectorToSql(v.values));
+                      const vectorRowid = Number(result.lastInsertRowid);
+
+                      // Insert bridge row.
+                      stmts.insertBridge.run(
+                        v.id,
+                        vectorRowid,
+                        v.namespace ?? "",
+                        JSON.stringify(v.metadata ?? {}),
+                      );
                     }
-                    stmts.deleteBridge.run(v.id);
-
-                    // Insert new vector and capture its rowid.
-                    const result = stmts.insertVector.run(vectorToSql(v.values));
-                    const vectorRowid = Number(result.lastInsertRowid);
-
-                    // Insert bridge row.
-                    stmts.insertBridge.run(
-                      v.id,
-                      vectorRowid,
-                      v.namespace ?? "",
-                      JSON.stringify(v.metadata ?? {}),
-                    );
+                    db.exec("COMMIT");
+                    committed = true;
+                  } finally {
+                    if (!committed) db.exec("ROLLBACK");
                   }
                 },
                 catch: (cause) =>

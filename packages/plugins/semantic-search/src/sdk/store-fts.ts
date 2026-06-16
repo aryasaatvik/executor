@@ -46,6 +46,24 @@ interface SqliteDatabase {
   close(): void;
 }
 
+/**
+ * Minimal `bun:sqlite` Database shape we use — declared locally so the package
+ * typechecks without `@types/bun`. Consumers (e.g. host-cloudflare) typecheck
+ * this source transitively and don't carry bun types.
+ */
+interface BunSqliteDatabase {
+  exec(sql: string): unknown;
+  prepare(sql: string): {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
+    run(...a: any[]): { readonly lastInsertRowid: bigint | number };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
+    get(...a: any[]): unknown;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
+    all(...a: any[]): unknown[];
+  };
+  close(): void;
+}
+
 // ---------------------------------------------------------------------------
 // FTS query normalisation — mirrors Pi's `toFtsQuery`:
 //   camelCase-split → lowercase → filter stop-words → `term* term* …`
@@ -111,10 +129,17 @@ export interface FtsLexicalStore {
 const openDatabase = async (dbPath: string): Promise<SqliteDatabase> => {
   let db: SqliteDatabase;
 
-  if (typeof Bun !== "undefined") {
+  // `globalThis.Bun` rather than the ambient `Bun` global so the package doesn't
+  // require `@types/bun` in consumers' typecheck.
+  if ((globalThis as { Bun?: unknown }).Bun !== undefined) {
     // Bun runtime: use the built-in bun:sqlite (better-sqlite3 is not supported in Bun).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any -- adapter boundary: bun:sqlite only available at runtime in Bun
-    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    // The specifier is computed (not a literal) so neither tsgo nor esbuild tries to
+    // resolve the bun-only "bun:sqlite" builtin — it's absent under node, where the
+    // tests bundle, and only ever reached when actually running on Bun.
+    const bunSqliteSpecifier = ["bun", "sqlite"].join(":");
+    const { Database } = (await import(/* @vite-ignore */ bunSqliteSpecifier)) as {
+      Database: new (path: string) => BunSqliteDatabase;
+    };
     const bunDb = new Database(dbPath);
     // bun:sqlite exposes pragma as exec.
     // Wrap to satisfy our normalized SqliteDatabase interface.
@@ -222,18 +247,29 @@ export const makeFtsLexicalStore = (options: { readonly path: string }): FtsLexi
                     `INSERT INTO fts_docs (id, namespace, path, name, description, integration, lexical_text)
                      VALUES (?, ?, ?, ?, ?, ?, ?)`,
                   );
-                  for (const doc of docs) {
-                    // Delete-then-insert: the triggers handle FTS sync.
-                    del.run(doc.id);
-                    ins.run(
-                      doc.id,
-                      doc.namespace,
-                      doc.path,
-                      doc.name,
-                      doc.description,
-                      doc.integration,
-                      doc.lexicalText,
-                    );
+                  // Atomic batch: delete-then-insert fires FTS triggers per doc, so a
+                  // mid-loop failure must not leave the FTS index partially erased.
+                  db.exec("BEGIN");
+                  let committed = false;
+                  // oxlint-disable-next-line executor/no-try-catch-or-throw -- adapter boundary: roll the batch back on partial failure
+                  try {
+                    for (const doc of docs) {
+                      // Delete-then-insert: the triggers handle FTS sync.
+                      del.run(doc.id);
+                      ins.run(
+                        doc.id,
+                        doc.namespace,
+                        doc.path,
+                        doc.name,
+                        doc.description,
+                        doc.integration,
+                        doc.lexicalText,
+                      );
+                    }
+                    db.exec("COMMIT");
+                    committed = true;
+                  } finally {
+                    if (!committed) db.exec("ROLLBACK");
                   }
                 },
                 catch: (cause) =>
