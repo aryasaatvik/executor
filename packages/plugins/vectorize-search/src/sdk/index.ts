@@ -3,7 +3,7 @@ export {
   type VectorizeSearchPluginOptions,
   type VectorizeSearchExtension,
 } from "./plugin";
-export { makeVectorizeToolDiscoveryProvider } from "./provider";
+export { makeVectorizeToolDiscoveryProvider, MAX_METADATA_TOP_K } from "./provider";
 export {
   makeGeminiEmbedder,
   DEFAULT_GEMINI_MODEL,
@@ -18,7 +18,31 @@ export {
   type VectorizeMatch,
   type VectorizeMatches,
   type VectorizeVectorInput,
+  MAX_TOP_K,
 } from "./vectorize";
-export { reindexToolCatalog, collectToolDocuments, type ReindexResult } from "./indexer";
-export { projectToolDocument, toolVectorId, type ToolSearchDocument } from "./documents";
+export { reconcileToolCatalog, type ReconcileResult } from "./indexer";
 export { VectorizeSearchError } from "./errors";
+
+// Chunker
+export {
+  makeFacetChunker,
+  makeWholeChunker,
+  type Chunker,
+  type ToolDocumentInput,
+  type ToolChunk,
+  type ChunkFacet,
+  type FacetChunkerOptions,
+} from "./chunker";
+export { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
+
+// Hybrid RRF provider
+export { makeHybridToolDiscoveryProvider, type HybridOptions } from "./hybrid";
+
+// Fingerprint
+export { fingerprintTool, type FingerprintInput } from "./fingerprint";
+
+// Collections (plugin storage)
+export { toolFingerprints, FingerprintRow } from "./collections";
+
+// Store limit decorator
+export { withCloudflareLimits } from "./store-cloudflare-limits";
