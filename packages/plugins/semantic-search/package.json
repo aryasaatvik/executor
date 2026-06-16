@@ -1,5 +1,5 @@
 {
-  "name": "@executor-js/plugin-vectorize-search",
+  "name": "@executor-js/plugin-semantic-search",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -24,6 +24,7 @@
     "@cloudflare/workers-types": "^4.20250620.0",
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "@zvec/zvec": "^0.4.1",
     "bun-types": "catalog:",
@@ -37,5 +38,9 @@
     "@executor-js/api": {
       "optional": true
     }
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.10.0",
+    "sqlite-vec": "^0.1.7"
   }
 }

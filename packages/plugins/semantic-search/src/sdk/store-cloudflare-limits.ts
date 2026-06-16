@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 
-import { VectorizeSearchError } from "./errors";
-import type { VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import { SemanticSearchError } from "./errors";
+import type { VectorStore, VectorInput } from "./store";
 
 // ---------------------------------------------------------------------------
 // Cloudflare Vectorize runtime limits — enforced as a decorator so the same
@@ -27,14 +27,17 @@ const MAX_QUERY_TOP_K = 20;
 const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).length;
 
 /** Wraps `inner` with Cloudflare Vectorize runtime-limit validation. Any call
- *  that would violate a limit fails immediately with `VectorizeSearchError`
- *  before the inner store is touched. All other calls pass through unchanged. */
-export const withCloudflareLimits = (inner: VectorizeStore): VectorizeStore => ({
-  upsert: (vectors: readonly VectorizeVectorInput[]) => {
+ *  that would violate a limit fails immediately with `SemanticSearchError`
+ *  before the inner store is touched. All other calls pass through unchanged.
+ *  The returned store's `maxTopK` is `Math.min(inner.maxTopK, 20)`. */
+export const withCloudflareLimits = (inner: VectorStore): VectorStore => ({
+  maxTopK: Math.min(inner.maxTopK, MAX_QUERY_TOP_K),
+
+  upsert: (vectors: readonly VectorInput[]) => {
     const offending = vectors.find((v) => utf8ByteLength(v.id) > MAX_ID_BYTES);
     if (offending !== undefined) {
       return Effect.fail(
-        new VectorizeSearchError({
+        new SemanticSearchError({
           message: `Vector id exceeds the Cloudflare Vectorize 64-byte limit (${utf8ByteLength(offending.id)} bytes): "${offending.id}".`,
         }),
       );
@@ -49,7 +52,7 @@ export const withCloudflareLimits = (inner: VectorizeStore): VectorizeStore => (
   }) => {
     if (input.topK > MAX_QUERY_TOP_K) {
       return Effect.fail(
-        new VectorizeSearchError({
+        new SemanticSearchError({
           message: `topK ${input.topK} exceeds the Cloudflare Vectorize limit of ${MAX_QUERY_TOP_K} when returnMetadata is "all". Lower topK or switch to a metadata strategy that supports a higher cap.`,
         }),
       );

@@ -1,0 +1,60 @@
+export {
+  semanticSearchPlugin,
+  type SemanticSearchPluginOptions,
+  type SemanticSearchExtension,
+} from "./plugin";
+export { makeVectorToolDiscoveryProvider } from "./provider";
+export {
+  makeGeminiEmbedder,
+  DEFAULT_GEMINI_MODEL,
+  DEFAULT_EMBEDDING_DIMENSIONS,
+  type ToolEmbedder,
+  type GeminiEmbedderOptions,
+} from "./embedder";
+export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
+export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
+export { reconcileToolCatalog, type ReconcileResult } from "./indexer";
+export { SemanticSearchError } from "./errors";
+
+// Chunker
+export {
+  makeFacetChunker,
+  makeWholeChunker,
+  type Chunker,
+  type ToolDocumentInput,
+  type ToolChunk,
+  type ChunkFacet,
+  type FacetChunkerOptions,
+} from "./chunker";
+export { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
+
+// Hybrid RRF provider
+export { makeHybridToolDiscoveryProvider, type HybridOptions } from "./hybrid";
+
+// Fingerprint
+export { fingerprintTool, type FingerprintInput } from "./fingerprint";
+
+// Collections (plugin storage)
+export { toolFingerprints, FingerprintRow } from "./collections";
+
+// Store limit decorator
+export { withCloudflareLimits } from "./store-cloudflare-limits";
+
+// zvec store (local / dev)
+export { makeZVecStore, type ZVecStoreOptions } from "./store-zvec";
+
+// sqlite-vec store (local / dev)
+export { makeSqliteVecStore, type SqliteVecStoreOptions } from "./store-sqlite-vec";
+
+// FTS5 lexical store + provider (local / dev)
+export {
+  makeFtsLexicalStore,
+  makeFtsLexicalProvider,
+  type FtsLexicalStore,
+  type FtsDocumentInput,
+  type FtsSearchInput,
+  type FtsSearchResult,
+} from "./store-fts";
+
+// Documents projector helpers
+export { stripHtml, buildLexicalText } from "./documents";

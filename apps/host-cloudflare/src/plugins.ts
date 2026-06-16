@@ -11,8 +11,12 @@ import {
 } from "@executor-js/plugin-execution-metrics/cloudflare";
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
-import { vectorizeSearchHttpPlugin } from "@executor-js/plugin-vectorize-search/api";
-import type { VectorizeIndex } from "@executor-js/plugin-vectorize-search";
+import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
+import {
+  makeVectorizeStore,
+  withCloudflareLimits,
+  type VectorizeIndex,
+} from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -32,7 +36,7 @@ import type { VectorizeIndex } from "@executor-js/plugin-vectorize-search";
 // is the durable sink. To enable: uncomment `analytics_engine_datasets` in
 // wrangler.jsonc.
 //
-// Vectorize search follows the same opt-in-by-binding shape: the plugin is
+// Semantic search follows the same opt-in-by-binding shape: the plugin is
 // always in the tuple (its reindex route keeps the API shape stable), but it is
 // inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
 // binding and the `GEMINI_API_KEY` secret are present. To enable: create a
@@ -45,8 +49,9 @@ export const makeCloudflarePlugins = (
   vectorize?: VectorizeIndex,
   geminiApiKey?: string,
   searchNamespace?: string,
-) =>
-  [
+) => {
+  const store = vectorize ? withCloudflareLimits(makeVectorizeStore(vectorize)) : undefined;
+  return [
     openApiHttpPlugin(),
     googleHttpPlugin(),
     microsoftHttpPlugin(),
@@ -57,7 +62,8 @@ export const makeCloudflarePlugins = (
       observer: () => (analytics ? createWaeMetricsObserver(analytics) : noopExecutionObserver),
     }),
     serviceTokensPlugin(),
-    vectorizeSearchHttpPlugin({ vectorize, geminiApiKey, namespace: searchNamespace }),
+    semanticSearchHttpPlugin({ store, geminiApiKey, namespace: searchNamespace }),
   ] as const;
+};
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;
