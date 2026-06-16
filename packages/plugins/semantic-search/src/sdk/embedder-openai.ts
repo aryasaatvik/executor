@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
-import { VectorizeSearchError } from "./errors";
+import { SemanticSearchError } from "./errors";
 
 // ---------------------------------------------------------------------------
 // OpenAI-compatible embedder — POSTs to `${baseUrl}/embeddings` in the standard
@@ -43,7 +43,7 @@ export const makeOpenAiCompatibleEmbedder = (
 
   const embedBatch = (
     texts: readonly string[],
-  ): Effect.Effect<readonly (readonly number[])[], VectorizeSearchError> => {
+  ): Effect.Effect<readonly (readonly number[])[], SemanticSearchError> => {
     if (texts.length === 0) return Effect.succeed([]);
     return Effect.gen(function* () {
       const response = yield* Effect.tryPromise({
@@ -62,7 +62,7 @@ export const makeOpenAiCompatibleEmbedder = (
             }),
           }),
         catch: (cause) =>
-          new VectorizeSearchError({
+          new SemanticSearchError({
             message: `OpenAI-compatible embedding failed for ${options.model} at ${endpoint}.`,
             cause,
           }),
@@ -74,21 +74,21 @@ export const makeOpenAiCompatibleEmbedder = (
         const body = yield* Effect.tryPromise(() => response.text()).pipe(
           Effect.catch(() => Effect.succeed("")),
         );
-        return yield* new VectorizeSearchError({
+        return yield* new SemanticSearchError({
           message: `embeddings HTTP ${response.status}: ${body.slice(0, 300)}`,
         });
       }
       const json = yield* Effect.tryPromise({
         try: () => response.json() as Promise<OpenAiEmbeddingsResponse>,
         catch: (cause) =>
-          new VectorizeSearchError({
+          new SemanticSearchError({
             message: `OpenAI-compatible embedding failed for ${options.model} at ${endpoint}.`,
             cause,
           }),
       });
       const embeddings = json.data?.map((item) => item.embedding ?? []);
       if (!embeddings || embeddings.length !== texts.length) {
-        return yield* new VectorizeSearchError({
+        return yield* new SemanticSearchError({
           message: `embeddings response returned ${embeddings?.length ?? 0} vectors for ${texts.length} inputs`,
         });
       }

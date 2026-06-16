@@ -7,9 +7,9 @@ import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
 import { collectToolDocumentInputs } from "./documents";
 import type { ToolEmbedder } from "./embedder";
-import { VectorizeSearchError } from "./errors";
+import { SemanticSearchError } from "./errors";
 import { fingerprintTool } from "./fingerprint";
-import type { VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import type { VectorStore, VectorInput } from "./store";
 
 // ---------------------------------------------------------------------------
 // ReconcileResult
@@ -50,11 +50,11 @@ export const reconcileToolCatalog = (input: {
   readonly namespace: string;
   readonly executor: Executor;
   readonly embedder: ToolEmbedder;
-  readonly store: VectorizeStore;
+  readonly store: VectorStore;
   readonly chunker: Chunker;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly owner: Owner;
-}): Effect.Effect<ReconcileResult, VectorizeSearchError> =>
+}): Effect.Effect<ReconcileResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
 
@@ -81,7 +81,7 @@ export const reconcileToolCatalog = (input: {
     const storedEntries = yield* fingerprints.list().pipe(
       Effect.mapError(
         (cause) =>
-          new VectorizeSearchError({
+          new SemanticSearchError({
             message: "Failed to load stored fingerprints for reconcile.",
             cause,
           }),
@@ -154,9 +154,9 @@ export const reconcileToolCatalog = (input: {
     // Single batched embedding call over all changed chunks.
     const allVectors = yield* embedder.embedDocuments(allTexts);
 
-    // Build VectorizeVectorInput records and collect new chunkIds per tool.
+    // Build VectorInput records and collect new chunkIds per tool.
     let vectorOffset = 0;
-    const records: VectorizeVectorInput[] = [];
+    const records: VectorInput[] = [];
     const fingerprintUpdates: Array<{ path: string; row: FingerprintRow }> = [];
 
     for (const group of chunkedGroups) {
@@ -166,7 +166,7 @@ export const reconcileToolCatalog = (input: {
       for (const chunkItem of chunks) {
         const vec = allVectors[vectorOffset++];
         if (vec === undefined) {
-          return yield* new VectorizeSearchError({
+          return yield* new SemanticSearchError({
             message: `reconcileToolCatalog: embedding vector missing at offset ${vectorOffset - 1}`,
           });
         }
@@ -202,7 +202,7 @@ export const reconcileToolCatalog = (input: {
       }
     }
 
-    // Upsert all new vectors in one call. `store.upsert` (makeVectorizeStore)
+    // Upsert all new vectors in one call. `store.upsert` (makeVectorStore)
     // chunks internally into UPSERT_BATCH_SIZE (50) sequential batches, so the
     // underlying Vectorize binding never receives more than 50 vectors per
     // call — well under Cloudflare's 1,000-vector / 2 MB per-upsert caps —
@@ -216,7 +216,7 @@ export const reconcileToolCatalog = (input: {
         fingerprints.put({ owner, key: path, data: row }).pipe(
           Effect.mapError(
             (cause) =>
-              new VectorizeSearchError({
+              new SemanticSearchError({
                 message: `Failed to persist fingerprint row for tool "${path}".`,
                 cause,
               }),

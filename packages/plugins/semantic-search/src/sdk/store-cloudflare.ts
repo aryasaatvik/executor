@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 
-import { VectorizeSearchError } from "./errors";
+import { SemanticSearchError } from "./errors";
+import type { VectorInput, VectorMatches, VectorStore } from "./store";
 
 /** Minimal structural view of a Cloudflare Vectorize binding (the subset this
  *  plugin uses). A real `Vectorize` / `VectorizeIndex` binding from
@@ -16,33 +17,18 @@ export interface VectorizeIndex {
       readonly returnMetadata?: boolean | "all" | "indexed" | "none";
       readonly returnValues?: boolean;
     },
-  ): Promise<VectorizeMatches>;
-  upsert(vectors: readonly VectorizeVectorInput[]): Promise<unknown>;
+  ): Promise<VectorMatches>;
+  upsert(vectors: readonly VectorInput[]): Promise<unknown>;
   deleteByIds(ids: readonly string[]): Promise<unknown>;
 }
 
-export interface VectorizeMatches {
-  readonly matches: readonly VectorizeMatch[];
-  readonly count?: number;
-}
-
-export interface VectorizeMatch {
-  readonly id: string;
-  readonly score: number;
-  readonly namespace?: string;
-  readonly metadata?: Record<string, unknown>;
-}
-
-export interface VectorizeVectorInput {
-  readonly id: string;
-  readonly values: readonly number[];
-  readonly namespace?: string;
-  readonly metadata?: Record<string, unknown>;
-}
-
-/** Vectorize caps `topK` at 100 (with metadata). The provider fetches this full
- *  window and paginates within it, so the store clamps any request to it. */
+/** Vectorize caps `topK` at 100 (without metadata). With `returnMetadata:"all"`
+ *  the effective cap is 20 — enforced separately by `withCloudflareLimits`. */
 export const MAX_TOP_K = 100;
+
+/** Vectorize caps `topK` at 20 when `returnMetadata:"all"` is set. This is the
+ *  per-store cap exposed on the `VectorStore` interface for Cloudflare. */
+export const MAX_METADATA_TOP_K = 20;
 
 /** Vectorize caps a single upsert at ~1000 vectors / ~2 MB. At 1536-d a few
  *  dozen vectors already approach the size cap, so chunk conservatively well
@@ -58,20 +44,10 @@ const chunk = <A>(items: readonly A[], size: number): readonly (readonly A[])[] 
   return out;
 };
 
-/** Effect-wrapped, plugin-facing view over a Vectorize binding. */
-export interface VectorizeStore {
-  readonly query: (input: {
-    readonly vector: readonly number[];
-    readonly namespace: string;
-    readonly topK: number;
-  }) => Effect.Effect<readonly VectorizeMatch[], VectorizeSearchError>;
-  readonly upsert: (
-    vectors: readonly VectorizeVectorInput[],
-  ) => Effect.Effect<void, VectorizeSearchError>;
-  readonly deleteByIds: (ids: readonly string[]) => Effect.Effect<void, VectorizeSearchError>;
-}
-
-export const makeVectorizeStore = (index: VectorizeIndex): VectorizeStore => ({
+/** Effect-wrapped `VectorStore` backed by a Cloudflare Vectorize binding.
+ *  `maxTopK` reflects the `returnMetadata:"all"` cap (20). */
+export const makeVectorizeStore = (index: VectorizeIndex): VectorStore => ({
+  maxTopK: MAX_METADATA_TOP_K,
   query: ({ vector, namespace, topK }) =>
     Effect.tryPromise({
       try: () =>
@@ -80,7 +56,7 @@ export const makeVectorizeStore = (index: VectorizeIndex): VectorizeStore => ({
           namespace,
           returnMetadata: "all",
         }),
-      catch: (cause) => new VectorizeSearchError({ message: "Vectorize query failed.", cause }),
+      catch: (cause) => new SemanticSearchError({ message: "Vectorize query failed.", cause }),
     }).pipe(Effect.map((result) => result.matches)),
   upsert: (vectors) =>
     vectors.length === 0
@@ -91,7 +67,7 @@ export const makeVectorizeStore = (index: VectorizeIndex): VectorizeStore => ({
             Effect.tryPromise({
               try: () => index.upsert(batch),
               catch: (cause) =>
-                new VectorizeSearchError({ message: "Vectorize upsert failed.", cause }),
+                new SemanticSearchError({ message: "Vectorize upsert failed.", cause }),
             }),
           { concurrency: 1, discard: true },
         ),
@@ -100,7 +76,6 @@ export const makeVectorizeStore = (index: VectorizeIndex): VectorizeStore => ({
       ? Effect.void
       : Effect.tryPromise({
           try: () => index.deleteByIds([...ids]),
-          catch: (cause) =>
-            new VectorizeSearchError({ message: "Vectorize delete failed.", cause }),
+          catch: (cause) => new SemanticSearchError({ message: "Vectorize delete failed.", cause }),
         }).pipe(Effect.asVoid),
 });
