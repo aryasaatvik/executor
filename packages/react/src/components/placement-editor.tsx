@@ -45,7 +45,7 @@ export function PlacementEditor(props: {
     onChange(placements.map((p: Placement, j: number) => (j === index ? { ...p, ...patch } : p)));
 
   const remove = (index: number): void =>
-    onChange(placements.filter((_p: Placement, j: number) => j !== index));
+    onChange(placements.filter((p: Placement, j: number) => j !== index));
 
   return (
     <div className="flex flex-col gap-3">

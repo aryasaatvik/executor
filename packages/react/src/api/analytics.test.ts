@@ -34,7 +34,7 @@ describe("analytics seam", () => {
 
   it("sends an empty properties object when none are given", () => {
     const seen: Array<unknown> = [];
-    setAnalyticsClient((_name, properties) => {
+    setAnalyticsClient((name, properties) => {
       seen.push(properties);
     });
 

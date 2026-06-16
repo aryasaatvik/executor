@@ -27,7 +27,7 @@ const stubApiKeys = Layer.succeed(ApiKeyService)({
 const stubWorkOS = Layer.succeed(
   WorkOSClient,
   new Proxy({} as WorkOSClientService, {
-    get: (_target, prop) => {
+    get: (target, prop) => {
       if (prop === "listUserMemberships") {
         return (userId: string) =>
           Effect.succeed({

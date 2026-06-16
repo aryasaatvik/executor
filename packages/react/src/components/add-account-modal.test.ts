@@ -199,7 +199,7 @@ describe("runDcrConnect", () => {
     let registerArgs: RegisterArgs | null = null;
     let startArgs: StartArgs | null = null;
 
-    const probe = (_url: string): Promise<ProbeResult | null> => {
+    const probe = (url: string): Promise<ProbeResult | null> => {
       calls.push("probe");
       return Promise.resolve({
         authorizationUrl: "https://auth.example.com/authorize",

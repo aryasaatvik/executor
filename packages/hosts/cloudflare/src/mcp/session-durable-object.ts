@@ -228,7 +228,7 @@ export abstract class McpSessionDOBase<
   }
 
   /** Optional error seam: report a fatal request cause (cloud → Sentry). */
-  protected captureCause(_cause: Cause.Cause<unknown>): void {}
+  protected captureCause(cause: Cause.Cause<unknown>): void {}
 
   /** Optional flush seam: force-export buffered spans before the DO RPC
    *  settles. Default is a no-op; cloud overrides it with the tracer

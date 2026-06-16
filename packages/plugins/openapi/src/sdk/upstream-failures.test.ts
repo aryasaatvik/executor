@@ -84,7 +84,7 @@ const startScriptedServer = (script: ResponseScript) =>
 const startDroppingServer = () =>
   Effect.acquireRelease(
     Effect.callback<{ baseUrl: string; close: () => void }>((resume) => {
-      const server = createServer((_req, res) => {
+      const server = createServer((req, res) => {
         res.writeHead(200, { "content-type": "application/json" });
         res.write("partial");
         res.destroy();
@@ -272,7 +272,7 @@ describe("OpenAPI upstream failure modes", () => {
     Effect.gen(function* () {
       const slowServer = Effect.acquireRelease(
         Effect.callback<{ baseUrl: string; close: () => void }>((resume) => {
-          const server = createServer((_req, res) => {
+          const server = createServer((req, res) => {
             setTimeout(() => {
               res.writeHead(200, { "content-type": "application/json" });
               res.end("[]");

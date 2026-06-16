@@ -74,7 +74,7 @@ const inDesktop = readBridge() !== null;
 // The renderer doesn't get typed errors back from Electron's invoke channel.
 // We don't pull `err.message` out — the structured error doesn't help the
 // user, only "save failed" matters. The main process logs the full error.
-const describeIpcError = (_err: unknown): string =>
+const describeIpcError = (err: unknown): string =>
   "Save failed — check the desktop console for details.";
 
 // ---------------------------------------------------------------------------

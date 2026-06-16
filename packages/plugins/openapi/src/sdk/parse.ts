@@ -39,7 +39,7 @@ export const fetchSpecText = Effect.fn("OpenApi.fetchSpecText")(function* (
   const response = yield* client.execute(request).pipe(
     Effect.timeout(Duration.seconds(60)),
     Effect.mapError(
-      (_cause) =>
+      (cause) =>
         new OpenApiParseError({
           message: "Failed to fetch OpenAPI document",
         }),
@@ -52,7 +52,7 @@ export const fetchSpecText = Effect.fn("OpenApi.fetchSpecText")(function* (
   }
   return yield* response.text.pipe(
     Effect.mapError(
-      (_cause) =>
+      (cause) =>
         new OpenApiParseError({
           message: "Failed to read OpenAPI document body",
         }),
