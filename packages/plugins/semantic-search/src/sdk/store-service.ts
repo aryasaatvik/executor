@@ -1,6 +1,7 @@
 import { Context, Layer } from "effect";
 
 import { makeZVecStore, type ZVecStoreOptions } from "./store-zvec";
+import { makeSqliteVecStore, type SqliteVecStoreOptions } from "./store-sqlite-vec";
 import { makeVectorizeStore, type VectorizeIndex } from "./store-cloudflare";
 import type { VectorStore } from "./store";
 
@@ -20,3 +21,8 @@ export const vectorizeStoreLayer = (index: VectorizeIndex): Layer.Layer<VectorSt
 
 export const zvecStoreLayer = (options: ZVecStoreOptions): Layer.Layer<VectorStoreService> =>
   Layer.succeed(VectorStoreService)(makeZVecStore(options));
+
+export const sqliteVecStoreLayer = (
+  options: SqliteVecStoreOptions,
+): Layer.Layer<VectorStoreService> =>
+  Layer.succeed(VectorStoreService)(makeSqliteVecStore(options));

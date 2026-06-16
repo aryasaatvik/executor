@@ -42,3 +42,6 @@ export { withCloudflareLimits } from "./store-cloudflare-limits";
 
 // zvec store (local / dev)
 export { makeZVecStore, type ZVecStoreOptions } from "./store-zvec";
+
+// sqlite-vec store (local / dev)
+export { makeSqliteVecStore, type SqliteVecStoreOptions } from "./store-sqlite-vec";

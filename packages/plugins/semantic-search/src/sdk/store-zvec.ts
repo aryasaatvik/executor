@@ -24,6 +24,11 @@ export interface ZVecStoreOptions {
   /** Collection directory on disk. */
   readonly path: string;
   readonly dimensions: number;
+  /** Index type. "flat" = exact brute-force (lossless, fast for catalogs up to
+   *  ~tens of thousands of vectors — the right default for tool search). "hnsw" =
+   *  approximate ANN, only worth it past ~100k vectors (and can lose recall at
+   *  small scale). Default "flat". */
+  readonly index?: "flat" | "hnsw";
   readonly hnswM?: number;
   readonly hnswEfConstruction?: number;
   readonly hnswEf?: number;
@@ -43,25 +48,33 @@ interface ZVecCollection {
 
 interface OpenedCollection {
   readonly coll: ZVecCollection;
-  readonly ef: number;
-  readonly indexType: unknown;
+  /** Query-time params for HNSW (indexType + ef); undefined for FLAT (exact —
+   *  zvec rejects a FLAT indexType in QueryParams). */
+  readonly queryParams: Record<string, unknown> | undefined;
 }
 
 const openCollection = async (options: ZVecStoreOptions): Promise<OpenedCollection> => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- native addon, no shipped types
   const zvec = (await import("@zvec/zvec")) as any;
+  const useHnsw = options.index === "hnsw";
+  const indexParams = useHnsw
+    ? {
+        indexType: zvec.ZVecIndexType.HNSW,
+        metricType: zvec.ZVecMetricType.COSINE,
+        m: options.hnswM ?? 32,
+        efConstruction: options.hnswEfConstruction ?? 200,
+      }
+    : {
+        indexType: zvec.ZVecIndexType.FLAT,
+        metricType: zvec.ZVecMetricType.COSINE,
+      };
   const schema = new zvec.ZVecCollectionSchema({
     name: "vectors",
     vectors: {
       name: "embedding",
       dataType: zvec.ZVecDataType.VECTOR_FP32,
       dimension: options.dimensions,
-      indexParams: {
-        indexType: zvec.ZVecIndexType.HNSW,
-        metricType: zvec.ZVecMetricType.COSINE,
-        m: options.hnswM ?? 32,
-        efConstruction: options.hnswEfConstruction ?? 200,
-      },
+      indexParams,
     },
     fields: [
       { name: "namespace", dataType: zvec.ZVecDataType.STRING },
@@ -80,7 +93,12 @@ const openCollection = async (options: ZVecStoreOptions): Promise<OpenedCollecti
       coll = zvec.ZVecOpen(options.path) as ZVecCollection;
     }
   }
-  return { coll, ef: options.hnswEf ?? 128, indexType: zvec.ZVecIndexType.HNSW };
+  return {
+    coll,
+    queryParams: useHnsw
+      ? { indexType: zvec.ZVecIndexType.HNSW, ef: options.hnswEf ?? 128 }
+      : undefined,
+  };
 };
 
 const toMatches = (
@@ -152,7 +170,8 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorStore => {
                 // Over-fetch so the namespace post-filter still yields topK.
                 topk: Math.max(topK * 4, 40),
                 outputFields: ["namespace", "metadataJson"],
-                params: { indexType: opened.indexType, ef: opened.ef },
+                // FLAT (exact) takes no query params; HNSW takes indexType + ef.
+                ...(opened.queryParams ? { params: opened.queryParams } : {}),
               }),
             catch: (cause) => new SemanticSearchError({ message: "zvec query failed.", cause }),
           }).pipe(Effect.map((rows) => toMatches(rows, namespace, topK))),

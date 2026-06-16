@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { Cause, Effect, Exit, Layer } from "effect";
 
@@ -9,7 +10,7 @@ import {
   hashEmbedderLayer,
   openAiCompatibleEmbedderLayer,
 } from "./embedding-service";
-import { VectorStoreService, zvecStoreLayer } from "./store-service";
+import { VectorStoreService, zvecStoreLayer, sqliteVecStoreLayer } from "./store-service";
 import { GOLDEN } from "./eval-golden";
 
 // ---------------------------------------------------------------------------
@@ -364,23 +365,37 @@ const colToString = (v: string | Buffer | null): string | undefined => {
 };
 
 const loadRealCatalog = (): readonly ToolDocumentInput[] => {
-  // Dynamic import so bun:sqlite is never referenced when CATALOG=sample.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+  // Dynamic require so the sqlite module is only loaded when CATALOG=real.
+  // Supports both Bun (bun:sqlite) and Node.js (better-sqlite3).
+  const isBun = typeof Bun !== "undefined";
 
   const dbPath = (process.env.DATA_DB_PATH ?? `${homedir()}/.executor/data.db`).replace(
     /^~/,
     homedir(),
   );
-  const db = new Database(dbPath, { readonly: true });
 
-  const rows = db
-    .query<DbToolRow, []>(
-      "SELECT integration, name, description, input_schema, output_schema FROM tool",
-    )
-    .all();
+  let rows: DbToolRow[];
 
-  db.close();
+  if (isBun) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const db = new Database(dbPath, { readonly: true });
+    rows = db
+      .query<DbToolRow, []>(
+        "SELECT integration, name, description, input_schema, output_schema FROM tool",
+      )
+      .all();
+    db.close();
+  } else {
+    // Node.js path: use better-sqlite3 via createRequire (works in ESM).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary: better-sqlite3 not available in Bun
+    const NodeDb = createRequire(import.meta.url)("better-sqlite3") as any;
+    const db = new NodeDb(dbPath, { readonly: true });
+    rows = db
+      .prepare("SELECT integration, name, description, input_schema, output_schema FROM tool")
+      .all() as DbToolRow[];
+    db.close();
+  }
 
   // Build a set of paths that the golden set demands are always present.
   const goldenPaths = new Set(GOLDEN.map((g) => g.expectedPath));
@@ -599,7 +614,14 @@ const embedderLayer = (): Layer.Layer<EmbedderService> => {
 };
 
 const storeLayer = (): Layer.Layer<VectorStoreService> => {
-  // Default to zvec (no in-memory store — removed in P0).
+  const kind = process.env.STORE ?? "zvec";
+  if (kind === "sqlite-vec") {
+    return sqliteVecStoreLayer({
+      path: process.env.SQLITE_VEC_PATH ?? "/tmp/vectorize-eval.sqlite",
+      dimensions: DIMENSIONS,
+    });
+  }
+  // Default: zvec.
   return zvecStoreLayer({
     path: process.env.ZVEC_PATH ?? "/tmp/vectorize-eval.zvec",
     dimensions: DIMENSIONS,
