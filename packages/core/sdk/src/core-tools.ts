@@ -519,7 +519,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           description:
             "List integrations in the workspace catalog (slug, description, owning plugin kind). Connections authenticate against these.",
           outputSchema: IntegrationsListOutputStd,
-          execute: (_args, { ctx }) =>
+          execute: (args, { ctx }) =>
             Effect.map(ctx.core.integrations.list(), (integrations) => ({
               integrations: integrations.map((i) => ({
                 slug: String(i.slug),
@@ -644,7 +644,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
                 description:
                   "List registered credential provider keys (the storage backends, not API vendors). Use `providers.items` to browse a backend's entries.",
                 outputSchema: ProvidersOutputStd,
-                execute: (_args, { ctx }) =>
+                execute: (args, { ctx }) =>
                   Effect.map(ctx.providers.list(), (providers) => ({
                     providers: providers.map((p) => String(p)),
                   })),
@@ -666,7 +666,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           description:
             "List registered OAuth clients visible to this executor. Returns metadata only; client secrets are never returned.",
           outputSchema: OAuthClientsListOutputStd,
-          execute: (_args, { ctx }) =>
+          execute: (args, { ctx }) =>
             Effect.map(ctx.oauth.listClients(), (clients) => ({
               clients: clients.map((client) => ({
                 owner: client.owner,
@@ -849,7 +849,7 @@ export const coreToolsPlugin = definePlugin((options: CoreToolsPluginOptions = {
           description:
             "List tool policies (approve / require_approval / block) for org and user owners, in evaluation order.",
           outputSchema: PoliciesListOutputStd,
-          execute: (_args, { ctx }) =>
+          execute: (args, { ctx }) =>
             Effect.map(ctx.core.policies.list(), (policies) => ({
               policies: policies.map((p) => ({
                 id: String(p.id),

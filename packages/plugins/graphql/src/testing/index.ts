@@ -236,13 +236,13 @@ export const makeGreetingGraphqlSchema = (
     `,
     resolvers: {
       Query: {
-        hello: (_source: unknown, args: Readonly<Record<string, unknown>>) =>
+        hello: (source: unknown, args: Readonly<Record<string, unknown>>) =>
           `Hello ${stringArgument(args, "name", "world")}`,
       },
       ...(includeMutation
         ? {
             Mutation: {
-              setGreeting: (_source: unknown, args: Readonly<Record<string, unknown>>) =>
+              setGreeting: (source: unknown, args: Readonly<Record<string, unknown>>) =>
                 stringArgument(args, "message", ""),
             },
           }

@@ -117,7 +117,7 @@ const makeElicitingEngine = (
   ) => r.action,
 ): ExecutionEngine =>
   makeStubEngine({
-    execute: (_code, { onElicitation }) =>
+    execute: (code, { onElicitation }) =>
       Effect.gen(function* () {
         const response = yield* onElicitation({
           address: STUB_TOOL_ADDRESS,
@@ -1095,7 +1095,7 @@ describe("MCP host server — client without elicitation (pause/resume)", () => 
   it("resume tool passes parsed content to engine", async () => {
     let receivedContent: Record<string, unknown> | undefined;
     const engine = makeStubEngine({
-      resume: (_id, response) =>
+      resume: (id, response) =>
         Effect.sync(() => {
           receivedContent = response.content;
           return { status: "completed", result: { result: "ok" } };
@@ -1123,7 +1123,7 @@ describe("MCP host server — client without elicitation (pause/resume)", () => 
   it("resume with empty content passes undefined", async () => {
     let receivedContent: Record<string, unknown> | undefined = { marker: true };
     const engine = makeStubEngine({
-      resume: (_id, response) =>
+      resume: (id, response) =>
         Effect.sync(() => {
           receivedContent = response.content;
           return { status: "completed", result: { result: "ok" } };
@@ -1242,7 +1242,7 @@ describe("MCP host server — resume content parsing", () => {
   const makeResumeEngine = () => {
     let receivedContent: Record<string, unknown> | undefined = { marker: true };
     const engine = makeStubEngine({
-      resume: (_id, response) =>
+      resume: (id, response) =>
         Effect.sync(() => {
           receivedContent = response.content;
           return { status: "completed", result: { result: "ok" } };
@@ -1298,7 +1298,7 @@ describe("MCP host server — resume content parsing", () => {
 describe("MCP host server — multiple elicitations", () => {
   it("engine can elicit multiple times during a single execute call", async () => {
     const engine = makeStubEngine({
-      execute: (_code, { onElicitation }) =>
+      execute: (code, { onElicitation }) =>
         Effect.gen(function* () {
           const r1 = yield* onElicitation({
             address: STUB_TOOL_ADDRESS,

@@ -32,7 +32,7 @@ const stubWorkOS = (overrides: StubOverrides = {}) =>
   Layer.succeed(
     WorkOSClient,
     new Proxy({} as WorkOSClientService, {
-      get: (_target, prop) => {
+      get: (target, prop) => {
         if (typeof prop === "string" && prop in overrides) {
           return overrides[prop as keyof StubOverrides];
         }
@@ -80,7 +80,7 @@ const requireAdmin = Effect.gen(function* () {
 });
 
 const withCurrentMembership: StubOverrides = {
-  getUserOrgMembership: (_organizationId: string, userId: string) =>
+  getUserOrgMembership: (organizationId: string, userId: string) =>
     Effect.succeed(
       userId === "user_admin"
         ? { id: "mem_admin", userId, status: "active", role: { slug: "admin" } }

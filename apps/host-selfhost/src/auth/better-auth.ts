@@ -156,7 +156,7 @@ const makeAuthOptions = (client: Client, getOrganizationId: () => string, gate?:
         ? {
             user: {
               create: {
-                before: async (_user, context) => {
+                before: async (user, context) => {
                   if (context?.path !== SIGNUP_PATH) return;
                   if (await orgHasNoMembers(gate)) return; // first user claims the org
                   const code = inviteCodeFrom(context);

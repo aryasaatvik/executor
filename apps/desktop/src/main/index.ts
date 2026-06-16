@@ -565,7 +565,7 @@ const registerIpcHandlers = () => {
   ipcMain.handle("executor:settings:get", (): DesktopServerSettings => getServerSettings());
   ipcMain.handle(
     "executor:settings:update",
-    (_evt, patch: Partial<DesktopServerSettings>): DesktopServerSettings =>
+    (evt, patch: Partial<DesktopServerSettings>): DesktopServerSettings =>
       updateServerSettings(patch),
   );
   // Rotate the bearer token (auth.json). A supervised daemon must be restarted
@@ -616,7 +616,7 @@ const registerIpcHandlers = () => {
     },
   );
   ipcMain.handle("executor:server-profiles:get", (): string | null => getServerProfiles());
-  ipcMain.handle("executor:server-profiles:set", (_evt, value: unknown): void => {
+  ipcMain.handle("executor:server-profiles:set", (evt, value: unknown): void => {
     if (typeof value !== "string") return;
     setServerProfiles(value);
   });
@@ -641,7 +641,7 @@ const registerIpcHandlers = () => {
     await announceBackup(backupDir);
     return true;
   });
-  ipcMain.handle("executor:shell:open-external", async (_evt, rawUrl: unknown) => {
+  ipcMain.handle("executor:shell:open-external", async (evt, rawUrl: unknown) => {
     if (typeof rawUrl !== "string") return;
     // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: untrusted renderer string, URL ctor throws on malformed input
     try {
