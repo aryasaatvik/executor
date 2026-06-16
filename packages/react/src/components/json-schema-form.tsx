@@ -612,7 +612,7 @@ function ArrayField(props: {
 
   const setItem = (index: number, next: unknown): void => {
     if (next === REMOVE) {
-      onChange(items.filter((_item: unknown, i: number) => i !== index));
+      onChange(items.filter((item: unknown, i: number) => i !== index));
       return;
     }
     onChange(items.map((item: unknown, i: number) => (i === index ? next : item)));

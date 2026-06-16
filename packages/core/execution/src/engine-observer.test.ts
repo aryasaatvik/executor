@@ -19,7 +19,7 @@ const makeExecutor = () => createExecutor(makeTestConfig({ plugins: [emptyPlugin
 // A code executor that issues one builtin tool call (tools.search) and then
 // completes — enough to exercise the full event sequence.
 const toolCallingExecutor: CodeExecutor = {
-  execute: (_code, invoker) =>
+  execute: (code, invoker) =>
     invoker
       .invoke({ path: "search", args: { query: "anything" } })
       .pipe(Effect.as({ result: "ok", logs: [] } satisfies ExecuteResult), Effect.orDie),

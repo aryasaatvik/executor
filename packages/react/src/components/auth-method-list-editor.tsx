@@ -74,7 +74,7 @@ export function useAuthMethodList(seeds: readonly AuthMethodSeed[]): AuthMethodL
 
   const removeRowAt = useCallback((index: number) => {
     setRows((current: readonly AuthMethodRow[]) =>
-      current.filter((_row: AuthMethodRow, i: number) => i !== index),
+      current.filter((row: AuthMethodRow, i: number) => i !== index),
     );
   }, []);
 
