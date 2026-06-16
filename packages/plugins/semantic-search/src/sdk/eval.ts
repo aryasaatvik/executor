@@ -4,6 +4,7 @@ import { Cause, Effect, Exit, Layer } from "effect";
 
 import { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
 import type { ToolDocumentInput } from "./chunker";
+import { stripHtml, buildLexicalText } from "./documents";
 import {
   EmbedderService,
   geminiEmbedderLayer,
@@ -12,6 +13,9 @@ import {
 } from "./embedding-service";
 import { VectorStoreService, zvecStoreLayer, sqliteVecStoreLayer } from "./store-service";
 import { GOLDEN } from "./eval-golden";
+import { makeFtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
+import { makeVectorToolDiscoveryProvider } from "./provider";
+import { makeHybridToolDiscoveryProvider } from "./hybrid";
 
 // ---------------------------------------------------------------------------
 // Relevance eval — exercises the facet chunker + embed + zvec pipeline locally
@@ -43,6 +47,9 @@ import { GOLDEN } from "./eval-golden";
 const NAMESPACE = "default";
 const DIMENSIONS = Number(process.env.EMBEDDING_DIMENSIONS ?? 1536);
 const CHUNKER_KIND = process.env.CHUNKER ?? "facet";
+/** LEXICAL=none (default) — vector-only; LEXICAL=fts — FTS-hybrid via RRF. */
+const LEXICAL_KIND = (process.env.LEXICAL ?? "none") as "none" | "fts";
+const FTS_PATH = process.env.FTS_PATH ?? "/tmp/vectorize-eval-fts.sqlite";
 
 // ---------------------------------------------------------------------------
 // Sample catalog — realistic tool documents with input/output TypeScript so
@@ -416,14 +423,16 @@ const loadRealCatalog = (): readonly ToolDocumentInput[] => {
     const inputTs = colToString(row.input_schema);
     const outputTs = colToString(row.output_schema);
 
-    tools.push({
+    const doc: ToolDocumentInput = {
       path,
       name: row.name,
       integration: row.integration,
-      description: (colToString(row.description as string | Buffer | null) ?? "").trim(),
+      description: stripHtml((colToString(row.description as string | Buffer | null) ?? "").trim()),
       inputTypeScript: inputTs ? inputTs.slice(0, 1500) : undefined,
       outputTypeScript: outputTs ? outputTs.slice(0, 1500) : undefined,
-    });
+    };
+
+    tools.push({ ...doc, lexicalText: buildLexicalText(doc) });
   }
 
   return tools;
@@ -460,12 +469,14 @@ const program = Effect.gen(function* () {
   const chunker = yield* ChunkerService;
 
   // -------------------------------------------------------------------------
-  // Phase 1 — Chunk + embed + upsert
+  // Phase 1 — Chunk + embed + upsert (vector index)
   // -------------------------------------------------------------------------
   const allChunks = CATALOG.flatMap((doc) => chunker.chunk(NAMESPACE, doc));
 
   yield* Effect.sync(() => {
-    console.log(`\n=== chunking (catalog=${CATALOG_KIND}, chunker=${CHUNKER_KIND}) ===`);
+    console.log(
+      `\n=== chunking (catalog=${CATALOG_KIND}, chunker=${CHUNKER_KIND}, lexical=${LEXICAL_KIND}) ===`,
+    );
     console.log(`tools=${CATALOG.length}  chunks=${allChunks.length}`);
     // Report per-tool chunk breakdown (skip for large catalogs to avoid noise).
     const multiChunkDocs = CATALOG_KIND === "real" ? [] : CATALOG;
@@ -499,6 +510,30 @@ const program = Effect.gen(function* () {
   }
 
   // -------------------------------------------------------------------------
+  // Phase 1b — Build FTS index when LEXICAL=fts
+  // -------------------------------------------------------------------------
+  const ftsProvider =
+    LEXICAL_KIND === "fts"
+      ? yield* Effect.gen(function* () {
+          const ftsStore = makeFtsLexicalStore({ path: FTS_PATH });
+          const ftsDocs = CATALOG.map((doc) => ({
+            id: doc.path,
+            namespace: NAMESPACE,
+            path: doc.path,
+            name: doc.name,
+            description: doc.description,
+            integration: doc.integration,
+            lexicalText: doc.lexicalText ?? buildLexicalText(doc),
+          }));
+          yield* ftsStore.upsert(ftsDocs);
+          yield* Effect.sync(() =>
+            console.log(`FTS index built: ${ftsDocs.length} docs at ${FTS_PATH}`),
+          );
+          return makeFtsLexicalProvider(ftsStore, NAMESPACE);
+        })
+      : null;
+
+  // -------------------------------------------------------------------------
   // Phase 2 — Query, dedup by path (best score), top 5
   // -------------------------------------------------------------------------
   const allQueries = GOLDEN.map((g) => g.query);
@@ -510,36 +545,69 @@ const program = Effect.gen(function* () {
   // Collect ranked results for precision computation.
   const rankedByQuery = new Map<string, readonly string[]>();
 
-  for (const q of allQueries) {
-    const qv = yield* embedder.embedQuery(q);
-    // Over-fetch so dedup-by-path still yields a full top-5 window.
-    const matches = yield* store.query({ vector: qv, namespace: NAMESPACE, topK: 50 });
+  // Build vector-only provider for use in hybrid mode.
+  const vectorProvider = makeVectorToolDiscoveryProvider({
+    embedder,
+    store,
+    namespace: NAMESPACE,
+  });
 
-    const best = new Map<string, { score: number; facet: string; chunkIndex: number }>();
-    for (const m of matches) {
-      const p = String(m.metadata?.path ?? "");
-      if (p === "") continue;
-      const prev = best.get(p);
-      if (!prev || m.score > prev.score) {
-        best.set(p, {
-          score: m.score,
-          facet: String(m.metadata?.facet ?? ""),
-          chunkIndex: Number(m.metadata?.chunkIndex ?? 0),
-        });
+  // If FTS provider is available, build the hybrid provider (RRF).
+  const activeProvider =
+    ftsProvider !== null
+      ? makeHybridToolDiscoveryProvider({ lexical: ftsProvider, vector: vectorProvider })
+      : null;
+
+  for (const q of allQueries) {
+    let ranked: readonly string[];
+
+    if (activeProvider !== null) {
+      // Hybrid path: use the fused provider.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- eval-only: providers don't use the executor
+      const page = yield* activeProvider.searchTools({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- eval-only: providers ignore executor
+        executor: null as any,
+        query: q,
+        // Do not pass namespace as a text filter: the vector provider interprets
+        // ToolDiscoveryInput.namespace as an integration-prefix filter, not a
+        // storage partition key. The FTS store's partition is baked into the
+        // store itself (all docs upserted under NAMESPACE = "default").
+        namespace: undefined,
+        limit: 5,
+        offset: 0,
+      });
+      ranked = page.items.map((r) => r.path);
+    } else {
+      // Vector-only path (original).
+      const qv = yield* embedder.embedQuery(q);
+      // Over-fetch so dedup-by-path still yields a full top-5 window.
+      const matches = yield* store.query({ vector: qv, namespace: NAMESPACE, topK: 50 });
+
+      const best = new Map<string, { score: number; facet: string; chunkIndex: number }>();
+      for (const m of matches) {
+        const p = String(m.metadata?.path ?? "");
+        if (p === "") continue;
+        const prev = best.get(p);
+        if (!prev || m.score > prev.score) {
+          best.set(p, {
+            score: m.score,
+            facet: String(m.metadata?.facet ?? ""),
+            chunkIndex: Number(m.metadata?.chunkIndex ?? 0),
+          });
+        }
       }
+      ranked = [...best.entries()]
+        .sort((a, b) => b[1].score - a[1].score)
+        .slice(0, 5)
+        .map(([p]) => p);
     }
 
-    const ranked = [...best.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 5);
-
-    rankedByQuery.set(
-      q,
-      ranked.map(([p]) => p),
-    );
+    rankedByQuery.set(q, ranked);
 
     yield* Effect.sync(() => {
       console.log(`\nQ: "${q}"`);
-      for (const [p, { score, facet, chunkIndex }] of ranked) {
-        console.log(`   ${score.toFixed(3)}  ${p}  (facet=${facet} chunk=${chunkIndex})`);
+      for (const p of ranked) {
+        console.log(`   ${p}`);
       }
     });
   }
@@ -578,7 +646,7 @@ const program = Effect.gen(function* () {
 
   yield* Effect.sync(() => {
     console.log(
-      `\nprecision@1=${avgP1.toFixed(3)}  recall@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model})`,
+      `\nprecision@1=${avgP1.toFixed(3)}  recall@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model}, lexical=${LEXICAL_KIND})`,
     );
     console.log(
       `catalog=${CATALOG_KIND}${CATALOG_KIND === "real" && process.env.CATALOG_LIMIT ? `  limit=${process.env.CATALOG_LIMIT}` : ""}`,

@@ -45,3 +45,16 @@ export { makeZVecStore, type ZVecStoreOptions } from "./store-zvec";
 
 // sqlite-vec store (local / dev)
 export { makeSqliteVecStore, type SqliteVecStoreOptions } from "./store-sqlite-vec";
+
+// FTS5 lexical store + provider (local / dev)
+export {
+  makeFtsLexicalStore,
+  makeFtsLexicalProvider,
+  type FtsLexicalStore,
+  type FtsDocumentInput,
+  type FtsSearchInput,
+  type FtsSearchResult,
+} from "./store-fts";
+
+// Documents projector helpers
+export { stripHtml, buildLexicalText } from "./documents";
