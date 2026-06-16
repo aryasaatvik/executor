@@ -12,7 +12,7 @@ import {
   openAiCompatibleEmbedderLayer,
 } from "./embedding-service";
 import { VectorStoreService, zvecStoreLayer, sqliteVecStoreLayer } from "./store-service";
-import { GOLDEN } from "./eval-golden";
+import { GOLDEN, SAMPLE_GOLDEN } from "./eval-golden";
 import { makeFtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
@@ -34,7 +34,8 @@ import { makeHybridToolDiscoveryProvider } from "./hybrid";
 //   # Gemini (production parity):
 //   EMBEDDER=gemini GEMINI_API_KEY=… CHUNKER=facet bun run …/eval.ts
 //
-// Precision@1 and precision@5 are printed against GOLDEN (eval-golden.ts).
+// Precision@1 and precision@5 are printed against the catalog-matched golden set
+// (GOLDEN for CATALOG=real, SAMPLE_GOLDEN for CATALOG=sample; eval-golden.ts).
 //
 // CATALOG env controls which tool catalog is loaded:
 //   CATALOG=sample  (default) — 13 hand-written sample tools
@@ -444,6 +445,8 @@ const loadRealCatalog = (): readonly ToolDocumentInput[] => {
 
 const CATALOG_KIND = process.env.CATALOG ?? "sample";
 const CATALOG: readonly ToolDocumentInput[] = CATALOG_KIND === "real" ? loadRealCatalog() : SAMPLE;
+// Golden set must match the active catalog's path format, or precision is all-zeros.
+const ACTIVE_GOLDEN = CATALOG_KIND === "real" ? GOLDEN : SAMPLE_GOLDEN;
 
 // ---------------------------------------------------------------------------
 // Precision metrics
@@ -536,7 +539,7 @@ const program = Effect.gen(function* () {
   // -------------------------------------------------------------------------
   // Phase 2 — Query, dedup by path (best score), top 5
   // -------------------------------------------------------------------------
-  const allQueries = GOLDEN.map((g) => g.query);
+  const allQueries = ACTIVE_GOLDEN.map((g) => g.query);
 
   yield* Effect.sync(() =>
     console.log(`\n=== queries (embedder=${embedder.model}, dedup by path, top 5) ===`),
@@ -622,7 +625,7 @@ const program = Effect.gen(function* () {
     console.log(`\n=== precision summary (chunker=${CHUNKER_KIND}) ===`);
   });
 
-  for (const golden of GOLDEN) {
+  for (const golden of ACTIVE_GOLDEN) {
     const ranked = rankedByQuery.get(golden.query) ?? [];
     const p1 = ranked[0] === golden.expectedPath ? 1 : 0;
     // recall@5: is the single expected tool in the top 5 (1/0)
@@ -640,7 +643,7 @@ const program = Effect.gen(function* () {
     });
   }
 
-  const n = GOLDEN.length;
+  const n = ACTIVE_GOLDEN.length;
   const avgP1 = sumP1 / n;
   const avgP5 = sumP5 / n;
 

@@ -6,10 +6,12 @@
 // queries and a few that require deeper semantic matching (e.g. sub-features
 // hidden in long descriptions or input schemas).
 //
-// Real-catalog entries (CATALOG=real) use paths of the form
-// "<integration>.<name>" matching the path field produced by the catalog
-// loader in eval.ts. Sample-catalog entries use the old hand-crafted dotted
-// paths. Both share the same GoldenQuery shape.
+// GOLDEN targets the real catalog (CATALOG=real): paths of the form
+// "<integration>.<name>" matching the path field the catalog loader in eval.ts
+// produces. SAMPLE_GOLDEN targets the small offline SAMPLE catalog (CATALOG=sample,
+// the default), whose tools use the hand-crafted "tools.<int>.org.x.<...>" paths.
+// eval.ts selects the matching set by CATALOG, so the default mode scores against
+// queries the sample catalog can actually answer rather than reporting all-zeros.
 // ---------------------------------------------------------------------------
 
 export interface GoldenQuery {
@@ -228,5 +230,73 @@ export const GOLDEN: readonly GoldenQuery[] = [
     query: "search the web for recent information",
     expectedPath: "exa.web_search_exa",
     expectedTop5: ["exa.web_search_exa", "exa.web_fetch_exa"],
+  },
+];
+
+// ---------------------------------------------------------------------------
+// SAMPLE_GOLDEN — queries for the offline SAMPLE catalog (CATALOG=sample, default).
+// Paths match the hand-crafted "tools.<int>.org.x.<...>" sample tools in eval.ts.
+// With the weak hash embedder these scores stay modest; the point is an offline,
+// no-data, no-network smoke that the chunk → embed → store → rank pipeline runs
+// and surfaces relevant tools — not a quality benchmark (use CATALOG=real for that).
+// ---------------------------------------------------------------------------
+export const SAMPLE_GOLDEN: readonly GoldenQuery[] = [
+  {
+    query: "schedule a meeting on my Google calendar",
+    expectedPath: "tools.google.org.x.calendar.events.insert",
+    expectedTop5: [
+      "tools.google.org.x.calendar.events.insert",
+      "tools.google.org.x.calendar.events.quickAdd",
+    ],
+  },
+  {
+    query: "delete an event from my calendar",
+    expectedPath: "tools.google.org.x.calendar.events.delete",
+    expectedTop5: ["tools.google.org.x.calendar.events.delete"],
+  },
+  {
+    query: "send an email through Gmail",
+    expectedPath: "tools.google.org.x.gmail.users.messages.send",
+    expectedTop5: ["tools.google.org.x.gmail.users.messages.send"],
+  },
+  {
+    query: "open a new issue on a GitHub repository",
+    expectedPath: "tools.github.org.x.repos.issues.create",
+    expectedTop5: ["tools.github.org.x.repos.issues.create"],
+  },
+  {
+    query: "open a pull request on GitHub",
+    expectedPath: "tools.github.org.x.repos.pulls.create",
+    expectedTop5: ["tools.github.org.x.repos.pulls.create"],
+  },
+  {
+    query: "look up a GitHub repository's metadata",
+    expectedPath: "tools.github.org.x.repos.get",
+    expectedTop5: ["tools.github.org.x.repos.get"],
+  },
+  {
+    query: "charge a customer's card with Stripe",
+    expectedPath: "tools.stripe.org.x.charges.create",
+    expectedTop5: ["tools.stripe.org.x.charges.create"],
+  },
+  {
+    query: "refund a Stripe payment",
+    expectedPath: "tools.stripe.org.x.refunds.create",
+    expectedTop5: ["tools.stripe.org.x.refunds.create"],
+  },
+  {
+    query: "start a recurring subscription in Stripe",
+    expectedPath: "tools.stripe.org.x.subscriptions.create",
+    expectedTop5: ["tools.stripe.org.x.subscriptions.create"],
+  },
+  {
+    query: "post a message to a Slack channel",
+    expectedPath: "tools.slack.org.x.chat.postMessage",
+    expectedTop5: ["tools.slack.org.x.chat.postMessage"],
+  },
+  {
+    query: "create an issue in Linear",
+    expectedPath: "tools.linear.org.x.issues.create",
+    expectedTop5: ["tools.linear.org.x.issues.create"],
   },
 ];
