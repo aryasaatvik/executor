@@ -2,7 +2,7 @@ import type { Executor } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import type { ToolDocumentInput } from "./chunker";
-import { VectorizeSearchError } from "./errors";
+import { SemanticSearchError } from "./errors";
 
 const ADDRESS_PREFIX = "tools.";
 
@@ -26,10 +26,10 @@ export const addressToPath = (address: string): string =>
 export const collectToolDocumentInputs = (
   namespace: string,
   executor: Executor,
-): Effect.Effect<readonly ToolDocumentInput[], VectorizeSearchError> =>
+): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
   executor.tools.list({ includeAnnotations: false }).pipe(
     Effect.mapError(
-      (cause) => new VectorizeSearchError({ message: "Failed to list tools for indexing.", cause }),
+      (cause) => new SemanticSearchError({ message: "Failed to list tools for indexing.", cause }),
     ),
     Effect.flatMap((tools) =>
       Effect.forEach(

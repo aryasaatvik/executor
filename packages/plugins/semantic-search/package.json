@@ -1,5 +1,5 @@
 {
-  "name": "@executor-js/plugin-vectorize-search",
+  "name": "@executor-js/plugin-semantic-search",
   "version": "0.0.0",
   "private": true,
   "type": "module",

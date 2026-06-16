@@ -1,6 +1,6 @@
 import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
-import type { VectorizeIndex } from "@executor-js/plugin-vectorize-search";
+import type { VectorizeIndex } from "@executor-js/plugin-semantic-search";
 
 import { isValidOrgSlug } from "@executor-js/api";
 
@@ -25,12 +25,12 @@ export interface CloudflareEnv {
    *  finished execution/tool call writes a data point; absent, metrics are off. */
   readonly ANALYTICS?: AnalyticsEngineDataset;
   /** Vectorize index binding — opt-in semantic `tools.search`. When bound (add a
-   *  `vectorize` binding in wrangler.jsonc) the vectorize-search plugin embeds
+   *  `vectorize` binding in wrangler.jsonc) the semantic-search plugin embeds
    *  the tool catalog and answers `tools.search` from it; absent, the engine
    *  keeps its built-in lexical search. */
   readonly VECTORIZE?: VectorizeIndex;
   /** Gemini API key (a `wrangler secret`) powering the embeddings for the
-   *  Vectorize search. Absent → vectorize search stays inert even if the index
+   *  Vectorize search. Absent → semantic search stays inert even if the index
    *  is bound. */
   readonly GEMINI_API_KEY?: string;
   /** MCP session Durable Object namespace — one addressable isolate per MCP

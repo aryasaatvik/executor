@@ -1,9 +1,9 @@
 export {
-  vectorizeSearchPlugin,
-  type VectorizeSearchPluginOptions,
-  type VectorizeSearchExtension,
+  semanticSearchPlugin,
+  type SemanticSearchPluginOptions,
+  type SemanticSearchExtension,
 } from "./plugin";
-export { makeVectorizeToolDiscoveryProvider, MAX_METADATA_TOP_K } from "./provider";
+export { makeVectorToolDiscoveryProvider } from "./provider";
 export {
   makeGeminiEmbedder,
   DEFAULT_GEMINI_MODEL,
@@ -11,17 +11,10 @@ export {
   type ToolEmbedder,
   type GeminiEmbedderOptions,
 } from "./embedder";
-export {
-  makeVectorizeStore,
-  type VectorizeIndex,
-  type VectorizeStore,
-  type VectorizeMatch,
-  type VectorizeMatches,
-  type VectorizeVectorInput,
-  MAX_TOP_K,
-} from "./vectorize";
+export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
+export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export { reconcileToolCatalog, type ReconcileResult } from "./indexer";
-export { VectorizeSearchError } from "./errors";
+export { SemanticSearchError } from "./errors";
 
 // Chunker
 export {
@@ -46,3 +39,6 @@ export { toolFingerprints, FingerprintRow } from "./collections";
 
 // Store limit decorator
 export { withCloudflareLimits } from "./store-cloudflare-limits";
+
+// zvec store (local / dev)
+export { makeZVecStore, type ZVecStoreOptions } from "./store-zvec";

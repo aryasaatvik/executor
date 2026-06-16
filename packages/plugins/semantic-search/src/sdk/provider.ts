@@ -6,16 +6,11 @@ import {
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
-import type { VectorizeMatch, VectorizeStore } from "./vectorize";
-
-/** Cloudflare caps `topK` at 20 when `returnMetadata:"all"` is set.
- *  The vector store always queries with full metadata, so the provider must
- *  never exceed this limit on the Vectorize path. */
-export const MAX_METADATA_TOP_K = 20;
+import type { VectorMatch, VectorStore } from "./store";
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
 
-const toResult = (match: VectorizeMatch): ToolDiscoveryResult => {
+const toResult = (match: VectorMatch): ToolDiscoveryResult => {
   const description = asString(match.metadata?.description);
   return {
     path: asString(match.metadata?.path),
@@ -55,9 +50,9 @@ const matchesNamespace = (result: ToolDiscoveryResult, namespace: string | undef
  * `input.executor` is unused — results come from the index, not a live catalog
  * scan. `input.namespace` narrows the page to an integration/path prefix.
  */
-export const makeVectorizeToolDiscoveryProvider = (deps: {
+export const makeVectorToolDiscoveryProvider = (deps: {
   readonly embedder: ToolEmbedder;
-  readonly store: VectorizeStore;
+  readonly store: VectorStore;
   readonly namespace: string;
 }): ToolDiscoveryProvider => ({
   searchTools: ({ query, namespace, limit, offset }) =>
@@ -72,10 +67,9 @@ export const makeVectorizeToolDiscoveryProvider = (deps: {
       const matches = yield* deps.store.query({
         vector,
         namespace: deps.namespace,
-        // Cloudflare caps topK at 20 when returnMetadata:"all" is used (the
-        // store always sets it).  MAX_TOP_K (100) is kept for non-metadata
-        // paths; the metadata path must respect MAX_METADATA_TOP_K.
-        topK: MAX_METADATA_TOP_K,
+        // Use the store's own cap — each backend (Vectorize, zvec, etc.)
+        // declares its maximum via `maxTopK` on the VectorStore interface.
+        topK: deps.store.maxTopK,
       });
       const mapped = matches
         .filter((match) => asString(match.metadata?.path).length > 0)

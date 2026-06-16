@@ -1,12 +1,12 @@
 import { Effect } from "effect";
 
-import { VectorizeSearchError } from "./errors";
-import type { VectorizeMatch, VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import { SemanticSearchError } from "./errors";
+import type { VectorMatch, VectorStore, VectorInput } from "./store";
 
 // ---------------------------------------------------------------------------
-// zvec-backed VectorizeStore — a local, in-process, file-backed ANN index
+// zvec-backed VectorStore — a local, in-process, file-backed ANN index
 // (@zvec/zvec, HNSW + cosine). A real local backend for developing + bench-
-// marking the search logic without Cloudflare; the same `VectorizeStore` shape
+// marking the search logic without Cloudflare; the same `VectorStore` shape
 // the production Vectorize binding satisfies.
 //
 // Two zvec specifics handled here:
@@ -87,8 +87,8 @@ const toMatches = (
   rows: readonly ZVecQueryRow[],
   namespace: string,
   topK: number,
-): readonly VectorizeMatch[] => {
-  const out: VectorizeMatch[] = [];
+): readonly VectorMatch[] => {
+  const out: VectorMatch[] = [];
   for (const row of rows) {
     const ns = String(row.fields?.namespace ?? "");
     if (ns !== namespace) continue;
@@ -106,16 +106,18 @@ const toMatches = (
   return out;
 };
 
-export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
+export const makeZVecStore = (options: ZVecStoreOptions): VectorStore => {
   let cached: Promise<OpenedCollection> | null = null;
   const getCollection = Effect.tryPromise({
     try: () => (cached ??= openCollection(options)),
     catch: (cause) =>
-      new VectorizeSearchError({ message: `zvec open/create failed at ${options.path}.`, cause }),
+      new SemanticSearchError({ message: `zvec open/create failed at ${options.path}.`, cause }),
   });
 
   return {
-    upsert: (vectors: readonly VectorizeVectorInput[]) =>
+    // zvec/HNSW has no hard metadata-fetch cap — expose a generous limit.
+    maxTopK: 200,
+    upsert: (vectors: readonly VectorInput[]) =>
       vectors.length === 0
         ? Effect.void
         : getCollection.pipe(
@@ -133,7 +135,7 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
                     })),
                   ),
                 catch: (cause) =>
-                  new VectorizeSearchError({ message: "zvec upsert failed.", cause }),
+                  new SemanticSearchError({ message: "zvec upsert failed.", cause }),
               }),
             ),
             Effect.asVoid,
@@ -152,7 +154,7 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
                 outputFields: ["namespace", "metadataJson"],
                 params: { indexType: opened.indexType, ef: opened.ef },
               }),
-            catch: (cause) => new VectorizeSearchError({ message: "zvec query failed.", cause }),
+            catch: (cause) => new SemanticSearchError({ message: "zvec query failed.", cause }),
           }).pipe(Effect.map((rows) => toMatches(rows, namespace, topK))),
         ),
       ),
@@ -165,7 +167,7 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
               Effect.try({
                 try: () => opened.coll.deleteSync([...ids]),
                 catch: (cause) =>
-                  new VectorizeSearchError({ message: "zvec delete failed.", cause }),
+                  new SemanticSearchError({ message: "zvec delete failed.", cause }),
               }),
             ),
             Effect.asVoid,

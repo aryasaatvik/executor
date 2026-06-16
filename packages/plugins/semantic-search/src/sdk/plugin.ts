@@ -4,18 +4,18 @@ import { Effect } from "effect";
 import { type Chunker, makeFacetChunker } from "./chunker";
 import { toolFingerprints } from "./collections";
 import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
-import { VectorizeSearchError } from "./errors";
+import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import { reconcileToolCatalog, type ReconcileResult } from "./indexer";
-import { makeVectorizeToolDiscoveryProvider } from "./provider";
-import { withCloudflareLimits } from "./store-cloudflare-limits";
-import { makeVectorizeStore, type VectorizeIndex, type VectorizeStore } from "./vectorize";
+import { makeVectorToolDiscoveryProvider } from "./provider";
+import type { VectorStore } from "./store";
 
-export interface VectorizeSearchPluginOptions {
-  /** The Cloudflare Vectorize binding the tool catalog is indexed into. Absent
-   *  (binding unbound) → the plugin is inert and the engine keeps its built-in
-   *  lexical search, mirroring how the metrics plugin no-ops without its binding. */
-  readonly vectorize?: VectorizeIndex;
+export interface SemanticSearchPluginOptions {
+  /** A vector store — construct one with `makeVectorizeStore` (Cloudflare),
+   *  `makeZVecStore` (local/dev), or any other `VectorStore` implementation.
+   *  Absent → the plugin is inert and the engine keeps its built-in lexical
+   *  search, mirroring how the metrics plugin no-ops without its binding. */
+  readonly store?: VectorStore;
   /** Gemini API key (a wrangler secret on the Cloudflare host). Absent → inert,
    *  unless a custom `embedder` is supplied. */
   readonly geminiApiKey?: string;
@@ -25,7 +25,7 @@ export interface VectorizeSearchPluginOptions {
   readonly namespace?: string;
   /** Gemini embedding model id. Defaults to the v2 model (see embedder). */
   readonly model?: string;
-  /** Embedding dimensionality — MUST equal the Vectorize index's dimensions. */
+  /** Embedding dimensionality — MUST equal the vector index's dimensions. */
   readonly dimensions?: number;
   /** Inject a custom embedder (tests). Overrides `model`/`geminiApiKey`/`dimensions`. */
   readonly embedder?: ToolEmbedder;
@@ -41,29 +41,28 @@ export interface VectorizeSearchPluginOptions {
   readonly lexical?: ToolDiscoveryProvider;
 }
 
-const notConfigured = (): Effect.Effect<never, VectorizeSearchError> =>
+const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
   Effect.fail(
-    new VectorizeSearchError({
-      message:
-        "Vectorize search is not configured (missing the Vectorize binding or Gemini API key).",
+    new SemanticSearchError({
+      message: "Semantic search is not configured (missing the vector store or Gemini API key).",
     }),
   );
 
-/** Build the `executor.vectorizeSearch` surface. `reindex` reconciles the
+/** Build the `executor.semanticSearch` surface. `reindex` reconciles the
  *  current tool catalog incrementally (fingerprint diff) and upserts changed
- *  tools into Vectorize; it takes the scoped executor as an argument because
- *  only the request/API layer holds it (the plugin ctx does not expose the
- *  catalog). Inert — `reindex` fails clearly — until both a Vectorize binding
+ *  tools into the vector store; it takes the scoped executor as an argument
+ *  because only the request/API layer holds it (the plugin ctx does not expose
+ *  the catalog). Inert — `reindex` fails clearly — until both a vector store
  *  and an embedder are present. */
-const makeVectorizeSearchExtension = (deps: {
+const makeSemanticSearchExtension = (deps: {
   readonly namespace: string;
   readonly embedder: ToolEmbedder | undefined;
-  readonly store: VectorizeStore | undefined;
+  readonly store: VectorStore | undefined;
   readonly chunker: Chunker;
   readonly fingerprints: Parameters<typeof reconcileToolCatalog>[0]["fingerprints"] | undefined;
   readonly owner: Parameters<typeof reconcileToolCatalog>[0]["owner"] | undefined;
 }) => ({
-  reindex: (executor: Executor): Effect.Effect<ReconcileResult, VectorizeSearchError> =>
+  reindex: (executor: Executor): Effect.Effect<ReconcileResult, SemanticSearchError> =>
     deps.embedder && deps.store && deps.fingerprints && deps.owner
       ? reconcileToolCatalog({
           namespace: deps.namespace,
@@ -77,22 +76,22 @@ const makeVectorizeSearchExtension = (deps: {
       : notConfigured(),
 });
 
-/** The `executor.vectorizeSearch` surface, derived from its factory. */
-export type VectorizeSearchExtension = ReturnType<typeof makeVectorizeSearchExtension>;
+/** The `executor.semanticSearch` surface, derived from its factory. */
+export type SemanticSearchExtension = ReturnType<typeof makeSemanticSearchExtension>;
 
 /**
- * Semantic `tools.search` backed by Cloudflare Vectorize + Gemini embeddings.
+ * Semantic `tools.search` backed by a vector store + Gemini embeddings.
  * Supplies a `runtime.toolDiscoveryProvider`, so it supersedes the engine's
  * built-in lexical scorer wherever it is registered. The tool catalog is
  * indexed explicitly via the `reindex` extension method (see the `/api` subpath
  * for the HTTP route).
  *
- * When both an embedder and Vectorize binding are present, the plugin exposes a
+ * When both an embedder and a vector store are present, the plugin exposes a
  * discovery provider. If the host also supplies `lexical`, that provider and the
  * vector provider are fused with Reciprocal Rank Fusion (hybrid search);
  * otherwise the vector provider answers alone.
  */
-export const vectorizeSearchPlugin = definePlugin((options?: VectorizeSearchPluginOptions) => {
+export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPluginOptions) => {
   const namespace = options?.namespace ?? "default";
   const embedder =
     options?.embedder ??
@@ -103,20 +102,15 @@ export const vectorizeSearchPlugin = definePlugin((options?: VectorizeSearchPlug
           dimensions: options.dimensions,
         })
       : undefined);
-  // Inert without both a Vectorize binding and an embedder — the engine then
+  // Inert without both a vector store and an embedder — the engine then
   // keeps its built-in lexical search (mirrors the metrics plugin's no-op).
-  // The store is wrapped so Cloudflare's hard limits (64-byte ids, topK ≤ 20
-  // with full metadata) fail loudly at the boundary rather than as opaque
-  // Vectorize 4xx errors deep in a reindex.
-  const store = options?.vectorize
-    ? withCloudflareLimits(makeVectorizeStore(options.vectorize))
-    : undefined;
+  const store = options?.store;
   const chunker = options?.chunker ?? makeFacetChunker();
   const lexical = options?.lexical;
 
   return {
-    id: "vectorizeSearch" as const,
-    packageName: "@executor-js/plugin-vectorize-search",
+    id: "semanticSearch" as const,
+    packageName: "@executor-js/plugin-semantic-search",
     pluginStorage: { toolFingerprints },
     storage: (deps) => ({
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
@@ -127,7 +121,7 @@ export const vectorizeSearchPlugin = definePlugin((options?: VectorizeSearchPlug
       owner: "org" as const,
     }),
     extension: (ctx) =>
-      makeVectorizeSearchExtension({
+      makeSemanticSearchExtension({
         namespace,
         embedder,
         store,
@@ -138,7 +132,7 @@ export const vectorizeSearchPlugin = definePlugin((options?: VectorizeSearchPlug
     runtime: {
       toolDiscoveryProvider: () => {
         if (!embedder || !store) return undefined;
-        const vector = makeVectorizeToolDiscoveryProvider({ embedder, store, namespace });
+        const vector = makeVectorToolDiscoveryProvider({ embedder, store, namespace });
         // Fuse with the host-supplied lexical provider (RRF) when present; else
         // the vector provider answers alone.
         return lexical ? makeHybridToolDiscoveryProvider({ lexical, vector }) : vector;

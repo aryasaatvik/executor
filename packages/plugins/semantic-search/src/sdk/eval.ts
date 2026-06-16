@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { Cause, Effect, Exit, Layer } from "effect";
 
 import { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
@@ -29,6 +30,13 @@ import { GOLDEN } from "./eval-golden";
 //   EMBEDDER=gemini GEMINI_API_KEY=… CHUNKER=facet bun run …/eval.ts
 //
 // Precision@1 and precision@5 are printed against GOLDEN (eval-golden.ts).
+//
+// CATALOG env controls which tool catalog is loaded:
+//   CATALOG=sample  (default) — 13 hand-written sample tools
+//   CATALOG=real    — all tools from ~/.executor/data.db (5 505 tools)
+//
+// CATALOG_LIMIT=N caps the real catalog to the first N rows (after always
+// including every tool referenced by the golden set).
 // ---------------------------------------------------------------------------
 
 const NAMESPACE = "default";
@@ -329,6 +337,91 @@ const SAMPLE: readonly ToolDocumentInput[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Real catalog loader — reads from ~/.executor/data.db via bun:sqlite.
+//
+// path convention: "<integration>.<name>" so golden expectedPath values
+// like "github.repos.createForAuthenticatedUser" resolve unambiguously.
+//
+// CATALOG_LIMIT caps the number of tools loaded, but always includes the
+// tools referenced by the golden set (so precision metrics are valid).
+// ---------------------------------------------------------------------------
+
+interface DbToolRow {
+  integration: string;
+  name: string;
+  description: string;
+  // bun:sqlite returns BLOB columns as Buffer; TEXT columns come as string.
+  input_schema: string | Buffer | null;
+  output_schema: string | Buffer | null;
+}
+
+/** Coerce a bun:sqlite column value (string | Buffer | null) to string | undefined. */
+const colToString = (v: string | Buffer | null): string | undefined => {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return v || undefined;
+  // Buffer / Uint8Array — decode as UTF-8.
+  return new TextDecoder().decode(v) || undefined;
+};
+
+const loadRealCatalog = (): readonly ToolDocumentInput[] => {
+  // Dynamic import so bun:sqlite is never referenced when CATALOG=sample.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+
+  const dbPath = (process.env.DATA_DB_PATH ?? `${homedir()}/.executor/data.db`).replace(
+    /^~/,
+    homedir(),
+  );
+  const db = new Database(dbPath, { readonly: true });
+
+  const rows = db
+    .query<DbToolRow, []>(
+      "SELECT integration, name, description, input_schema, output_schema FROM tool",
+    )
+    .all();
+
+  db.close();
+
+  // Build a set of paths that the golden set demands are always present.
+  const goldenPaths = new Set(GOLDEN.map((g) => g.expectedPath));
+
+  const tools: ToolDocumentInput[] = [];
+  const limit = process.env.CATALOG_LIMIT ? Number(process.env.CATALOG_LIMIT) : Infinity;
+  let nonGoldenCount = 0;
+
+  for (const row of rows) {
+    const path = `${row.integration}.${row.name}`;
+    const isGolden = goldenPaths.has(path);
+
+    if (!isGolden) {
+      if (nonGoldenCount >= limit) continue;
+      nonGoldenCount++;
+    }
+
+    const inputTs = colToString(row.input_schema);
+    const outputTs = colToString(row.output_schema);
+
+    tools.push({
+      path,
+      name: row.name,
+      integration: row.integration,
+      description: (colToString(row.description as string | Buffer | null) ?? "").trim(),
+      inputTypeScript: inputTs ? inputTs.slice(0, 1500) : undefined,
+      outputTypeScript: outputTs ? outputTs.slice(0, 1500) : undefined,
+    });
+  }
+
+  return tools;
+};
+
+// ---------------------------------------------------------------------------
+// Active catalog — chosen by CATALOG env (default: sample)
+// ---------------------------------------------------------------------------
+
+const CATALOG_KIND = process.env.CATALOG ?? "sample";
+const CATALOG: readonly ToolDocumentInput[] = CATALOG_KIND === "real" ? loadRealCatalog() : SAMPLE;
+
+// ---------------------------------------------------------------------------
 // Precision metrics
 // ---------------------------------------------------------------------------
 
@@ -354,13 +447,14 @@ const program = Effect.gen(function* () {
   // -------------------------------------------------------------------------
   // Phase 1 — Chunk + embed + upsert
   // -------------------------------------------------------------------------
-  const allChunks = SAMPLE.flatMap((doc) => chunker.chunk(NAMESPACE, doc));
+  const allChunks = CATALOG.flatMap((doc) => chunker.chunk(NAMESPACE, doc));
 
   yield* Effect.sync(() => {
-    console.log(`\n=== chunking (chunker=${CHUNKER_KIND}) ===`);
-    console.log(`tools=${SAMPLE.length}  chunks=${allChunks.length}`);
-    // Report per-tool chunk breakdown.
-    for (const doc of SAMPLE) {
+    console.log(`\n=== chunking (catalog=${CATALOG_KIND}, chunker=${CHUNKER_KIND}) ===`);
+    console.log(`tools=${CATALOG.length}  chunks=${allChunks.length}`);
+    // Report per-tool chunk breakdown (skip for large catalogs to avoid noise).
+    const multiChunkDocs = CATALOG_KIND === "real" ? [] : CATALOG;
+    for (const doc of multiChunkDocs) {
       const cs = chunker.chunk(NAMESPACE, doc);
       if (cs.length > 1) {
         const facetSummary = cs.map((c) => c.facet).join(", ");
@@ -371,20 +465,23 @@ const program = Effect.gen(function* () {
 
   const vectors = yield* embedder.embedDocuments(allChunks.map((c) => c.embeddingText));
 
-  yield* store.upsert(
-    allChunks.map((c, i) => ({
-      id: c.id,
-      values: [...vectors[i]!],
-      namespace: NAMESPACE,
-      metadata: {
-        path: c.path,
-        name: c.name,
-        integration: c.integration,
-        facet: c.facet,
-        chunkIndex: c.chunkIndex,
-      },
-    })),
-  );
+  // Batch upserts to respect zvec's 1 024-doc-per-call limit.
+  const UPSERT_BATCH = 1024;
+  const allVectors = allChunks.map((c, i) => ({
+    id: c.id,
+    values: [...vectors[i]!],
+    namespace: NAMESPACE,
+    metadata: {
+      path: c.path,
+      name: c.name,
+      integration: c.integration,
+      facet: c.facet,
+      chunkIndex: c.chunkIndex,
+    },
+  }));
+  for (let batchStart = 0; batchStart < allVectors.length; batchStart += UPSERT_BATCH) {
+    yield* store.upsert(allVectors.slice(batchStart, batchStart + UPSERT_BATCH));
+  }
 
   // -------------------------------------------------------------------------
   // Phase 2 — Query, dedup by path (best score), top 5
@@ -433,7 +530,7 @@ const program = Effect.gen(function* () {
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3 — Precision@1 and precision@5 against the golden set
+  // Phase 3 — Precision@1 and recall@5 against the golden set
   // -------------------------------------------------------------------------
   let sumP1 = 0;
   let sumP5 = 0;
@@ -445,13 +542,14 @@ const program = Effect.gen(function* () {
   for (const golden of GOLDEN) {
     const ranked = rankedByQuery.get(golden.query) ?? [];
     const p1 = ranked[0] === golden.expectedPath ? 1 : 0;
-    const p5 = computePrecision(ranked, golden.expectedTop5, 5);
+    // recall@5: is the single expected tool in the top 5 (1/0)
+    const p5 = computePrecision(ranked, [golden.expectedPath], 5);
     sumP1 += p1;
     sumP5 += p5;
 
     yield* Effect.sync(() => {
       const hit1 = p1 === 1 ? "✓" : "✗";
-      console.log(`  ${hit1} [P@1=${p1}  P@5=${p5.toFixed(2)}]  "${golden.query}"`);
+      console.log(`  ${hit1} [P@1=${p1}  R@5=${p5}]  "${golden.query}"`);
       if (p1 === 0) {
         console.log(`      expected: ${golden.expectedPath}`);
         console.log(`      got:      ${ranked[0] ?? "(none)"}`);
@@ -465,7 +563,10 @@ const program = Effect.gen(function* () {
 
   yield* Effect.sync(() => {
     console.log(
-      `\nprecision@1=${avgP1.toFixed(3)}  precision@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model})`,
+      `\nprecision@1=${avgP1.toFixed(3)}  recall@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model})`,
+    );
+    console.log(
+      `catalog=${CATALOG_KIND}${CATALOG_KIND === "real" && process.env.CATALOG_LIMIT ? `  limit=${process.env.CATALOG_LIMIT}` : ""}`,
     );
     if (embedder.model.startsWith("hash")) {
       console.log(

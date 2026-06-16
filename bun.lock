@@ -171,8 +171,8 @@
         "@executor-js/plugin-graphql": "workspace:*",
         "@executor-js/plugin-mcp": "workspace:*",
         "@executor-js/plugin-openapi": "workspace:*",
+        "@executor-js/plugin-semantic-search": "workspace:*",
         "@executor-js/plugin-service-tokens": "workspace:*",
-        "@executor-js/plugin-vectorize-search": "workspace:*",
         "@executor-js/react": "workspace:*",
         "@executor-js/runtime-quickjs": "workspace:*",
         "@executor-js/sdk": "workspace:*",
@@ -1081,6 +1081,32 @@
         "react",
       ],
     },
+    "packages/plugins/semantic-search": {
+      "name": "@executor-js/plugin-semantic-search",
+      "version": "0.0.0",
+      "dependencies": {
+        "@ai-sdk/google": "^3.0.80",
+        "@executor-js/sdk": "workspace:*",
+        "ai": "^6.0.191",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "^4.20250620.0",
+        "@effect/vitest": "catalog:",
+        "@executor-js/api": "workspace:*",
+        "@types/node": "catalog:",
+        "@zvec/zvec": "^0.4.1",
+        "bun-types": "catalog:",
+        "tsup": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@executor-js/api": "workspace:*",
+      },
+      "optionalPeers": [
+        "@executor-js/api",
+      ],
+    },
     "packages/plugins/service-tokens": {
       "name": "@executor-js/plugin-service-tokens",
       "version": "1.5.3",
@@ -1112,32 +1138,6 @@
         "@effect/atom-react",
         "@executor-js/react",
         "react",
-      ],
-    },
-    "packages/plugins/vectorize-search": {
-      "name": "@executor-js/plugin-vectorize-search",
-      "version": "0.0.0",
-      "dependencies": {
-        "@ai-sdk/google": "^3.0.80",
-        "@executor-js/sdk": "workspace:*",
-        "ai": "^6.0.191",
-        "effect": "catalog:",
-      },
-      "devDependencies": {
-        "@cloudflare/workers-types": "^4.20250620.0",
-        "@effect/vitest": "catalog:",
-        "@executor-js/api": "workspace:*",
-        "@types/node": "catalog:",
-        "@zvec/zvec": "^0.4.1",
-        "bun-types": "catalog:",
-        "tsup": "catalog:",
-        "vitest": "catalog:",
-      },
-      "peerDependencies": {
-        "@executor-js/api": "workspace:*",
-      },
-      "optionalPeers": [
-        "@executor-js/api",
       ],
     },
     "packages/plugins/workos-vault": {
@@ -1741,9 +1741,9 @@
 
     "@executor-js/plugin-openapi": ["@executor-js/plugin-openapi@workspace:packages/plugins/openapi"],
 
-    "@executor-js/plugin-service-tokens": ["@executor-js/plugin-service-tokens@workspace:packages/plugins/service-tokens"],
+    "@executor-js/plugin-semantic-search": ["@executor-js/plugin-semantic-search@workspace:packages/plugins/semantic-search"],
 
-    "@executor-js/plugin-vectorize-search": ["@executor-js/plugin-vectorize-search@workspace:packages/plugins/vectorize-search"],
+    "@executor-js/plugin-service-tokens": ["@executor-js/plugin-service-tokens@workspace:packages/plugins/service-tokens"],
 
     "@executor-js/plugin-workos-vault": ["@executor-js/plugin-workos-vault@workspace:packages/plugins/workos-vault"],
 
