@@ -10,16 +10,19 @@ import { InternalError } from "@executor-js/api";
 // matching the execution-history/graphql convention — the per-request executor
 // is already owner-scoped at the host edge, so there is no `:scopeId` segment.
 //
-// Reindex takes no body: it embeds the whole tool catalog for the scoped tenant
-// and upserts it into Vectorize. `VectorizeSearchError` on the extension flows
-// through the typed channel and `capture` downgrades it to `InternalError`.
+// Reindex takes no body: it reconciles the whole tool catalog for the scoped
+// tenant against Vectorize (incremental fingerprint diff). `VectorizeSearchError`
+// on the extension flows through the typed channel and `capture` downgrades it
+// to `InternalError`.
 // ---------------------------------------------------------------------------
 
-/** Result of a reindex: the namespace touched + the number of tools embedded
- *  and upserted into Vectorize. */
+/** Result of a reindex reconcile: counts for each category of tool processed. */
 export const ReindexResponse = Schema.Struct({
   namespace: Schema.String,
-  indexedToolCount: Schema.Number,
+  total: Schema.Number,
+  reembedded: Schema.Number,
+  unchanged: Schema.Number,
+  removedSkipped: Schema.Number,
 });
 
 export const VectorizeSearchGroup = HttpApiGroup.make("vectorizeSearch").add(
