@@ -14,7 +14,7 @@ import {
 // ---------------------------------------------------------------------------
 
 export class ChunkerService extends Context.Service<ChunkerService, Chunker>()(
-  "@executor-js/plugin-vectorize-search/ChunkerService",
+  "@executor-js/plugin-semantic-search/ChunkerService",
 ) {}
 
 export const facetChunkerLayer = (options?: FacetChunkerOptions): Layer.Layer<ChunkerService> =>

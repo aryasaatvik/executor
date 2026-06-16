@@ -2,14 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
-import { makeVectorizeToolDiscoveryProvider } from "./provider";
-import { makeVectorizeStore } from "./vectorize";
-import type {
-  VectorizeIndex,
-  VectorizeMatch,
-  VectorizeStore,
-  VectorizeVectorInput,
-} from "./vectorize";
+import { makeVectorToolDiscoveryProvider } from "./provider";
+import { makeVectorizeStore } from "./store-cloudflare";
+import type { VectorizeIndex } from "./store-cloudflare";
+import type { VectorMatch, VectorStore, VectorInput } from "./store";
 
 const fakeEmbedder: ToolEmbedder = {
   model: "test",
@@ -20,24 +16,25 @@ const fakeEmbedder: ToolEmbedder = {
 
 // The fake store honours topK (slicing to it) so pagination is exercised against
 // a realistic window — a store that ignored topK would mask hasMore bugs.
-const makeQueryStore = (matches: readonly VectorizeMatch[]): VectorizeStore => ({
+const makeQueryStore = (matches: readonly VectorMatch[]): VectorStore => ({
+  maxTopK: 20,
   query: ({ topK }) => Effect.succeed(matches.slice(0, topK)),
   upsert: () => Effect.void,
   deleteByIds: () => Effect.void,
 });
 
-const matchIn = (path: string, integration: string, score: number): VectorizeMatch => ({
+const matchIn = (path: string, integration: string, score: number): VectorMatch => ({
   id: `org#${path}`,
   score,
   metadata: { path, name: path, description: `desc ${path}`, integration },
 });
 
-const match = (path: string, score: number): VectorizeMatch => matchIn(path, "github", score);
+const match = (path: string, score: number): VectorMatch => matchIn(path, "github", score);
 
-describe("makeVectorizeToolDiscoveryProvider", () => {
+describe("makeVectorToolDiscoveryProvider", () => {
   it.effect("maps Vectorize matches to ToolDiscoveryResult", () =>
     Effect.gen(function* () {
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([match("repos.get", 0.9), match("repos.list", 0.8)]),
         namespace: "org",
@@ -64,7 +61,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
 
   it.effect("paginates within the returned matches", () =>
     Effect.gen(function* () {
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([match("a", 0.9), match("b", 0.8), match("c", 0.7)]),
         namespace: "org",
@@ -83,7 +80,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
 
   it.effect("reports hasMore on a full first page", () =>
     Effect.gen(function* () {
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([match("a", 0.9), match("b", 0.8), match("c", 0.7)]),
         namespace: "org",
@@ -102,7 +99,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
 
   it.effect("narrows results to input.namespace (integration prefix)", () =>
     Effect.gen(function* () {
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([
           matchIn("github.repos.get", "github", 0.9),
@@ -129,7 +126,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
   it.effect("keeps hasMore correct when the namespace filter drops interspersed items", () =>
     Effect.gen(function* () {
       // Greptile scenario: a non-matching item sits where a tight probe would be.
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([
           matchIn("github.a", "github", 0.9),
@@ -154,7 +151,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
 
   it.effect("returns empty for a blank query (no embedding call)", () =>
     Effect.gen(function* () {
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: {
           ...fakeEmbedder,
           embedQuery: () => Effect.die("embedQuery must not be called for a blank query") as never,
@@ -177,7 +174,7 @@ describe("makeVectorizeToolDiscoveryProvider", () => {
     Effect.gen(function* () {
       // The facet chunker indexes a tool as several chunks, so the same path can
       // come back more than once — the provider must collapse to the best score.
-      const provider = makeVectorizeToolDiscoveryProvider({
+      const provider = makeVectorToolDiscoveryProvider({
         embedder: fakeEmbedder,
         store: makeQueryStore([
           match("repos.get", 0.6), // identity-facet chunk
@@ -212,7 +209,7 @@ describe("makeVectorizeStore", () => {
         deleteByIds: () => Promise.resolve({}),
       };
       const store = makeVectorizeStore(index);
-      const vectors: readonly VectorizeVectorInput[] = Array.from({ length: 120 }, (_, i) => ({
+      const vectors: readonly VectorInput[] = Array.from({ length: 120 }, (_, i) => ({
         id: `v${i}`,
         values: [0, 0, 0],
       }));

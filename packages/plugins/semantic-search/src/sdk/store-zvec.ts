@@ -1,12 +1,12 @@
 import { Effect } from "effect";
 
-import { VectorizeSearchError } from "./errors";
-import type { VectorizeMatch, VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import { SemanticSearchError } from "./errors";
+import type { VectorMatch, VectorStore, VectorInput } from "./store";
 
 // ---------------------------------------------------------------------------
-// zvec-backed VectorizeStore — a local, in-process, file-backed ANN index
+// zvec-backed VectorStore — a local, in-process, file-backed ANN index
 // (@zvec/zvec, HNSW + cosine). A real local backend for developing + bench-
-// marking the search logic without Cloudflare; the same `VectorizeStore` shape
+// marking the search logic without Cloudflare; the same `VectorStore` shape
 // the production Vectorize binding satisfies.
 //
 // Two zvec specifics handled here:
@@ -24,6 +24,11 @@ export interface ZVecStoreOptions {
   /** Collection directory on disk. */
   readonly path: string;
   readonly dimensions: number;
+  /** Index type. "flat" = exact brute-force (lossless, fast for catalogs up to
+   *  ~tens of thousands of vectors — the right default for tool search). "hnsw" =
+   *  approximate ANN, only worth it past ~100k vectors (and can lose recall at
+   *  small scale). Default "flat". */
+  readonly index?: "flat" | "hnsw";
   readonly hnswM?: number;
   readonly hnswEfConstruction?: number;
   readonly hnswEf?: number;
@@ -43,25 +48,33 @@ interface ZVecCollection {
 
 interface OpenedCollection {
   readonly coll: ZVecCollection;
-  readonly ef: number;
-  readonly indexType: unknown;
+  /** Query-time params for HNSW (indexType + ef); undefined for FLAT (exact —
+   *  zvec rejects a FLAT indexType in QueryParams). */
+  readonly queryParams: Record<string, unknown> | undefined;
 }
 
 const openCollection = async (options: ZVecStoreOptions): Promise<OpenedCollection> => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- native addon, no shipped types
   const zvec = (await import("@zvec/zvec")) as any;
+  const useHnsw = options.index === "hnsw";
+  const indexParams = useHnsw
+    ? {
+        indexType: zvec.ZVecIndexType.HNSW,
+        metricType: zvec.ZVecMetricType.COSINE,
+        m: options.hnswM ?? 32,
+        efConstruction: options.hnswEfConstruction ?? 200,
+      }
+    : {
+        indexType: zvec.ZVecIndexType.FLAT,
+        metricType: zvec.ZVecMetricType.COSINE,
+      };
   const schema = new zvec.ZVecCollectionSchema({
     name: "vectors",
     vectors: {
       name: "embedding",
       dataType: zvec.ZVecDataType.VECTOR_FP32,
       dimension: options.dimensions,
-      indexParams: {
-        indexType: zvec.ZVecIndexType.HNSW,
-        metricType: zvec.ZVecMetricType.COSINE,
-        m: options.hnswM ?? 32,
-        efConstruction: options.hnswEfConstruction ?? 200,
-      },
+      indexParams,
     },
     fields: [
       { name: "namespace", dataType: zvec.ZVecDataType.STRING },
@@ -80,15 +93,20 @@ const openCollection = async (options: ZVecStoreOptions): Promise<OpenedCollecti
       coll = zvec.ZVecOpen(options.path) as ZVecCollection;
     }
   }
-  return { coll, ef: options.hnswEf ?? 128, indexType: zvec.ZVecIndexType.HNSW };
+  return {
+    coll,
+    queryParams: useHnsw
+      ? { indexType: zvec.ZVecIndexType.HNSW, ef: options.hnswEf ?? 128 }
+      : undefined,
+  };
 };
 
 const toMatches = (
   rows: readonly ZVecQueryRow[],
   namespace: string,
   topK: number,
-): readonly VectorizeMatch[] => {
-  const out: VectorizeMatch[] = [];
+): readonly VectorMatch[] => {
+  const out: VectorMatch[] = [];
   for (const row of rows) {
     const ns = String(row.fields?.namespace ?? "");
     if (ns !== namespace) continue;
@@ -106,16 +124,18 @@ const toMatches = (
   return out;
 };
 
-export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
+export const makeZVecStore = (options: ZVecStoreOptions): VectorStore => {
   let cached: Promise<OpenedCollection> | null = null;
   const getCollection = Effect.tryPromise({
     try: () => (cached ??= openCollection(options)),
     catch: (cause) =>
-      new VectorizeSearchError({ message: `zvec open/create failed at ${options.path}.`, cause }),
+      new SemanticSearchError({ message: `zvec open/create failed at ${options.path}.`, cause }),
   });
 
   return {
-    upsert: (vectors: readonly VectorizeVectorInput[]) =>
+    // zvec/HNSW has no hard metadata-fetch cap — expose a generous limit.
+    maxTopK: 200,
+    upsert: (vectors: readonly VectorInput[]) =>
       vectors.length === 0
         ? Effect.void
         : getCollection.pipe(
@@ -133,7 +153,7 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
                     })),
                   ),
                 catch: (cause) =>
-                  new VectorizeSearchError({ message: "zvec upsert failed.", cause }),
+                  new SemanticSearchError({ message: "zvec upsert failed.", cause }),
               }),
             ),
             Effect.asVoid,
@@ -150,9 +170,10 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
                 // Over-fetch so the namespace post-filter still yields topK.
                 topk: Math.max(topK * 4, 40),
                 outputFields: ["namespace", "metadataJson"],
-                params: { indexType: opened.indexType, ef: opened.ef },
+                // FLAT (exact) takes no query params; HNSW takes indexType + ef.
+                ...(opened.queryParams ? { params: opened.queryParams } : {}),
               }),
-            catch: (cause) => new VectorizeSearchError({ message: "zvec query failed.", cause }),
+            catch: (cause) => new SemanticSearchError({ message: "zvec query failed.", cause }),
           }).pipe(Effect.map((rows) => toMatches(rows, namespace, topK))),
         ),
       ),
@@ -165,7 +186,7 @@ export const makeZVecStore = (options: ZVecStoreOptions): VectorizeStore => {
               Effect.try({
                 try: () => opened.coll.deleteSync([...ids]),
                 catch: (cause) =>
-                  new VectorizeSearchError({ message: "zvec delete failed.", cause }),
+                  new SemanticSearchError({ message: "zvec delete failed.", cause }),
               }),
             ),
             Effect.asVoid,

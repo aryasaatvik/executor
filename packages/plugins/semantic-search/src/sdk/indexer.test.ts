@@ -12,7 +12,7 @@ import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
 import type { ToolEmbedder } from "./embedder";
 import { reconcileToolCatalog } from "./indexer";
-import type { VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import type { VectorStore, VectorInput } from "./store";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -57,11 +57,12 @@ const makeExecutor = (
   } as unknown as Executor;
 };
 
-/** Build a fake VectorizeStore that records upserts and deletes. */
+/** Build a fake VectorStore that records upserts and deletes. */
 const makeStore = () => {
-  const upserted: VectorizeVectorInput[] = [];
+  const upserted: VectorInput[] = [];
   const deleted: string[] = [];
-  const store: VectorizeStore = {
+  const store: VectorStore = {
+    maxTopK: 200,
     query: () => Effect.succeed([]),
     upsert: (vectors) =>
       Effect.sync(() => {

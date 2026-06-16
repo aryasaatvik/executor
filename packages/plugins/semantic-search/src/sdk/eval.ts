@@ -1,15 +1,21 @@
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { Cause, Effect, Exit, Layer } from "effect";
 
 import { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
 import type { ToolDocumentInput } from "./chunker";
+import { stripHtml, buildLexicalText } from "./documents";
 import {
   EmbedderService,
   geminiEmbedderLayer,
   hashEmbedderLayer,
   openAiCompatibleEmbedderLayer,
 } from "./embedding-service";
-import { VectorStoreService, zvecStoreLayer } from "./store-service";
-import { GOLDEN } from "./eval-golden";
+import { VectorStoreService, zvecStoreLayer, sqliteVecStoreLayer } from "./store-service";
+import { GOLDEN, SAMPLE_GOLDEN } from "./eval-golden";
+import { makeFtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
+import { makeVectorToolDiscoveryProvider } from "./provider";
+import { makeHybridToolDiscoveryProvider } from "./hybrid";
 
 // ---------------------------------------------------------------------------
 // Relevance eval — exercises the facet chunker + embed + zvec pipeline locally
@@ -28,12 +34,23 @@ import { GOLDEN } from "./eval-golden";
 //   # Gemini (production parity):
 //   EMBEDDER=gemini GEMINI_API_KEY=… CHUNKER=facet bun run …/eval.ts
 //
-// Precision@1 and precision@5 are printed against GOLDEN (eval-golden.ts).
+// Precision@1 and precision@5 are printed against the catalog-matched golden set
+// (GOLDEN for CATALOG=real, SAMPLE_GOLDEN for CATALOG=sample; eval-golden.ts).
+//
+// CATALOG env controls which tool catalog is loaded:
+//   CATALOG=sample  (default) — 13 hand-written sample tools
+//   CATALOG=real    — all tools from ~/.executor/data.db (5 505 tools)
+//
+// CATALOG_LIMIT=N caps the real catalog to the first N rows (after always
+// including every tool referenced by the golden set).
 // ---------------------------------------------------------------------------
 
 const NAMESPACE = "default";
 const DIMENSIONS = Number(process.env.EMBEDDING_DIMENSIONS ?? 1536);
 const CHUNKER_KIND = process.env.CHUNKER ?? "facet";
+/** LEXICAL=none (default) — vector-only; LEXICAL=fts — FTS-hybrid via RRF. */
+const LEXICAL_KIND = (process.env.LEXICAL ?? "none") as "none" | "fts";
+const FTS_PATH = process.env.FTS_PATH ?? "/tmp/vectorize-eval-fts.sqlite";
 
 // ---------------------------------------------------------------------------
 // Sample catalog — realistic tool documents with input/output TypeScript so
@@ -329,6 +346,109 @@ const SAMPLE: readonly ToolDocumentInput[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Real catalog loader — reads from ~/.executor/data.db via bun:sqlite.
+//
+// path convention: "<integration>.<name>" so golden expectedPath values
+// like "github.repos.createForAuthenticatedUser" resolve unambiguously.
+//
+// CATALOG_LIMIT caps the number of tools loaded, but always includes the
+// tools referenced by the golden set (so precision metrics are valid).
+// ---------------------------------------------------------------------------
+
+interface DbToolRow {
+  integration: string;
+  name: string;
+  description: string;
+  // bun:sqlite returns BLOB columns as Buffer; TEXT columns come as string.
+  input_schema: string | Buffer | null;
+  output_schema: string | Buffer | null;
+}
+
+/** Coerce a bun:sqlite column value (string | Buffer | null) to string | undefined. */
+const colToString = (v: string | Buffer | null): string | undefined => {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "string") return v || undefined;
+  // Buffer / Uint8Array — decode as UTF-8.
+  return new TextDecoder().decode(v) || undefined;
+};
+
+const loadRealCatalog = (): readonly ToolDocumentInput[] => {
+  // Dynamic require so the sqlite module is only loaded when CATALOG=real.
+  // Supports both Bun (bun:sqlite) and Node.js (better-sqlite3).
+  const isBun = typeof Bun !== "undefined";
+
+  const dbPath = (process.env.DATA_DB_PATH ?? `${homedir()}/.executor/data.db`).replace(
+    /^~/,
+    homedir(),
+  );
+
+  let rows: DbToolRow[];
+
+  if (isBun) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Database } = require("bun:sqlite") as typeof import("bun:sqlite");
+    const db = new Database(dbPath, { readonly: true });
+    rows = db
+      .query<DbToolRow, []>(
+        "SELECT integration, name, description, input_schema, output_schema FROM tool",
+      )
+      .all();
+    db.close();
+  } else {
+    // Node.js path: use better-sqlite3 via createRequire (works in ESM).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary: better-sqlite3 not available in Bun
+    const NodeDb = createRequire(import.meta.url)("better-sqlite3") as any;
+    const db = new NodeDb(dbPath, { readonly: true });
+    rows = db
+      .prepare("SELECT integration, name, description, input_schema, output_schema FROM tool")
+      .all() as DbToolRow[];
+    db.close();
+  }
+
+  // Build a set of paths that the golden set demands are always present.
+  const goldenPaths = new Set(GOLDEN.map((g) => g.expectedPath));
+
+  const tools: ToolDocumentInput[] = [];
+  const limit = process.env.CATALOG_LIMIT ? Number(process.env.CATALOG_LIMIT) : Infinity;
+  let nonGoldenCount = 0;
+
+  for (const row of rows) {
+    const path = `${row.integration}.${row.name}`;
+    const isGolden = goldenPaths.has(path);
+
+    if (!isGolden) {
+      if (nonGoldenCount >= limit) continue;
+      nonGoldenCount++;
+    }
+
+    const inputTs = colToString(row.input_schema);
+    const outputTs = colToString(row.output_schema);
+
+    const doc: ToolDocumentInput = {
+      path,
+      name: row.name,
+      integration: row.integration,
+      description: stripHtml((colToString(row.description as string | Buffer | null) ?? "").trim()),
+      inputTypeScript: inputTs ? inputTs.slice(0, 1500) : undefined,
+      outputTypeScript: outputTs ? outputTs.slice(0, 1500) : undefined,
+    };
+
+    tools.push({ ...doc, lexicalText: buildLexicalText(doc) });
+  }
+
+  return tools;
+};
+
+// ---------------------------------------------------------------------------
+// Active catalog — chosen by CATALOG env (default: sample)
+// ---------------------------------------------------------------------------
+
+const CATALOG_KIND = process.env.CATALOG ?? "sample";
+const CATALOG: readonly ToolDocumentInput[] = CATALOG_KIND === "real" ? loadRealCatalog() : SAMPLE;
+// Golden set must match the active catalog's path format, or precision is all-zeros.
+const ACTIVE_GOLDEN = CATALOG_KIND === "real" ? GOLDEN : SAMPLE_GOLDEN;
+
+// ---------------------------------------------------------------------------
 // Precision metrics
 // ---------------------------------------------------------------------------
 
@@ -352,15 +472,18 @@ const program = Effect.gen(function* () {
   const chunker = yield* ChunkerService;
 
   // -------------------------------------------------------------------------
-  // Phase 1 — Chunk + embed + upsert
+  // Phase 1 — Chunk + embed + upsert (vector index)
   // -------------------------------------------------------------------------
-  const allChunks = SAMPLE.flatMap((doc) => chunker.chunk(NAMESPACE, doc));
+  const allChunks = CATALOG.flatMap((doc) => chunker.chunk(NAMESPACE, doc));
 
   yield* Effect.sync(() => {
-    console.log(`\n=== chunking (chunker=${CHUNKER_KIND}) ===`);
-    console.log(`tools=${SAMPLE.length}  chunks=${allChunks.length}`);
-    // Report per-tool chunk breakdown.
-    for (const doc of SAMPLE) {
+    console.log(
+      `\n=== chunking (catalog=${CATALOG_KIND}, chunker=${CHUNKER_KIND}, lexical=${LEXICAL_KIND}) ===`,
+    );
+    console.log(`tools=${CATALOG.length}  chunks=${allChunks.length}`);
+    // Report per-tool chunk breakdown (skip for large catalogs to avoid noise).
+    const multiChunkDocs = CATALOG_KIND === "real" ? [] : CATALOG;
+    for (const doc of multiChunkDocs) {
       const cs = chunker.chunk(NAMESPACE, doc);
       if (cs.length > 1) {
         const facetSummary = cs.map((c) => c.facet).join(", ");
@@ -371,25 +494,52 @@ const program = Effect.gen(function* () {
 
   const vectors = yield* embedder.embedDocuments(allChunks.map((c) => c.embeddingText));
 
-  yield* store.upsert(
-    allChunks.map((c, i) => ({
-      id: c.id,
-      values: [...vectors[i]!],
-      namespace: NAMESPACE,
-      metadata: {
-        path: c.path,
-        name: c.name,
-        integration: c.integration,
-        facet: c.facet,
-        chunkIndex: c.chunkIndex,
-      },
-    })),
-  );
+  // Batch upserts to respect zvec's 1 024-doc-per-call limit.
+  const UPSERT_BATCH = 1024;
+  const allVectors = allChunks.map((c, i) => ({
+    id: c.id,
+    values: [...vectors[i]!],
+    namespace: NAMESPACE,
+    metadata: {
+      path: c.path,
+      name: c.name,
+      integration: c.integration,
+      facet: c.facet,
+      chunkIndex: c.chunkIndex,
+    },
+  }));
+  for (let batchStart = 0; batchStart < allVectors.length; batchStart += UPSERT_BATCH) {
+    yield* store.upsert(allVectors.slice(batchStart, batchStart + UPSERT_BATCH));
+  }
+
+  // -------------------------------------------------------------------------
+  // Phase 1b — Build FTS index when LEXICAL=fts
+  // -------------------------------------------------------------------------
+  const ftsProvider =
+    LEXICAL_KIND === "fts"
+      ? yield* Effect.gen(function* () {
+          const ftsStore = makeFtsLexicalStore({ path: FTS_PATH });
+          const ftsDocs = CATALOG.map((doc) => ({
+            id: doc.path,
+            namespace: NAMESPACE,
+            path: doc.path,
+            name: doc.name,
+            description: doc.description,
+            integration: doc.integration,
+            lexicalText: doc.lexicalText ?? buildLexicalText(doc),
+          }));
+          yield* ftsStore.upsert(ftsDocs);
+          yield* Effect.sync(() =>
+            console.log(`FTS index built: ${ftsDocs.length} docs at ${FTS_PATH}`),
+          );
+          return makeFtsLexicalProvider(ftsStore, NAMESPACE);
+        })
+      : null;
 
   // -------------------------------------------------------------------------
   // Phase 2 — Query, dedup by path (best score), top 5
   // -------------------------------------------------------------------------
-  const allQueries = GOLDEN.map((g) => g.query);
+  const allQueries = ACTIVE_GOLDEN.map((g) => g.query);
 
   yield* Effect.sync(() =>
     console.log(`\n=== queries (embedder=${embedder.model}, dedup by path, top 5) ===`),
@@ -398,42 +548,75 @@ const program = Effect.gen(function* () {
   // Collect ranked results for precision computation.
   const rankedByQuery = new Map<string, readonly string[]>();
 
-  for (const q of allQueries) {
-    const qv = yield* embedder.embedQuery(q);
-    // Over-fetch so dedup-by-path still yields a full top-5 window.
-    const matches = yield* store.query({ vector: qv, namespace: NAMESPACE, topK: 50 });
+  // Build vector-only provider for use in hybrid mode.
+  const vectorProvider = makeVectorToolDiscoveryProvider({
+    embedder,
+    store,
+    namespace: NAMESPACE,
+  });
 
-    const best = new Map<string, { score: number; facet: string; chunkIndex: number }>();
-    for (const m of matches) {
-      const p = String(m.metadata?.path ?? "");
-      if (p === "") continue;
-      const prev = best.get(p);
-      if (!prev || m.score > prev.score) {
-        best.set(p, {
-          score: m.score,
-          facet: String(m.metadata?.facet ?? ""),
-          chunkIndex: Number(m.metadata?.chunkIndex ?? 0),
-        });
+  // If FTS provider is available, build the hybrid provider (RRF).
+  const activeProvider =
+    ftsProvider !== null
+      ? makeHybridToolDiscoveryProvider({ lexical: ftsProvider, vector: vectorProvider })
+      : null;
+
+  for (const q of allQueries) {
+    let ranked: readonly string[];
+
+    if (activeProvider !== null) {
+      // Hybrid path: use the fused provider.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- eval-only: providers don't use the executor
+      const page = yield* activeProvider.searchTools({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- eval-only: providers ignore executor
+        executor: null as any,
+        query: q,
+        // Do not pass namespace as a text filter: the vector provider interprets
+        // ToolDiscoveryInput.namespace as an integration-prefix filter, not a
+        // storage partition key. The FTS store's partition is baked into the
+        // store itself (all docs upserted under NAMESPACE = "default").
+        namespace: undefined,
+        limit: 5,
+        offset: 0,
+      });
+      ranked = page.items.map((r) => r.path);
+    } else {
+      // Vector-only path (original).
+      const qv = yield* embedder.embedQuery(q);
+      // Over-fetch so dedup-by-path still yields a full top-5 window.
+      const matches = yield* store.query({ vector: qv, namespace: NAMESPACE, topK: 50 });
+
+      const best = new Map<string, { score: number; facet: string; chunkIndex: number }>();
+      for (const m of matches) {
+        const p = String(m.metadata?.path ?? "");
+        if (p === "") continue;
+        const prev = best.get(p);
+        if (!prev || m.score > prev.score) {
+          best.set(p, {
+            score: m.score,
+            facet: String(m.metadata?.facet ?? ""),
+            chunkIndex: Number(m.metadata?.chunkIndex ?? 0),
+          });
+        }
       }
+      ranked = [...best.entries()]
+        .sort((a, b) => b[1].score - a[1].score)
+        .slice(0, 5)
+        .map(([p]) => p);
     }
 
-    const ranked = [...best.entries()].sort((a, b) => b[1].score - a[1].score).slice(0, 5);
-
-    rankedByQuery.set(
-      q,
-      ranked.map(([p]) => p),
-    );
+    rankedByQuery.set(q, ranked);
 
     yield* Effect.sync(() => {
       console.log(`\nQ: "${q}"`);
-      for (const [p, { score, facet, chunkIndex }] of ranked) {
-        console.log(`   ${score.toFixed(3)}  ${p}  (facet=${facet} chunk=${chunkIndex})`);
+      for (const p of ranked) {
+        console.log(`   ${p}`);
       }
     });
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3 — Precision@1 and precision@5 against the golden set
+  // Phase 3 — Precision@1 and recall@5 against the golden set
   // -------------------------------------------------------------------------
   let sumP1 = 0;
   let sumP5 = 0;
@@ -442,16 +625,17 @@ const program = Effect.gen(function* () {
     console.log(`\n=== precision summary (chunker=${CHUNKER_KIND}) ===`);
   });
 
-  for (const golden of GOLDEN) {
+  for (const golden of ACTIVE_GOLDEN) {
     const ranked = rankedByQuery.get(golden.query) ?? [];
     const p1 = ranked[0] === golden.expectedPath ? 1 : 0;
-    const p5 = computePrecision(ranked, golden.expectedTop5, 5);
+    // recall@5: is the single expected tool in the top 5 (1/0)
+    const p5 = computePrecision(ranked, [golden.expectedPath], 5);
     sumP1 += p1;
     sumP5 += p5;
 
     yield* Effect.sync(() => {
       const hit1 = p1 === 1 ? "✓" : "✗";
-      console.log(`  ${hit1} [P@1=${p1}  P@5=${p5.toFixed(2)}]  "${golden.query}"`);
+      console.log(`  ${hit1} [P@1=${p1}  R@5=${p5}]  "${golden.query}"`);
       if (p1 === 0) {
         console.log(`      expected: ${golden.expectedPath}`);
         console.log(`      got:      ${ranked[0] ?? "(none)"}`);
@@ -459,13 +643,16 @@ const program = Effect.gen(function* () {
     });
   }
 
-  const n = GOLDEN.length;
+  const n = ACTIVE_GOLDEN.length;
   const avgP1 = sumP1 / n;
   const avgP5 = sumP5 / n;
 
   yield* Effect.sync(() => {
     console.log(
-      `\nprecision@1=${avgP1.toFixed(3)}  precision@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model})`,
+      `\nprecision@1=${avgP1.toFixed(3)}  recall@5=${avgP5.toFixed(3)}  (${n} queries, chunker=${CHUNKER_KIND}, embedder=${embedder.model}, lexical=${LEXICAL_KIND})`,
+    );
+    console.log(
+      `catalog=${CATALOG_KIND}${CATALOG_KIND === "real" && process.env.CATALOG_LIMIT ? `  limit=${process.env.CATALOG_LIMIT}` : ""}`,
     );
     if (embedder.model.startsWith("hash")) {
       console.log(
@@ -498,7 +685,14 @@ const embedderLayer = (): Layer.Layer<EmbedderService> => {
 };
 
 const storeLayer = (): Layer.Layer<VectorStoreService> => {
-  // Default to zvec (no in-memory store — removed in P0).
+  const kind = process.env.STORE ?? "zvec";
+  if (kind === "sqlite-vec") {
+    return sqliteVecStoreLayer({
+      path: process.env.SQLITE_VEC_PATH ?? "/tmp/vectorize-eval.sqlite",
+      dimensions: DIMENSIONS,
+    });
+  }
+  // Default: zvec.
   return zvecStoreLayer({
     path: process.env.ZVEC_PATH ?? "/tmp/vectorize-eval.zvec",
     dimensions: DIMENSIONS,
