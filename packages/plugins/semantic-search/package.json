@@ -17,8 +17,7 @@
   "dependencies": {
     "@ai-sdk/google": "^3.0.80",
     "@executor-js/sdk": "workspace:*",
-    "ai": "^6.0.191",
-    "effect": "catalog:"
+    "ai": "^6.0.191"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
@@ -28,11 +27,13 @@
     "@types/node": "catalog:",
     "@zvec/zvec": "^0.4.1",
     "bun-types": "catalog:",
+    "effect": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@executor-js/api": "workspace:*"
+    "@executor-js/api": "workspace:*",
+    "effect": "catalog:"
   },
   "peerDependenciesMeta": {
     "@executor-js/api": {
