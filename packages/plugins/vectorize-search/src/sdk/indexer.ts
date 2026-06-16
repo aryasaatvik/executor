@@ -202,7 +202,11 @@ export const reconcileToolCatalog = (input: {
       }
     }
 
-    // Upsert all new vectors.
+    // Upsert all new vectors in one call. `store.upsert` (makeVectorizeStore)
+    // chunks internally into UPSERT_BATCH_SIZE (50) sequential batches, so the
+    // underlying Vectorize binding never receives more than 50 vectors per
+    // call — well under Cloudflare's 1,000-vector / 2 MB per-upsert caps —
+    // regardless of how many tools changed.
     yield* store.upsert(records);
 
     // Persist updated fingerprint rows.
