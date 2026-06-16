@@ -1128,6 +1128,7 @@
         "@effect/vitest": "catalog:",
         "@executor-js/api": "workspace:*",
         "@types/node": "catalog:",
+        "@zvec/zvec": "^0.4.1",
         "bun-types": "catalog:",
         "tsup": "catalog:",
         "vitest": "catalog:",
@@ -3109,6 +3110,16 @@
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.13", "", {}, "sha512-KRYzxepc14G/CEpEGc3Yn+JKaAeT63smlDr+vjB8jRfgTBBI9wRj/nkQEO+ucV8p8I9bfKLWp37uHgFrbntPvw=="],
 
     "@zip.js/zip.js": ["@zip.js/zip.js@2.8.26", "", {}, "sha512-RQ4h9F6DOiHxpdocUDrOl6xBM+yOtz+LkUol47AVWcfebGBDpZ7w7Xvz9PS24JgXvLGiXXzSAfdCdVy1tPlaFA=="],
+
+    "@zvec/bindings-darwin-arm64": ["@zvec/bindings-darwin-arm64@0.4.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-UZAUGEigHVAxeoqWuuS2QjiH7K8tQ6JV0AlAdbJiLdDvS3RTGtW2kxlxi9dmdwbF3cZOYOmzQYpwBQlvrjM70w=="],
+
+    "@zvec/bindings-linux-arm64": ["@zvec/bindings-linux-arm64@0.4.1", "", { "os": "linux", "cpu": "arm64" }, "sha512-3ZbvpSH2SdwLmMyK4KjpfBZkSVCgMf3XhbP2dEObVOHYjlC/BHIzg5ASuy3hk3Ei8HMYsCzSdZjUjF2KcmWSUA=="],
+
+    "@zvec/bindings-linux-x64": ["@zvec/bindings-linux-x64@0.4.1", "", { "os": "linux", "cpu": "x64" }, "sha512-bNakqv5q1l1E2s8IKFJ0j/tz+5IUOka/tWG7DQsWngBab0XwnOvCPuIXPSOpdEYM9C2B26cliK3DvGfMgRLh8Q=="],
+
+    "@zvec/bindings-win32-x64": ["@zvec/bindings-win32-x64@0.4.1", "", { "os": "win32", "cpu": "x64" }, "sha512-Pz/llUgPd2hvhA1UbrixWy4/x6pntsuA3aX42zLQKz/UOgJo2F2+h0TLa1Oye4yVsllXqdiGnvBY1oKz9zB3BA=="],
+
+    "@zvec/zvec": ["@zvec/zvec@0.4.1", "", { "dependencies": { "bindings": "^1.5.0" }, "optionalDependencies": { "@zvec/bindings-darwin-arm64": "0.4.1", "@zvec/bindings-linux-arm64": "0.4.1", "@zvec/bindings-linux-x64": "0.4.1", "@zvec/bindings-win32-x64": "0.4.1" } }, "sha512-Rh2XgVOuZy3fxjyO4aVxFfqxyZQZEdxMcr6nV3yyYjToaJSfdixKemSMCoe2mpHCq4cA06B9qCpJFb8A7jzpDQ=="],
 
     "abbrev": ["abbrev@4.0.0", "", {}, "sha512-a1wflyaL0tHtJSmLSOVybYhy22vRih4eduhhrkcjgrWGnRfrZtovJ2FRjxuTtkkj47O/baf0R86QU5OuYpz8fA=="],
 
