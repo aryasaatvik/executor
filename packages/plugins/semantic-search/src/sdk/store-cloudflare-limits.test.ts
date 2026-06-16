@@ -1,27 +1,28 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit } from "effect";
 
-import type { VectorizeMatch, VectorizeStore, VectorizeVectorInput } from "./vectorize";
+import type { VectorMatch, VectorStore, VectorInput } from "./store";
 import { withCloudflareLimits } from "./store-cloudflare-limits";
 
 // ---------------------------------------------------------------------------
-// Inline fake VectorizeStore — records every call it receives so assertions
+// Inline fake VectorStore — records every call it receives so assertions
 // can inspect exactly what the decorator forwarded (or withheld).
 // ---------------------------------------------------------------------------
 
 interface FakeStoreState {
-  upsertCalls: ReadonlyArray<readonly VectorizeVectorInput[]>;
+  upsertCalls: ReadonlyArray<readonly VectorInput[]>;
   queryCalls: ReadonlyArray<{ vector: readonly number[]; namespace: string; topK: number }>;
   deleteByIdsCalls: ReadonlyArray<readonly string[]>;
 }
 
-const makeFakeStore = (): { store: VectorizeStore; state: FakeStoreState } => {
+const makeFakeStore = (): { store: VectorStore; state: FakeStoreState } => {
   const state: FakeStoreState = {
     upsertCalls: [],
     queryCalls: [],
     deleteByIdsCalls: [],
   };
-  const store: VectorizeStore = {
+  const store: VectorStore = {
+    maxTopK: 20,
     upsert: (vectors) =>
       Effect.sync(() => {
         // @ts-expect-error -- mutating a readonly array tracked for assertions
@@ -31,7 +32,7 @@ const makeFakeStore = (): { store: VectorizeStore; state: FakeStoreState } => {
       Effect.sync(() => {
         // @ts-expect-error -- mutating a readonly array tracked for assertions
         state.queryCalls.push(input);
-        return [] as readonly VectorizeMatch[];
+        return [] as readonly VectorMatch[];
       }),
     deleteByIds: (ids) =>
       Effect.sync(() => {

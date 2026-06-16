@@ -44,6 +44,12 @@ export interface ToolDocumentInput {
   readonly inputTypeScript?: string;
   readonly outputTypeScript?: string;
   readonly typeScriptDefinitions?: Record<string, string>;
+  /**
+   * Broad single-string representation of the tool for FTS indexing.
+   * Populated by the projector (`buildLexicalText` in documents.ts); absent
+   * when the input comes from a source that does not populate it.
+   */
+  readonly lexicalText?: string;
 }
 
 /** Which semantic facet a chunk represents. */

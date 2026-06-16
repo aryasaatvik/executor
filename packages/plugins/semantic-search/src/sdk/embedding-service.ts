@@ -15,7 +15,7 @@ import { makeGeminiEmbedder, type GeminiEmbedderOptions, type ToolEmbedder } fro
 // ---------------------------------------------------------------------------
 
 export class EmbedderService extends Context.Service<EmbedderService, ToolEmbedder>()(
-  "@executor-js/plugin-vectorize-search/EmbedderService",
+  "@executor-js/plugin-semantic-search/EmbedderService",
 ) {}
 
 export const geminiEmbedderLayer = (options: GeminiEmbedderOptions): Layer.Layer<EmbedderService> =>
