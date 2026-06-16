@@ -6,8 +6,12 @@ import {
 import { Effect } from "effect";
 
 import type { ToolEmbedder } from "./embedder";
-import { MAX_TOP_K } from "./vectorize";
 import type { VectorizeMatch, VectorizeStore } from "./vectorize";
+
+/** Cloudflare caps `topK` at 20 when `returnMetadata:"all"` is set.
+ *  The vector store always queries with full metadata, so the provider must
+ *  never exceed this limit on the Vectorize path. */
+export const MAX_METADATA_TOP_K = 20;
 
 const asString = (value: unknown): string => (typeof value === "string" ? value : "");
 
@@ -68,12 +72,28 @@ export const makeVectorizeToolDiscoveryProvider = (deps: {
       const matches = yield* deps.store.query({
         vector,
         namespace: deps.namespace,
-        topK: MAX_TOP_K,
+        // Cloudflare caps topK at 20 when returnMetadata:"all" is used (the
+        // store always sets it).  MAX_TOP_K (100) is kept for non-metadata
+        // paths; the metadata path must respect MAX_METADATA_TOP_K.
+        topK: MAX_METADATA_TOP_K,
       });
-      const ranked = matches
+      const mapped = matches
         .filter((match) => asString(match.metadata?.path).length > 0)
         .map(toResult)
         .filter((result) => matchesNamespace(result, namespace));
+      // The facet chunker indexes a tool as several chunks (identity, input,
+      // output, description), so one tool can surface as multiple matches.
+      // Collapse to the best-scoring chunk per `path` before paginating —
+      // otherwise a tool occupies several result slots and, on the hybrid path,
+      // accrues inflated RRF weight from its repeated ranks.
+      const bestByPath = new Map<string, ToolDiscoveryResult>();
+      for (const result of mapped) {
+        const prev = bestByPath.get(result.path);
+        if (prev === undefined || result.score > prev.score) {
+          bestByPath.set(result.path, result);
+        }
+      }
+      const ranked = [...bestByPath.values()].sort((a, b) => b.score - a.score);
       const start = Math.min(safeOffset, ranked.length);
       const items = ranked.slice(start, start + limit);
       const hasMore = ranked.length > start + items.length;
