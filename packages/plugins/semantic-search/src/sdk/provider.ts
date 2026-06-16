@@ -21,11 +21,14 @@ const toResult = (match: VectorMatch): ToolDiscoveryResult => {
   };
 };
 
-/** Narrow results to a search `namespace` (an integration/path prefix),
- *  mirroring the lexical provider's `matchesNamespace`. Applied to the fetched
- *  page, so it best-effort narrows within the topK window rather than across the
- *  whole index. */
-const matchesNamespace = (result: ToolDiscoveryResult, namespace: string | undefined): boolean => {
+/** Narrow results to a search `namespace` (an integration/path prefix). Shared by
+ *  the vector and FTS lexical providers so the two paths filter identically in
+ *  hybrid search. Applied to the fetched page, so it best-effort narrows within
+ *  the topK window rather than across the whole index. */
+export const matchesNamespace = (
+  result: ToolDiscoveryResult,
+  namespace: string | undefined,
+): boolean => {
   if (namespace === undefined) return true;
   const ns = namespace.trim().toLowerCase();
   if (ns.length === 0) return true;

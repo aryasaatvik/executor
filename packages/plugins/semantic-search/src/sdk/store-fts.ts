@@ -7,6 +7,7 @@ import {
 import { Effect } from "effect";
 
 import { SemanticSearchError } from "./errors";
+import { matchesNamespace } from "./provider";
 
 // ---------------------------------------------------------------------------
 // FTS5 lexical store — a local, in-process, file-backed full-text search store
@@ -365,7 +366,7 @@ export const makeFtsLexicalProvider = (
   store: FtsLexicalStore,
   storageNamespace: string,
 ): ToolDiscoveryProvider => ({
-  searchTools: ({ query, limit, offset }) =>
+  searchTools: ({ query, namespace, limit, offset }) =>
     Effect.gen(function* () {
       if (query.trim().length === 0) {
         return {
@@ -378,17 +379,20 @@ export const makeFtsLexicalProvider = (
 
       // Over-fetch so pagination after dedup is correct.
       const topK = Math.max(limit + Math.max(offset, 0), 50);
-      // Use the storage-level partition key (not ToolDiscoveryInput.namespace,
-      // which is an integration-prefix filter for the vector provider).
+      // store.search partitions by the storage-level namespace; ToolDiscoveryInput
+      // .namespace is a separate integration-prefix filter applied to the results,
+      // shared with the vector provider so hybrid search narrows both paths alike.
       const rows = yield* store.search({ query, namespace: storageNamespace, topK });
 
-      const items: readonly ToolDiscoveryResult[] = rows.map((r) => ({
-        path: r.path,
-        name: r.name,
-        description: r.description.length > 0 ? r.description : undefined,
-        integration: r.integration,
-        score: r.score,
-      }));
+      const items: readonly ToolDiscoveryResult[] = rows
+        .map((r) => ({
+          path: r.path,
+          name: r.name,
+          description: r.description.length > 0 ? r.description : undefined,
+          integration: r.integration,
+          score: r.score,
+        }))
+        .filter((result) => matchesNamespace(result, namespace));
 
       const safeOffset = Math.max(offset, 0);
       const start = Math.min(safeOffset, items.length);
