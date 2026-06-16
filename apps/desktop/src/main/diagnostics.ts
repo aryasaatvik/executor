@@ -99,10 +99,10 @@ export const initErrorReporting = () => {
   // Persist process-death signals to main.log regardless of Sentry — these
   // are the events a "the app just disappeared" report hinges on. Sentry's
   // ChildProcess integration reports them upstream; this keeps a local copy.
-  app.on("child-process-gone", (_event, details) => {
+  app.on("child-process-gone", (event, details) => {
     log.error("[crash] child process gone", details);
   });
-  app.on("render-process-gone", (_event, webContents, details) => {
+  app.on("render-process-gone", (event, webContents, details) => {
     log.error("[crash] render process gone", { url: webContents.getURL(), ...details });
   });
 
