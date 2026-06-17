@@ -292,6 +292,44 @@ describe("makeD1FtsLexicalStore", () => {
     }),
   );
 
+  it.effect("count — reports indexed docs per namespace", () =>
+    Effect.gen(function* () {
+      const { store } = yield* Effect.promise(() => makeTestStore());
+
+      yield* store.upsert([
+        doc(
+          "default:repos.get",
+          "github",
+          "github.repos.get",
+          "Get a repository",
+          "Returns a repository.",
+          "github repos get",
+        ),
+        doc(
+          "default:repos.list",
+          "github",
+          "github.repos.list",
+          "List repositories",
+          "Lists repositories.",
+          "github repos list",
+        ),
+        doc(
+          "other:events.create",
+          "calendar",
+          "calendar.events.create",
+          "Create an event",
+          "Creates an event.",
+          "calendar events create",
+          "other",
+        ),
+      ]);
+
+      expect(yield* store.count("default")).toBe(2);
+      expect(yield* store.count("other")).toBe(1);
+      expect(yield* store.count("empty")).toBe(0);
+    }),
+  );
+
   it.effect("retries schema init after a transient failure (the rejection is not cached)", () =>
     Effect.gen(function* () {
       const BetterSqlite3Mod = yield* Effect.promise(() => import("better-sqlite3"));
