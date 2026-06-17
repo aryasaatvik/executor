@@ -1,4 +1,9 @@
-import { definePlugin, type Executor, type ToolDiscoveryProvider } from "@executor-js/sdk/core";
+import {
+  definePlugin,
+  type Executor,
+  type ToolDiscoveryProvider,
+  type ToolDiscoveryResult,
+} from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
@@ -56,12 +61,31 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
     }),
   );
 
-/** Build the `executor.semanticSearch` surface. `reindex` reconciles the
- *  current tool catalog incrementally (fingerprint diff) and upserts changed
- *  tools into the vector store; it takes the scoped executor as an argument
- *  because only the request/API layer holds it (the plugin ctx does not expose
- *  the catalog). Inert — `reindex` fails clearly — until both a vector store
- *  and an embedder are present. */
+/** Default page size for the operator `search` surface. */
+const DEFAULT_SEARCH_LIMIT = 20;
+
+/** A live `tools.search` result page from the operator search surface. */
+export interface SemanticSearchResultPage {
+  readonly namespace: string;
+  readonly query: string;
+  readonly items: readonly ToolDiscoveryResult[];
+}
+
+/** Operator-facing index status: indexed (vector) + lexical document counts. */
+export interface SemanticSearchStatus {
+  readonly namespace: string;
+  /** Tools with a stored fingerprint — the vector-indexed count. */
+  readonly indexed: number;
+  /** FTS5 lexical documents, or `null` when no lexical store is configured. */
+  readonly lexical: number | null;
+}
+
+/** Build the `executor.semanticSearch` surface: `reindex` (reconcile the catalog
+ *  into the vector + lexical index), `search` (live `tools.search` through the
+ *  shared provider), and `status` (index counts). `reindex`/`search` take the
+ *  scoped executor because only the request/API layer holds it. `reindex`/`search`
+ *  are inert — failing clearly — until both a vector store and an embedder are
+ *  present. */
 const makeSemanticSearchExtension = (deps: {
   readonly namespace: string;
   readonly embedder: ToolEmbedder | undefined;
@@ -70,6 +94,7 @@ const makeSemanticSearchExtension = (deps: {
   readonly fingerprints: Parameters<typeof reconcileToolCatalog>[0]["fingerprints"] | undefined;
   readonly owner: Parameters<typeof reconcileToolCatalog>[0]["owner"] | undefined;
   readonly lexicalStore: FtsLexicalStore | undefined;
+  readonly provider: ToolDiscoveryProvider | undefined;
 }) => ({
   reindex: (executor: Executor): Effect.Effect<ReconcileResult, SemanticSearchError> =>
     deps.embedder && deps.store && deps.fingerprints && deps.owner
@@ -84,6 +109,55 @@ const makeSemanticSearchExtension = (deps: {
           lexicalStore: deps.lexicalStore,
         })
       : notConfigured(),
+
+  /** Run a live `tools.search` through the same provider the engine uses, so the
+   *  operator console sees exactly what the agent would. Inert until configured. */
+  search: (
+    executor: Executor,
+    input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
+  ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
+    const namespace = input.namespace ?? deps.namespace;
+    return deps.provider
+      ? deps.provider
+          .searchTools({
+            executor,
+            query: input.query,
+            namespace,
+            limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
+            offset: 0,
+          })
+          .pipe(
+            Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({ message: "Semantic search query failed.", cause }),
+            ),
+          )
+      : notConfigured();
+  },
+
+  /** Index status for the operator console: vector (fingerprint) + lexical counts. */
+  status: (): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
+    Effect.gen(function* () {
+      const indexed = deps.fingerprints
+        ? yield* deps.fingerprints
+            .count()
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new SemanticSearchError({ message: "Failed to count indexed tools.", cause }),
+              ),
+            )
+        : 0;
+      // A transient lexical-count failure must not mask the (already-fetched)
+      // vector count: degrade `lexical` to null and still return `indexed`.
+      const lexical = deps.lexicalStore
+        ? yield* deps.lexicalStore
+            .count(deps.namespace)
+            .pipe(Effect.catch(() => Effect.succeed(null)))
+        : null;
+      return { namespace: deps.namespace, indexed, lexical };
+    }),
 });
 
 /** The `executor.semanticSearch` surface, derived from its factory. */
@@ -119,6 +193,24 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   const lexical = options?.lexical;
   const lexicalStore = options?.lexicalStore;
 
+  // Build the discovery provider once and share it between the engine's
+  // `tools.search` (runtime) and the operator `search` extension surface, so
+  // both answer through exactly the same vector/hybrid path. A populated FTS5
+  // store (wrapped as a provider) takes precedence over a host-supplied lexical
+  // provider; either side fuses with the vector provider via RRF.
+  const provider: ToolDiscoveryProvider | undefined =
+    !embedder || !store
+      ? undefined
+      : (() => {
+          const vector = makeVectorToolDiscoveryProvider({ embedder, store, namespace });
+          const lexicalProvider = lexicalStore
+            ? makeFtsLexicalProvider(lexicalStore, namespace)
+            : lexical;
+          return lexicalProvider
+            ? makeHybridToolDiscoveryProvider({ lexical: lexicalProvider, vector })
+            : vector;
+        })();
+
   return {
     id: "semanticSearch" as const,
     packageName: "@executor-js/plugin-semantic-search",
@@ -140,21 +232,10 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
         fingerprints: ctx.storage.fingerprints,
         owner: ctx.storage.owner,
         lexicalStore,
+        provider,
       }),
     runtime: {
-      toolDiscoveryProvider: () => {
-        if (!embedder || !store) return undefined;
-        const vector = makeVectorToolDiscoveryProvider({ embedder, store, namespace });
-        // Resolve the lexical side: a populated FTS5 store (wrapped as a provider)
-        // takes precedence over a host-supplied provider (e.g. the engine's token
-        // scorer). Fuse with the vector provider via RRF when either is present.
-        const lexicalProvider = lexicalStore
-          ? makeFtsLexicalProvider(lexicalStore, namespace)
-          : lexical;
-        return lexicalProvider
-          ? makeHybridToolDiscoveryProvider({ lexical: lexicalProvider, vector })
-          : vector;
-      },
+      toolDiscoveryProvider: () => provider,
     },
   };
 });
