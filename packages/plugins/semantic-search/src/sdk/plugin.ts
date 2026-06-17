@@ -61,12 +61,6 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
     }),
   );
 
-/** Build the `executor.semanticSearch` surface. `reindex` reconciles the
- *  current tool catalog incrementally (fingerprint diff) and upserts changed
- *  tools into the vector store; it takes the scoped executor as an argument
- *  because only the request/API layer holds it (the plugin ctx does not expose
- *  the catalog). Inert — `reindex` fails clearly — until both a vector store
- *  and an embedder are present. */
 /** Default page size for the operator `search` surface. */
 const DEFAULT_SEARCH_LIMIT = 20;
 
@@ -86,6 +80,12 @@ export interface SemanticSearchStatus {
   readonly lexical: number | null;
 }
 
+/** Build the `executor.semanticSearch` surface: `reindex` (reconcile the catalog
+ *  into the vector + lexical index), `search` (live `tools.search` through the
+ *  shared provider), and `status` (index counts). `reindex`/`search` take the
+ *  scoped executor because only the request/API layer holds it. `reindex`/`search`
+ *  are inert — failing clearly — until both a vector store and an embedder are
+ *  present. */
 const makeSemanticSearchExtension = (deps: {
   readonly namespace: string;
   readonly embedder: ToolEmbedder | undefined;
@@ -149,7 +149,13 @@ const makeSemanticSearchExtension = (deps: {
               ),
             )
         : 0;
-      const lexical = deps.lexicalStore ? yield* deps.lexicalStore.count(deps.namespace) : null;
+      // A transient lexical-count failure must not mask the (already-fetched)
+      // vector count: degrade `lexical` to null and still return `indexed`.
+      const lexical = deps.lexicalStore
+        ? yield* deps.lexicalStore
+            .count(deps.namespace)
+            .pipe(Effect.catch(() => Effect.succeed(null)))
+        : null;
       return { namespace: deps.namespace, indexed, lexical };
     }),
 });
