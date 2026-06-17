@@ -9,6 +9,7 @@ import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import { reconcileToolCatalog, type ReconcileResult } from "./indexer";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import type { VectorStore } from "./store";
+import { type FtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
 
 export interface SemanticSearchPluginOptions {
   /** A vector store — construct one with `makeVectorizeStore` (Cloudflare),
@@ -39,6 +40,13 @@ export interface SemanticSearchPluginOptions {
    *  lexical scorer does NOT run, because a plugin provider supersedes it). Supply
    *  it to get hybrid lexical+vector search. */
   readonly lexical?: ToolDiscoveryProvider;
+  /** A populated FTS5 lexical store — e.g. `makeD1FtsLexicalStore(env.DB)` on
+   *  Cloudflare, or `makeFtsLexicalStore({ path })` locally. When supplied,
+   *  `reindex` ALSO writes each tool's lexical document here, and the store is
+   *  wrapped as the hybrid `lexical` provider — giving real FTS5/BM25 + vector
+   *  RRF without the host owning lexical indexing. Takes precedence over
+   *  `lexical`. */
+  readonly lexicalStore?: FtsLexicalStore;
 }
 
 const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
@@ -61,6 +69,7 @@ const makeSemanticSearchExtension = (deps: {
   readonly chunker: Chunker;
   readonly fingerprints: Parameters<typeof reconcileToolCatalog>[0]["fingerprints"] | undefined;
   readonly owner: Parameters<typeof reconcileToolCatalog>[0]["owner"] | undefined;
+  readonly lexicalStore: FtsLexicalStore | undefined;
 }) => ({
   reindex: (executor: Executor): Effect.Effect<ReconcileResult, SemanticSearchError> =>
     deps.embedder && deps.store && deps.fingerprints && deps.owner
@@ -72,6 +81,7 @@ const makeSemanticSearchExtension = (deps: {
           chunker: deps.chunker,
           fingerprints: deps.fingerprints,
           owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
         })
       : notConfigured(),
 });
@@ -107,6 +117,7 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   const store = options?.store;
   const chunker = options?.chunker ?? makeFacetChunker();
   const lexical = options?.lexical;
+  const lexicalStore = options?.lexicalStore;
 
   return {
     id: "semanticSearch" as const,
@@ -128,14 +139,21 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
         chunker,
         fingerprints: ctx.storage.fingerprints,
         owner: ctx.storage.owner,
+        lexicalStore,
       }),
     runtime: {
       toolDiscoveryProvider: () => {
         if (!embedder || !store) return undefined;
         const vector = makeVectorToolDiscoveryProvider({ embedder, store, namespace });
-        // Fuse with the host-supplied lexical provider (RRF) when present; else
-        // the vector provider answers alone.
-        return lexical ? makeHybridToolDiscoveryProvider({ lexical, vector }) : vector;
+        // Resolve the lexical side: a populated FTS5 store (wrapped as a provider)
+        // takes precedence over a host-supplied provider (e.g. the engine's token
+        // scorer). Fuse with the vector provider via RRF when either is present.
+        const lexicalProvider = lexicalStore
+          ? makeFtsLexicalProvider(lexicalStore, namespace)
+          : lexical;
+        return lexicalProvider
+          ? makeHybridToolDiscoveryProvider({ lexical: lexicalProvider, vector })
+          : vector;
       },
     },
   };

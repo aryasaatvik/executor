@@ -56,5 +56,8 @@ export {
   type FtsSearchResult,
 } from "./store-fts";
 
+// FTS5 lexical store backed by Cloudflare D1
+export { makeD1FtsLexicalStore, type D1Database, type D1PreparedStatement } from "./store-fts-d1";
+
 // Documents projector helpers
 export { stripHtml, buildLexicalText } from "./documents";
