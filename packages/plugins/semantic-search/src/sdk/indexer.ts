@@ -1,4 +1,4 @@
-import type { Executor } from "@executor-js/sdk/core";
+import type { Executor, Tool } from "@executor-js/sdk/core";
 import type { Owner, PluginStorageCollectionFacade } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
@@ -83,16 +83,31 @@ interface ReconcileDeps extends ReconcileStores {
  *  Only the slice pays the CPU-heavy `tools.schema` codegen + embedding, so each
  *  page stays within one invocation's CPU budget. This is the unit a durable
  *  driver (e.g. a Cloudflare Workflow step) calls in a loop; removal of tools
- *  that left the catalog is handled separately by `sweepRemoved`. */
+ *  that left the catalog is handled separately by `sweepRemoved`.
+ *
+ *  Pass a pre-listed `descriptors` snapshot to reuse one catalog read across an
+ *  in-process page loop (see `reconcileToolCatalog`); omit it and the page reads
+ *  the catalog itself (the durable-step path, where each step is its own read).
+ *
+ *  NOTE: the schema → TS codegen runs for EVERY tool in the slice, including
+ *  fingerprint-unchanged ones, because the fingerprint is derived from the
+ *  schema — a schema-only change can't be detected without fetching it. So
+ *  per-page CPU is dominated by codegen and is similar on re-runs; the
+ *  incremental win is skipping the EMBEDDING of unchanged tools, not their
+ *  schema fetch. */
 export const reconcileToolCatalogPage = (
-  input: ReconcileDeps & { readonly cursor: number; readonly pageSize?: number },
+  input: ReconcileDeps & {
+    readonly cursor: number;
+    readonly pageSize?: number;
+    readonly descriptors?: readonly Tool[];
+  },
 ): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
     const pageSize = input.pageSize ?? DEFAULT_REINDEX_PAGE_SIZE;
     const cursor = Math.max(0, input.cursor);
 
-    const all = yield* listToolDescriptors(executor);
+    const all = input.descriptors ?? (yield* listToolDescriptors(executor));
     const total = all.length;
     const slice = all.slice(cursor, cursor + pageSize);
     const nextCursor = cursor + slice.length < total ? cursor + slice.length : null;
@@ -166,14 +181,16 @@ export const reconcileToolCatalogPage = (
  *  liveness and diffs it against all stored fingerprints, so it fits one
  *  invocation regardless of catalog size. For each removed tool it deletes the
  *  vector chunks, the lexical document, and the fingerprint row. Guards against
- *  an empty live list (a transient `tools.list` failure must not wipe the index). */
+ *  an empty live list (a transient `tools.list` failure must not wipe the index).
+ *  Accepts a pre-listed `descriptors` snapshot to share one catalog read with a
+ *  preceding in-process page loop. */
 export const sweepRemoved = (
-  input: ReconcileStores,
+  input: ReconcileStores & { readonly descriptors?: readonly Tool[] },
 ): Effect.Effect<SweepResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, store, fingerprints, owner } = input;
 
-    const live = yield* listToolDescriptors(executor);
+    const live = input.descriptors ?? (yield* listToolDescriptors(executor));
     // Safety: never treat an empty live catalog as "everything removed".
     if (live.length === 0) {
       return { namespace, removed: 0 };
@@ -237,21 +254,25 @@ export const reconcileToolCatalog = (
   input: ReconcileDeps & { readonly pageSize?: number },
 ): Effect.Effect<ReconcileResult, SemanticSearchError> =>
   Effect.gen(function* () {
+    // One catalog snapshot for the whole in-process run: avoids N+1 `tools.list`
+    // round-trips across pages + sweep, and gives a consistent `total` and diff
+    // even if the catalog changes mid-run. (The durable-step path re-lists per
+    // step by design, since each step is a separate invocation.)
+    const descriptors = yield* listToolDescriptors(input.executor);
+    const total = descriptors.length;
     let cursor = 0;
-    let total = 0;
     let reembedded = 0;
     let unchanged = 0;
 
     for (;;) {
-      const page = yield* reconcileToolCatalogPage({ ...input, cursor });
-      total = page.total;
+      const page = yield* reconcileToolCatalogPage({ ...input, cursor, descriptors });
       reembedded += page.reembedded;
       unchanged += page.unchanged;
       if (page.nextCursor === null) break;
       cursor = page.nextCursor;
     }
 
-    const swept = yield* sweepRemoved(input);
+    const swept = yield* sweepRemoved({ ...input, descriptors });
 
     return { namespace: input.namespace, total, reembedded, unchanged, removed: swept.removed };
   });

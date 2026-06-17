@@ -208,6 +208,42 @@ describe("reconcileToolCatalog", () => {
     }),
   );
 
+  it.effect("reads the catalog once for the whole in-process reconcile (no N+1 tools.list)", () =>
+    Effect.gen(function* () {
+      let listCalls = 0;
+      const inner = makeExecutor([
+        { address: "tools.a.one", name: "one", integration: "a", description: "1" },
+        { address: "tools.a.two", name: "two", integration: "a", description: "2" },
+        { address: "tools.a.three", name: "three", integration: "a", description: "3" },
+      ]);
+      // oxlint-disable-next-line executor/no-double-cast -- test stub: counting wrapper over the fake executor
+      const executor = {
+        tools: {
+          list: (...args: never[]) => {
+            listCalls++;
+            return inner.tools.list(...args);
+          },
+          schema: inner.tools.schema,
+        },
+      } as unknown as Executor;
+
+      // pageSize 1 over 3 tools would re-list per page (3) + sweep (1) = 4 the old
+      // way; a single shared snapshot must collapse that to exactly one read.
+      yield* reconcileToolCatalog({
+        namespace,
+        executor,
+        embedder: fakeEmbedder,
+        store: makeStore().store,
+        chunker,
+        fingerprints: makeFingerprints(),
+        owner,
+        pageSize: 1,
+      });
+
+      expect(listCalls).toBe(1);
+    }),
+  );
+
   it.effect("second run with no changes: reembeds nothing, unchanged equals total", () =>
     Effect.gen(function* () {
       const executor = makeExecutor([
