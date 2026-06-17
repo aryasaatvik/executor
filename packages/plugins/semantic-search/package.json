@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/sdk/index.ts",
-    "./api": "./src/api/index.ts"
+    "./api": "./src/api/index.ts",
+    "./react": "./src/react/index.ts",
+    "./client": "./src/react/plugin-client.tsx"
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
@@ -21,22 +23,43 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
+    "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
+    "@executor-js/react": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
     "@zvec/zvec": "^0.4.1",
     "bun-types": "catalog:",
     "effect": "catalog:",
+    "lucide-react": "^1.7.0",
+    "react": "catalog:",
     "tsup": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@effect/atom-react": "catalog:",
     "@executor-js/api": "workspace:*",
-    "effect": "catalog:"
+    "@executor-js/react": "workspace:*",
+    "effect": "catalog:",
+    "lucide-react": "^1.7.0",
+    "react": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@effect/atom-react": {
+      "optional": true
+    },
     "@executor-js/api": {
+      "optional": true
+    },
+    "@executor-js/react": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
+    "react": {
       "optional": true
     }
   },
