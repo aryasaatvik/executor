@@ -35,25 +35,15 @@ interface D1Database {
 export type { D1Database, D1PreparedStatement };
 
 // ---------------------------------------------------------------------------
-// Schema init — run once per D1Database instance. DDL must be executed
-// sequentially (not via batch) because each statement depends on the previous.
+// Schema init — applied once per D1Database instance. DDL runs sequentially
+// (not via batch). Tracked in a WeakSet of already-initialised bindings rather
+// than a cached init Promise, so a transient init failure is NEVER cached: the
+// next call retries instead of leaving the store permanently unrecoverable for
+// the isolate's lifetime. The statements are `CREATE … IF NOT EXISTS`, so the
+// rare concurrent first-call re-run is idempotent.
 // ---------------------------------------------------------------------------
 
-const schemaCache = new WeakMap<D1Database, Promise<void>>();
-
-const ensureSchemaFor = (d1: D1Database): Promise<void> => {
-  const cached = schemaCache.get(d1);
-  if (cached !== undefined) return cached;
-
-  const init = (async () => {
-    for (const stmt of FTS_SCHEMA_STATEMENTS) {
-      await d1.prepare(stmt).run();
-    }
-  })();
-
-  schemaCache.set(d1, init);
-  return init;
-};
+const initialized = new WeakSet<D1Database>();
 
 // ---------------------------------------------------------------------------
 // Public factory
@@ -64,13 +54,22 @@ const ensureSchemaFor = (d1: D1Database): Promise<void> => {
  *
  * The D1 binding uses the same SQLite FTS5 schema as `makeFtsLexicalStore`
  * (better-sqlite3/bun:sqlite variant), so index data is fully interchangeable.
- * Schema DDL is applied lazily on first use and cached per binding instance.
+ * Schema DDL is applied lazily on first use, once per binding instance.
  */
 export const makeD1FtsLexicalStore = (d1: D1Database): FtsLexicalStore => {
-  const ensureSchema = Effect.tryPromise({
-    try: () => ensureSchemaFor(d1),
-    catch: (cause) => new SemanticSearchError({ message: "D1 FTS5 schema init failed.", cause }),
-  });
+  const ensureSchema = Effect.suspend(() =>
+    initialized.has(d1)
+      ? Effect.void
+      : Effect.tryPromise({
+          try: async () => {
+            for (const stmt of FTS_SCHEMA_STATEMENTS) {
+              await d1.prepare(stmt).run();
+            }
+          },
+          catch: (cause) =>
+            new SemanticSearchError({ message: "D1 FTS5 schema init failed.", cause }),
+        }).pipe(Effect.tap(() => Effect.sync(() => initialized.add(d1)))),
+  );
 
   return {
     upsert: (docs: readonly FtsDocumentInput[]) =>

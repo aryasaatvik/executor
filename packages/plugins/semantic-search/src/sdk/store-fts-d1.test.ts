@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 
 import { makeD1FtsLexicalStore, type D1Database, type D1PreparedStatement } from "./store-fts-d1";
 import type { FtsDocumentInput } from "./store-fts";
@@ -46,6 +46,7 @@ const makeD1Shim = (db: BetterSqliteDb): D1Database => {
         return results;
       } catch (err) {
         db.exec("ROLLBACK");
+        // oxlint-disable-next-line executor/no-try-catch-or-throw -- adapter boundary: re-throw after rollback
         throw err;
       }
     },
@@ -79,7 +80,10 @@ const doc = (
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
-const makeTestStore = async (): Promise<{ store: ReturnType<typeof makeD1FtsLexicalStore>; db: any }> => {
+const makeTestStore = async (): Promise<{
+  store: ReturnType<typeof makeD1FtsLexicalStore>;
+  db: any;
+}> => {
   const BetterSqlite3Mod = await import("better-sqlite3");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
   const DatabaseCtor = (BetterSqlite3Mod as any).default ?? BetterSqlite3Mod;
@@ -285,6 +289,59 @@ describe("makeD1FtsLexicalStore", () => {
       // Should still be exactly one result (not two)
       const paths = results.map((r) => r.path);
       expect(paths.filter((p) => p === "github.repos.create")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("retries schema init after a transient failure (the rejection is not cached)", () =>
+    Effect.gen(function* () {
+      const BetterSqlite3Mod = yield* Effect.promise(() => import("better-sqlite3"));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- adapter boundary
+      const DatabaseCtor = (BetterSqlite3Mod as any).default ?? BetterSqlite3Mod;
+      const db = new DatabaseCtor(":memory:");
+
+      // A D1 shim whose very first run() rejects (a transient init failure),
+      // then behaves normally — exercises the "don't cache the rejection" path.
+      const base = makeD1Shim(db);
+      let injectedFailure = false;
+      const flaky: D1Database = {
+        prepare(sql: string): D1PreparedStatement {
+          const stmt = base.prepare(sql);
+          return {
+            bind: stmt.bind,
+            all: stmt.all,
+            run(): Promise<unknown> {
+              if (!injectedFailure) {
+                injectedFailure = true;
+                // oxlint-disable-next-line executor/no-promise-reject, executor/no-error-constructor -- test shim: simulate a transient D1 runtime failure
+                return Promise.reject(new Error("transient D1 failure"));
+              }
+              return stmt.run();
+            },
+          };
+        },
+        batch: base.batch,
+      };
+      const store = makeD1FtsLexicalStore(flaky);
+
+      // First use fails because schema init hits the injected failure.
+      const firstExit = yield* Effect.exit(
+        store.search({ query: "repo", namespace: "default", topK: 10 }),
+      );
+      expect(Exit.isFailure(firstExit)).toBe(true);
+
+      // A subsequent use retries schema init (not cached as failed) and works.
+      yield* store.upsert([
+        doc(
+          "github:repos.get",
+          "github",
+          "github.repos.get",
+          "Get a repository",
+          "Returns a repository.",
+          "github repos get repository",
+        ),
+      ]);
+      const results = yield* store.search({ query: "repo", namespace: "default", topK: 10 });
+      expect(results.map((r) => r.path)).toContain("github.repos.get");
     }),
   );
 });

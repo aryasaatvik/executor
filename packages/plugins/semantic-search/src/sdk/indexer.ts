@@ -74,6 +74,29 @@ export const reconcileToolCatalog = (input: {
     }
 
     // -------------------------------------------------------------------------
+    // Step 1b — Populate the FTS5 lexical store with EVERY live tool, when one
+    // is configured. Unlike the vector index (gated below by the fingerprint
+    // diff to avoid re-embedding), the lexical store carries no embedding cost,
+    // so it is rebuilt in full on each reindex. That keeps it complete even
+    // when the vector index is unchanged or the lexical store was attached to a
+    // deployment whose vectors were already indexed. The id is namespace-
+    // prefixed so tools sharing a path across namespaces never collide in a
+    // shared D1 database.
+    // -------------------------------------------------------------------------
+    if (input.lexicalStore) {
+      const lexicalDocs: readonly FtsDocumentInput[] = docs.map((doc) => ({
+        id: `${namespace}:${doc.path}`,
+        namespace,
+        path: doc.path,
+        name: doc.name,
+        description: doc.description,
+        integration: doc.integration,
+        lexicalText: buildLexicalText(doc),
+      }));
+      yield* input.lexicalStore.upsert(lexicalDocs);
+    }
+
+    // -------------------------------------------------------------------------
     // Step 2 — Fingerprint each live tool.
     // -------------------------------------------------------------------------
     const liveByPath = new Map(
@@ -213,23 +236,6 @@ export const reconcileToolCatalog = (input: {
     // call — well under Cloudflare's 1,000-vector / 2 MB per-upsert caps —
     // regardless of how many tools changed.
     yield* store.upsert(records);
-
-    // Mirror the reindexed tools into the FTS5 lexical store (one doc per tool)
-    // when configured, so the hybrid lexical index stays in lockstep with the
-    // vector index. Unchanged tools keep their existing lexical doc; removed
-    // tools are left in place (matching the vector index's v1 no-delete policy).
-    if (input.lexicalStore) {
-      const lexicalDocs: readonly FtsDocumentInput[] = chunkedGroups.map((group) => ({
-        id: group.doc.path,
-        namespace,
-        path: group.doc.path,
-        name: group.doc.name,
-        description: group.doc.description,
-        integration: group.doc.integration,
-        lexicalText: buildLexicalText(group.doc),
-      }));
-      yield* input.lexicalStore.upsert(lexicalDocs);
-    }
 
     // Persist updated fingerprint rows.
     yield* Effect.forEach(
