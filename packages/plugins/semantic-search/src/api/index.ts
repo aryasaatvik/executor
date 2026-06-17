@@ -4,7 +4,13 @@ import { semanticSearchPlugin, type SemanticSearchPluginOptions } from "../sdk/p
 import { SemanticSearchGroup } from "./group";
 import { SemanticSearchExtensionService, SemanticSearchHandlers } from "./handlers";
 
-export { SemanticSearchGroup, ReindexResponse } from "./group";
+export {
+  SemanticSearchGroup,
+  ReindexResponse,
+  SearchResultItem,
+  SearchResponse,
+  StatusResponse,
+} from "./group";
 export { SemanticSearchHandlers, SemanticSearchExtensionService } from "./handlers";
 
 // HTTP-augmented variant of `semanticSearchPlugin`. The returned plugin carries
