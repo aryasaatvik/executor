@@ -11,7 +11,14 @@ import { toolFingerprints } from "./collections";
 import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
-import { reconcileToolCatalog, type ReconcileResult } from "./indexer";
+import {
+  reconcileToolCatalog,
+  reconcileToolCatalogPage,
+  sweepRemoved,
+  type ReconcilePageResult,
+  type ReconcileResult,
+  type SweepResult,
+} from "./indexer";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import type { VectorStore } from "./store";
 import { type FtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
@@ -104,6 +111,42 @@ const makeSemanticSearchExtension = (deps: {
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
+          fingerprints: deps.fingerprints,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+        })
+      : notConfigured(),
+
+  /** Reconcile ONE bounded page of the catalog. The unit a durable driver (a
+   *  Cloudflare Workflow step) calls in a loop so each step gets its own CPU
+   *  budget. Pair with `sweep` after the last page. */
+  reindexPage: (
+    executor: Executor,
+    input: { readonly cursor: number; readonly pageSize?: number },
+  ): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
+    deps.embedder && deps.store && deps.fingerprints && deps.owner
+      ? reconcileToolCatalogPage({
+          namespace: deps.namespace,
+          executor,
+          embedder: deps.embedder,
+          store: deps.store,
+          chunker: deps.chunker,
+          fingerprints: deps.fingerprints,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+          cursor: input.cursor,
+          pageSize: input.pageSize,
+        })
+      : notConfigured(),
+
+  /** Delete index entries for tools that left the catalog. Run as the terminal
+   *  step after a paged reindex (or standalone). Needs no embedder. */
+  sweep: (executor: Executor): Effect.Effect<SweepResult, SemanticSearchError> =>
+    deps.store && deps.fingerprints && deps.owner
+      ? sweepRemoved({
+          namespace: deps.namespace,
+          executor,
+          store: deps.store,
           fingerprints: deps.fingerprints,
           owner: deps.owner,
           lexicalStore: deps.lexicalStore,

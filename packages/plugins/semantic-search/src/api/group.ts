@@ -26,7 +26,7 @@ export const ReindexResponse = Schema.Struct({
   total: Schema.Number,
   reembedded: Schema.Number,
   unchanged: Schema.Number,
-  removedSkipped: Schema.Number,
+  removed: Schema.Number,
 });
 
 /** One live `tools.search` match (fused vector/lexical score; higher is better). */
