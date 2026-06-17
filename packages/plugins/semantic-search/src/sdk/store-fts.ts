@@ -66,11 +66,78 @@ interface BunSqliteDatabase {
 }
 
 // ---------------------------------------------------------------------------
+// Shared SQL constants — imported by D1 and other adapters so the schema and
+// query strings stay in exactly one place.
+// ---------------------------------------------------------------------------
+
+/** Schema statements in dependency order: content table → FTS5 virtual table → 3 triggers. */
+export const FTS_SCHEMA_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS fts_docs (
+      id          TEXT PRIMARY KEY,
+      namespace   TEXT NOT NULL DEFAULT '',
+      path        TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      description TEXT NOT NULL,
+      integration TEXT NOT NULL,
+      lexical_text TEXT NOT NULL
+    )`,
+  `CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs_fts USING fts5(
+      path,
+      integration,
+      name,
+      description,
+      lexical_text,
+      content='fts_docs',
+      content_rowid='rowid',
+      tokenize='porter unicode61'
+    )`,
+  `CREATE TRIGGER IF NOT EXISTS fts_docs_ai AFTER INSERT ON fts_docs BEGIN
+      INSERT INTO fts_docs_fts(rowid, path, integration, name, description, lexical_text)
+        VALUES (new.rowid, new.path, new.integration, new.name, new.description, new.lexical_text);
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS fts_docs_ad AFTER DELETE ON fts_docs BEGIN
+      INSERT INTO fts_docs_fts(fts_docs_fts, rowid, path, integration, name, description, lexical_text)
+        VALUES ('delete', old.rowid, old.path, old.integration, old.name, old.description, old.lexical_text);
+    END`,
+  `CREATE TRIGGER IF NOT EXISTS fts_docs_au AFTER UPDATE ON fts_docs BEGIN
+      INSERT INTO fts_docs_fts(fts_docs_fts, rowid, path, integration, name, description, lexical_text)
+        VALUES ('delete', old.rowid, old.path, old.integration, old.name, old.description, old.lexical_text);
+      INSERT INTO fts_docs_fts(rowid, path, integration, name, description, lexical_text)
+        VALUES (new.rowid, new.path, new.integration, new.name, new.description, new.lexical_text);
+    END`,
+];
+
+/** DELETE a single document by id. */
+export const FTS_DELETE_BY_ID_SQL = "DELETE FROM fts_docs WHERE id = ?";
+
+/** INSERT a document (delete-then-insert upsert pattern). */
+export const FTS_INSERT_SQL = `INSERT INTO fts_docs (id, namespace, path, name, description, integration, lexical_text)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)`;
+
+/**
+ * BM25 search query — weights: path=12, integration=8, name=10, description=5, lexical_text=3.
+ * Binds: (ftsQuery TEXT, namespace TEXT, topK INTEGER).
+ * Returns columns: path, name, description, integration, score (higher = better).
+ */
+export const FTS_SEARCH_SQL = `SELECT
+                    d.path        AS path,
+                    d.name        AS name,
+                    d.description AS description,
+                    d.integration AS integration,
+                    0 - bm25(fts_docs_fts, 12.0, 8.0, 10.0, 5.0, 3.0) AS score
+                  FROM fts_docs_fts
+                  JOIN fts_docs d ON d.rowid = fts_docs_fts.rowid
+                  WHERE fts_docs_fts MATCH ?
+                    AND d.namespace = ?
+                  ORDER BY score DESC
+                  LIMIT ?`;
+
+// ---------------------------------------------------------------------------
 // FTS query normalisation — mirrors Pi's `toFtsQuery`:
 //   camelCase-split → lowercase → filter stop-words → `term* term* …`
 // ---------------------------------------------------------------------------
 
-const normalizeFtsQuery = (query: string): string | null => {
+export const normalizeFtsQuery = (query: string): string | null => {
   const terms = query
     // Split camelCase: "createSubscription" → "create Subscription"
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
@@ -176,46 +243,7 @@ const openDatabase = async (dbPath: string): Promise<SqliteDatabase> => {
     db = nodeDb;
   }
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS fts_docs (
-      id          TEXT PRIMARY KEY,
-      namespace   TEXT NOT NULL DEFAULT '',
-      path        TEXT NOT NULL,
-      name        TEXT NOT NULL,
-      description TEXT NOT NULL,
-      integration TEXT NOT NULL,
-      lexical_text TEXT NOT NULL
-    );
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS fts_docs_fts USING fts5(
-      path,
-      integration,
-      name,
-      description,
-      lexical_text,
-      content='fts_docs',
-      content_rowid='rowid',
-      tokenize='porter unicode61'
-    );
-
-    -- Triggers to keep the FTS5 content table in sync with fts_docs.
-    CREATE TRIGGER IF NOT EXISTS fts_docs_ai AFTER INSERT ON fts_docs BEGIN
-      INSERT INTO fts_docs_fts(rowid, path, integration, name, description, lexical_text)
-        VALUES (new.rowid, new.path, new.integration, new.name, new.description, new.lexical_text);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS fts_docs_ad AFTER DELETE ON fts_docs BEGIN
-      INSERT INTO fts_docs_fts(fts_docs_fts, rowid, path, integration, name, description, lexical_text)
-        VALUES ('delete', old.rowid, old.path, old.integration, old.name, old.description, old.lexical_text);
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS fts_docs_au AFTER UPDATE ON fts_docs BEGIN
-      INSERT INTO fts_docs_fts(fts_docs_fts, rowid, path, integration, name, description, lexical_text)
-        VALUES ('delete', old.rowid, old.path, old.integration, old.name, old.description, old.lexical_text);
-      INSERT INTO fts_docs_fts(rowid, path, integration, name, description, lexical_text)
-        VALUES (new.rowid, new.path, new.integration, new.name, new.description, new.lexical_text);
-    END;
-  `);
+  db.exec(FTS_SCHEMA_STATEMENTS.join(";\n") + ";");
 
   return db;
 };
@@ -243,11 +271,8 @@ export const makeFtsLexicalStore = (options: { readonly path: string }): FtsLexi
             Effect.flatMap((db) =>
               Effect.try({
                 try: () => {
-                  const del = db.prepare("DELETE FROM fts_docs WHERE id = ?");
-                  const ins = db.prepare(
-                    `INSERT INTO fts_docs (id, namespace, path, name, description, integration, lexical_text)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                  );
+                  const del = db.prepare(FTS_DELETE_BY_ID_SQL);
+                  const ins = db.prepare(FTS_INSERT_SQL);
                   // Atomic batch: delete-then-insert fires FTS triggers per doc, so a
                   // mid-loop failure must not leave the FTS index partially erased.
                   db.exec("BEGIN");
@@ -287,7 +312,7 @@ export const makeFtsLexicalStore = (options: { readonly path: string }): FtsLexi
             Effect.flatMap((db) =>
               Effect.try({
                 try: () => {
-                  const del = db.prepare("DELETE FROM fts_docs WHERE id = ?");
+                  const del = db.prepare(FTS_DELETE_BY_ID_SQL);
                   for (const id of ids) {
                     del.run(id);
                   }
@@ -310,20 +335,7 @@ export const makeFtsLexicalStore = (options: { readonly path: string }): FtsLexi
               // BM25 weights: path=12, integration=8, name=10, description=5, lexical_text=3
               // `-bm25(...)` so higher = better.
               const rows = db
-                .prepare(
-                  `SELECT
-                    d.path        AS path,
-                    d.name        AS name,
-                    d.description AS description,
-                    d.integration AS integration,
-                    0 - bm25(fts_docs_fts, 12.0, 8.0, 10.0, 5.0, 3.0) AS score
-                  FROM fts_docs_fts
-                  JOIN fts_docs d ON d.rowid = fts_docs_fts.rowid
-                  WHERE fts_docs_fts MATCH ?
-                    AND d.namespace = ?
-                  ORDER BY score DESC
-                  LIMIT ?`,
-                )
+                .prepare(FTS_SEARCH_SQL)
                 .all(ftsQuery, namespace, topK) as ReadonlyArray<{
                 readonly path: string;
                 readonly name: string;
