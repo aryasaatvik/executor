@@ -5,11 +5,12 @@ import { Effect } from "effect";
 import type { Chunker } from "./chunker";
 import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
-import { collectToolDocumentInputs } from "./documents";
+import { buildLexicalText, collectToolDocumentInputs } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { fingerprintTool } from "./fingerprint";
 import type { VectorStore, VectorInput } from "./store";
+import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 // ---------------------------------------------------------------------------
 // ReconcileResult
@@ -54,6 +55,10 @@ export const reconcileToolCatalog = (input: {
   readonly chunker: Chunker;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly owner: Owner;
+  /** Optional FTS5 lexical store. When present, each reindexed tool is also
+   *  written here (one doc per tool) so a hybrid lexical index stays in lockstep
+   *  with the vector index. */
+  readonly lexicalStore?: FtsLexicalStore;
 }): Effect.Effect<ReconcileResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
@@ -208,6 +213,23 @@ export const reconcileToolCatalog = (input: {
     // call — well under Cloudflare's 1,000-vector / 2 MB per-upsert caps —
     // regardless of how many tools changed.
     yield* store.upsert(records);
+
+    // Mirror the reindexed tools into the FTS5 lexical store (one doc per tool)
+    // when configured, so the hybrid lexical index stays in lockstep with the
+    // vector index. Unchanged tools keep their existing lexical doc; removed
+    // tools are left in place (matching the vector index's v1 no-delete policy).
+    if (input.lexicalStore) {
+      const lexicalDocs: readonly FtsDocumentInput[] = chunkedGroups.map((group) => ({
+        id: group.doc.path,
+        namespace,
+        path: group.doc.path,
+        name: group.doc.name,
+        description: group.doc.description,
+        integration: group.doc.integration,
+        lexicalText: buildLexicalText(group.doc),
+      }));
+      yield* input.lexicalStore.upsert(lexicalDocs);
+    }
 
     // Persist updated fingerprint rows.
     yield* Effect.forEach(

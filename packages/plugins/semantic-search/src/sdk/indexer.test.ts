@@ -13,6 +13,7 @@ import { toolFingerprints } from "./collections";
 import type { ToolEmbedder } from "./embedder";
 import { reconcileToolCatalog } from "./indexer";
 import type { VectorStore, VectorInput } from "./store";
+import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -72,6 +73,24 @@ const makeStore = () => {
       Effect.sync(() => {
         deleted.push(...ids);
       }),
+  };
+  return { store, upserted, deleted };
+};
+
+/** Build a fake FtsLexicalStore that records upserts/deletes. */
+const makeFakeLexical = () => {
+  const upserted: FtsDocumentInput[] = [];
+  const deleted: string[] = [];
+  const store: FtsLexicalStore = {
+    upsert: (docs) =>
+      Effect.sync(() => {
+        upserted.push(...docs);
+      }),
+    deleteByIds: (ids) =>
+      Effect.sync(() => {
+        deleted.push(...ids);
+      }),
+    search: () => Effect.succeed([]),
   };
   return { store, upserted, deleted };
 };
@@ -365,5 +384,47 @@ describe("reconcileToolCatalog", () => {
         // repos.delete's chunk ids must NOT appear in the delete list.
         expect(deleted2).toHaveLength(0);
       }),
+  );
+
+  it.effect("populates the lexical store (one doc per tool) when lexicalStore is supplied", () =>
+    Effect.gen(function* () {
+      const { store } = makeStore();
+      const fingerprints = makeFingerprints();
+      const lexical = makeFakeLexical();
+
+      yield* reconcileToolCatalog({
+        namespace,
+        executor: makeExecutor([
+          {
+            address: "tools.github.repos.get",
+            name: "repos.get",
+            integration: "github",
+            description: "Get a repository",
+          },
+          {
+            address: "tools.calendar.events.create",
+            name: "events.create",
+            integration: "calendar",
+            description: "Create a calendar event",
+          },
+        ]),
+        embedder: fakeEmbedder,
+        store,
+        chunker,
+        fingerprints,
+        owner,
+        lexicalStore: lexical.store,
+      });
+
+      // One lexical doc per tool, keyed by the stripped tool path.
+      expect(lexical.upserted.map((d) => d.id).sort()).toEqual([
+        "calendar.events.create",
+        "github.repos.get",
+      ]);
+      const repo = lexical.upserted.find((d) => d.id === "github.repos.get");
+      expect(repo?.integration).toBe("github");
+      expect(repo?.namespace).toBe(namespace);
+      expect((repo?.lexicalText ?? "").length).toBeGreaterThan(0);
+    }),
   );
 });
