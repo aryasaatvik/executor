@@ -132,6 +132,9 @@ export const FTS_SEARCH_SQL = `SELECT
                   ORDER BY score DESC
                   LIMIT ?`;
 
+/** COUNT of indexed lexical documents in a namespace. Binds: (namespace TEXT). */
+export const FTS_COUNT_SQL = "SELECT count(*) AS n FROM fts_docs WHERE namespace = ?";
+
 // ---------------------------------------------------------------------------
 // FTS query normalisation — mirrors Pi's `toFtsQuery`:
 //   camelCase-split → lowercase → filter stop-words → `term* term* …`
@@ -188,6 +191,8 @@ export interface FtsLexicalStore {
   readonly search: (
     input: FtsSearchInput,
   ) => Effect.Effect<readonly FtsSearchResult[], SemanticSearchError>;
+  /** Count of indexed lexical documents in `namespace` (operator status). */
+  readonly count: (namespace: string) => Effect.Effect<number, SemanticSearchError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +360,21 @@ export const makeFtsLexicalStore = (options: { readonly path: string }): FtsLexi
               );
             },
             catch: (cause) => new SemanticSearchError({ message: "FTS5 search failed.", cause }),
+          }),
+        ),
+      ),
+
+    count: (namespace) =>
+      getDb.pipe(
+        Effect.flatMap((db) =>
+          Effect.try({
+            try: () => {
+              const row = db.prepare(FTS_COUNT_SQL).get(namespace) as
+                | { readonly n: number }
+                | undefined;
+              return row?.n ?? 0;
+            },
+            catch: (cause) => new SemanticSearchError({ message: "FTS5 count failed.", cause }),
           }),
         ),
       ),
