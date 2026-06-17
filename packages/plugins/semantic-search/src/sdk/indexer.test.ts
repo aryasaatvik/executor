@@ -11,7 +11,7 @@ import { makeFacetChunker } from "./chunker";
 import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import { reconcileToolCatalog } from "./indexer";
+import { reconcileToolCatalog, reconcileToolCatalogPage, sweepRemoved } from "./indexer";
 import type { VectorStore, VectorInput } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
@@ -197,7 +197,7 @@ describe("reconcileToolCatalog", () => {
       expect(result.total).toBe(2);
       expect(result.reembedded).toBe(2);
       expect(result.unchanged).toBe(0);
-      expect(result.removedSkipped).toBe(0);
+      expect(result.removed).toBe(0);
       // Each tool produces at least 1 identity chunk.
       expect(upserted.length).toBeGreaterThanOrEqual(2);
       expect(deleted).toHaveLength(0);
@@ -205,6 +205,42 @@ describe("reconcileToolCatalog", () => {
       for (const v of upserted) {
         expect(v.namespace).toBe(namespace);
       }
+    }),
+  );
+
+  it.effect("reads the catalog once for the whole in-process reconcile (no N+1 tools.list)", () =>
+    Effect.gen(function* () {
+      let listCalls = 0;
+      const inner = makeExecutor([
+        { address: "tools.a.one", name: "one", integration: "a", description: "1" },
+        { address: "tools.a.two", name: "two", integration: "a", description: "2" },
+        { address: "tools.a.three", name: "three", integration: "a", description: "3" },
+      ]);
+      // oxlint-disable-next-line executor/no-double-cast -- test stub: counting wrapper over the fake executor
+      const executor = {
+        tools: {
+          list: (...args: never[]) => {
+            listCalls++;
+            return inner.tools.list(...args);
+          },
+          schema: inner.tools.schema,
+        },
+      } as unknown as Executor;
+
+      // pageSize 1 over 3 tools would re-list per page (3) + sweep (1) = 4 the old
+      // way; a single shared snapshot must collapse that to exactly one read.
+      yield* reconcileToolCatalog({
+        namespace,
+        executor,
+        embedder: fakeEmbedder,
+        store: makeStore().store,
+        chunker,
+        fingerprints: makeFingerprints(),
+        owner,
+        pageSize: 1,
+      });
+
+      expect(listCalls).toBe(1);
     }),
   );
 
@@ -328,63 +364,65 @@ describe("reconcileToolCatalog", () => {
       }),
   );
 
-  it.effect(
-    "a tool removed from the live list increments removedSkipped and is NOT deleted from the store",
-    () =>
-      Effect.gen(function* () {
-        const executor1 = makeExecutor([
-          {
-            address: "tools.github.repos.get",
-            name: "repos.get",
-            integration: "github",
-            description: "Get a repository",
-          },
-          {
-            address: "tools.github.repos.delete",
-            name: "repos.delete",
-            integration: "github",
-            description: "Delete a repository",
-          },
-        ]);
+  it.effect("a tool removed from the live list is swept: vector chunks + fingerprint deleted", () =>
+    Effect.gen(function* () {
+      const executor1 = makeExecutor([
+        {
+          address: "tools.github.repos.get",
+          name: "repos.get",
+          integration: "github",
+          description: "Get a repository",
+        },
+        {
+          address: "tools.github.repos.delete",
+          name: "repos.delete",
+          integration: "github",
+          description: "Delete a repository",
+        },
+      ]);
 
-        // First run — both tools indexed.
-        const fingerprints = makeFingerprints();
-        const { store: store1 } = makeStore();
-        yield* reconcileToolCatalog({
-          namespace,
-          executor: executor1,
-          embedder: fakeEmbedder,
-          store: store1,
-          chunker,
-          fingerprints,
-          owner,
-        });
+      // First run — both tools indexed.
+      const fingerprints = makeFingerprints();
+      const { store: store1 } = makeStore();
+      yield* reconcileToolCatalog({
+        namespace,
+        executor: executor1,
+        embedder: fakeEmbedder,
+        store: store1,
+        chunker,
+        fingerprints,
+        owner,
+      });
 
-        // Second run — repos.delete is no longer in the catalog.
-        const executor2 = makeExecutor([
-          {
-            address: "tools.github.repos.get",
-            name: "repos.get",
-            integration: "github",
-            description: "Get a repository",
-          },
-        ]);
-        const { store: store2, deleted: deleted2 } = makeStore();
-        const result2 = yield* reconcileToolCatalog({
-          namespace,
-          executor: executor2,
-          embedder: fakeEmbedder,
-          store: store2,
-          chunker,
-          fingerprints,
-          owner,
-        });
+      // Second run — repos.delete is no longer in the catalog.
+      const executor2 = makeExecutor([
+        {
+          address: "tools.github.repos.get",
+          name: "repos.get",
+          integration: "github",
+          description: "Get a repository",
+        },
+      ]);
+      const { store: store2, deleted: deleted2 } = makeStore();
+      const result2 = yield* reconcileToolCatalog({
+        namespace,
+        executor: executor2,
+        embedder: fakeEmbedder,
+        store: store2,
+        chunker,
+        fingerprints,
+        owner,
+      });
 
-        expect(result2.total).toBe(1);
-        expect(result2.removedSkipped).toBe(1);
-        // repos.delete's chunk ids must NOT appear in the delete list.
-        expect(deleted2).toHaveLength(0);
-      }),
+      expect(result2.total).toBe(1);
+      expect(result2.unchanged).toBe(1);
+      expect(result2.removed).toBe(1);
+      // repos.delete's vector chunks are swept (repos.get is unchanged, so it
+      // contributes no deletions); its fingerprint row is removed.
+      expect(deleted2.length).toBeGreaterThan(0);
+      const remaining = yield* fingerprints.list();
+      expect(remaining.map((e) => e.key)).toEqual(["github.repos.get"]);
+    }),
   );
 
   it.effect(
@@ -449,5 +487,123 @@ describe("reconcileToolCatalog", () => {
         expect(result2.unchanged).toBe(2);
         expect(lexical2.upserted).toHaveLength(2);
       }),
+  );
+});
+
+describe("reconcileToolCatalogPage", () => {
+  it.effect("pages through the catalog one slice at a time, advancing the cursor", () =>
+    Effect.gen(function* () {
+      const executor = makeExecutor([
+        { address: "tools.a.one", name: "one", integration: "a", description: "1" },
+        { address: "tools.a.two", name: "two", integration: "a", description: "2" },
+        { address: "tools.a.three", name: "three", integration: "a", description: "3" },
+      ]);
+      const fingerprints = makeFingerprints();
+      const { store } = makeStore();
+      const base = {
+        namespace,
+        executor,
+        embedder: fakeEmbedder,
+        store,
+        chunker,
+        fingerprints,
+        owner,
+        pageSize: 1,
+      };
+
+      const p0 = yield* reconcileToolCatalogPage({ ...base, cursor: 0 });
+      expect(p0.total).toBe(3);
+      expect(p0.processed).toBe(1);
+      expect(p0.reembedded).toBe(1);
+      expect(p0.nextCursor).toBe(1);
+
+      const p1 = yield* reconcileToolCatalogPage({ ...base, cursor: 1 });
+      expect(p1.processed).toBe(1);
+      expect(p1.nextCursor).toBe(2);
+
+      const p2 = yield* reconcileToolCatalogPage({ ...base, cursor: 2 });
+      expect(p2.processed).toBe(1);
+      expect(p2.nextCursor).toBe(null);
+
+      // Every tool now has a fingerprint row (full coverage across pages).
+      const rows = yield* fingerprints.list();
+      expect(rows.length).toBe(3);
+    }),
+  );
+
+  it.effect("a cursor past the end is an empty, terminal page", () =>
+    Effect.gen(function* () {
+      const executor = makeExecutor([
+        { address: "tools.a.one", name: "one", integration: "a", description: "1" },
+      ]);
+      const page = yield* reconcileToolCatalogPage({
+        namespace,
+        executor,
+        embedder: fakeEmbedder,
+        store: makeStore().store,
+        chunker,
+        fingerprints: makeFingerprints(),
+        owner,
+        cursor: 5,
+      });
+      expect(page.total).toBe(1);
+      expect(page.processed).toBe(0);
+      expect(page.nextCursor).toBe(null);
+    }),
+  );
+});
+
+describe("sweepRemoved", () => {
+  it.effect("deletes vector chunks + fingerprint for tools no longer in the catalog", () =>
+    Effect.gen(function* () {
+      const fingerprints = makeFingerprints(
+        new Map([
+          [
+            "a.gone",
+            { path: "a.gone", integration: "a", fingerprint: "x", chunkIds: ["a.gone#0"] },
+          ],
+          [
+            "a.live",
+            { path: "a.live", integration: "a", fingerprint: "y", chunkIds: ["a.live#0"] },
+          ],
+        ]),
+      );
+      const { store, deleted } = makeStore();
+      const executor = makeExecutor([
+        { address: "tools.a.live", name: "live", integration: "a", description: "" },
+      ]);
+
+      const result = yield* sweepRemoved({ namespace, executor, store, fingerprints, owner });
+
+      expect(result.removed).toBe(1);
+      expect(deleted).toContain("a.gone#0");
+      expect(deleted).not.toContain("a.live#0");
+      const rows = yield* fingerprints.list();
+      expect(rows.map((e) => e.key)).toEqual(["a.live"]);
+    }),
+  );
+
+  it.effect("an empty live catalog is a no-op (never wipes the index)", () =>
+    Effect.gen(function* () {
+      const fingerprints = makeFingerprints(
+        new Map([
+          ["a.x", { path: "a.x", integration: "a", fingerprint: "x", chunkIds: ["a.x#0"] }],
+        ]),
+      );
+      const { store, deleted } = makeStore();
+
+      const result = yield* sweepRemoved({
+        namespace,
+        executor: makeExecutor([]),
+        store,
+        fingerprints,
+        owner,
+      });
+
+      expect(result.removed).toBe(0);
+      expect(deleted).toHaveLength(0);
+      const rows = yield* fingerprints.list();
+      expect(rows.length).toBe(1);
+    }),
   );
 });
