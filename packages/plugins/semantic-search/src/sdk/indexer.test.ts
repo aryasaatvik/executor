@@ -91,6 +91,7 @@ const makeFakeLexical = () => {
         deleted.push(...ids);
       }),
     search: () => Effect.succeed([]),
+    count: () => Effect.succeed(upserted.length),
   };
   return { store, upserted, deleted };
 };
