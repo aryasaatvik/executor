@@ -5,11 +5,12 @@ import { Effect } from "effect";
 import type { Chunker } from "./chunker";
 import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
-import { collectToolDocumentInputs } from "./documents";
+import { buildLexicalText, collectToolDocumentInputs } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { fingerprintTool } from "./fingerprint";
 import type { VectorStore, VectorInput } from "./store";
+import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 // ---------------------------------------------------------------------------
 // ReconcileResult
@@ -54,6 +55,10 @@ export const reconcileToolCatalog = (input: {
   readonly chunker: Chunker;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly owner: Owner;
+  /** Optional FTS5 lexical store. When present, each reindexed tool is also
+   *  written here (one doc per tool) so a hybrid lexical index stays in lockstep
+   *  with the vector index. */
+  readonly lexicalStore?: FtsLexicalStore;
 }): Effect.Effect<ReconcileResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
@@ -66,6 +71,29 @@ export const reconcileToolCatalog = (input: {
 
     if (total === 0) {
       return { namespace, total: 0, reembedded: 0, unchanged: 0, removedSkipped: 0 };
+    }
+
+    // -------------------------------------------------------------------------
+    // Step 1b — Populate the FTS5 lexical store with EVERY live tool, when one
+    // is configured. Unlike the vector index (gated below by the fingerprint
+    // diff to avoid re-embedding), the lexical store carries no embedding cost,
+    // so it is rebuilt in full on each reindex. That keeps it complete even
+    // when the vector index is unchanged or the lexical store was attached to a
+    // deployment whose vectors were already indexed. The id is namespace-
+    // prefixed so tools sharing a path across namespaces never collide in a
+    // shared D1 database.
+    // -------------------------------------------------------------------------
+    if (input.lexicalStore) {
+      const lexicalDocs: readonly FtsDocumentInput[] = docs.map((doc) => ({
+        id: `${namespace}:${doc.path}`,
+        namespace,
+        path: doc.path,
+        name: doc.name,
+        description: doc.description,
+        integration: doc.integration,
+        lexicalText: buildLexicalText(doc),
+      }));
+      yield* input.lexicalStore.upsert(lexicalDocs);
     }
 
     // -------------------------------------------------------------------------
