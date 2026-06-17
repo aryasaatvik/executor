@@ -13,6 +13,7 @@ import { toolFingerprints } from "./collections";
 import type { ToolEmbedder } from "./embedder";
 import { reconcileToolCatalog } from "./indexer";
 import type { VectorStore, VectorInput } from "./store";
+import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -72,6 +73,24 @@ const makeStore = () => {
       Effect.sync(() => {
         deleted.push(...ids);
       }),
+  };
+  return { store, upserted, deleted };
+};
+
+/** Build a fake FtsLexicalStore that records upserts/deletes. */
+const makeFakeLexical = () => {
+  const upserted: FtsDocumentInput[] = [];
+  const deleted: string[] = [];
+  const store: FtsLexicalStore = {
+    upsert: (docs) =>
+      Effect.sync(() => {
+        upserted.push(...docs);
+      }),
+    deleteByIds: (ids) =>
+      Effect.sync(() => {
+        deleted.push(...ids);
+      }),
+    search: () => Effect.succeed([]),
   };
   return { store, upserted, deleted };
 };
@@ -364,6 +383,70 @@ describe("reconcileToolCatalog", () => {
         expect(result2.removedSkipped).toBe(1);
         // repos.delete's chunk ids must NOT appear in the delete list.
         expect(deleted2).toHaveLength(0);
+      }),
+  );
+
+  it.effect(
+    "populates the lexical store with every live tool, keyed by namespace-prefixed id",
+    () =>
+      Effect.gen(function* () {
+        const fingerprints = makeFingerprints();
+        const tools = [
+          {
+            address: "tools.github.repos.get",
+            name: "repos.get",
+            integration: "github",
+            description: "Get a repository",
+          },
+          {
+            address: "tools.calendar.events.create",
+            name: "events.create",
+            integration: "calendar",
+            description: "Create a calendar event",
+          },
+        ];
+
+        const lexical = makeFakeLexical();
+        yield* reconcileToolCatalog({
+          namespace,
+          executor: makeExecutor(tools),
+          embedder: fakeEmbedder,
+          store: makeStore().store,
+          chunker,
+          fingerprints,
+          owner,
+          lexicalStore: lexical.store,
+        });
+
+        // One lexical doc per tool, id namespace-prefixed so paths can't collide
+        // across namespaces in a shared store.
+        expect(lexical.upserted.map((d) => d.id).sort()).toEqual([
+          `${namespace}:calendar.events.create`,
+          `${namespace}:github.repos.get`,
+        ]);
+        const repo = lexical.upserted.find((d) => d.id === `${namespace}:github.repos.get`);
+        expect(repo?.path).toBe("github.repos.get");
+        expect(repo?.integration).toBe("github");
+        expect(repo?.namespace).toBe(namespace);
+        expect((repo?.lexicalText ?? "").length).toBeGreaterThan(0);
+
+        // A SECOND reindex with identical tools re-embeds nothing (fingerprints
+        // match) yet still fully populates the lexical store — so attaching a
+        // lexical store to an already-indexed deployment is not silently empty.
+        const lexical2 = makeFakeLexical();
+        const result2 = yield* reconcileToolCatalog({
+          namespace,
+          executor: makeExecutor(tools),
+          embedder: fakeEmbedder,
+          store: makeStore().store,
+          chunker,
+          fingerprints,
+          owner,
+          lexicalStore: lexical2.store,
+        });
+        expect(result2.reembedded).toBe(0);
+        expect(result2.unchanged).toBe(2);
+        expect(lexical2.upserted).toHaveLength(2);
       }),
   );
 });
