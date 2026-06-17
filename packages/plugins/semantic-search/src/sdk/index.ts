@@ -13,7 +13,15 @@ export {
 } from "./embedder";
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
-export { reconcileToolCatalog, type ReconcileResult } from "./indexer";
+export {
+  reconcileToolCatalog,
+  reconcileToolCatalogPage,
+  sweepRemoved,
+  DEFAULT_REINDEX_PAGE_SIZE,
+  type ReconcileResult,
+  type ReconcilePageResult,
+  type SweepResult,
+} from "./indexer";
 export { SemanticSearchError } from "./errors";
 
 // Chunker

@@ -5,7 +5,12 @@ import { Effect } from "effect";
 import type { Chunker } from "./chunker";
 import type { FingerprintRow } from "./collections";
 import { toolFingerprints } from "./collections";
-import { buildLexicalText, collectToolDocumentInputs } from "./documents";
+import {
+  addressToPath,
+  buildLexicalText,
+  collectDocsForTools,
+  listToolDescriptors,
+} from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { fingerprintTool } from "./fingerprint";
@@ -13,7 +18,7 @@ import type { VectorStore, VectorInput } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 // ---------------------------------------------------------------------------
-// ReconcileResult
+// Results
 // ---------------------------------------------------------------------------
 
 export interface ReconcileResult {
@@ -23,66 +28,84 @@ export interface ReconcileResult {
   readonly total: number;
   /** Number of tools whose embeddings were refreshed (new + changed). */
   readonly reembedded: number;
-  /** Number of tools whose stored fingerprint matched — skipped entirely. */
+  /** Number of tools whose stored fingerprint matched — skipped re-embedding. */
   readonly unchanged: number;
-  /** Number of tools present in storage but absent from the current catalog
-   *  (not deleted in v1 — deletion is unsafe across per-isolate catalog variance;
-   *  logged only). */
-  readonly removedSkipped: number;
+  /** Number of tools removed from the index because they left the catalog. */
+  readonly removed: number;
+}
+
+export interface ReconcilePageResult {
+  readonly namespace: string;
+  /** Total tools in the live catalog (size of the sorted descriptor list). */
+  readonly total: number;
+  /** Tools handled in this page. */
+  readonly processed: number;
+  readonly reembedded: number;
+  readonly unchanged: number;
+  /** Index of the next page, or `null` when the catalog is exhausted. */
+  readonly nextCursor: number | null;
+}
+
+export interface SweepResult {
+  readonly namespace: string;
+  /** Tools deleted from the index (vector chunks + lexical doc + fingerprint). */
+  readonly removed: number;
+}
+
+/** Default tools-per-page. Bounds the CPU-heavy schema→TS codegen + embedding so
+ *  one page fits within a single Worker invocation's CPU budget. */
+export const DEFAULT_REINDEX_PAGE_SIZE = 200;
+
+interface ReconcileStores {
+  readonly namespace: string;
+  readonly executor: Executor;
+  readonly store: VectorStore;
+  readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
+  readonly owner: Owner;
+  /** Optional FTS5 lexical store kept in lockstep with the vector index. */
+  readonly lexicalStore?: FtsLexicalStore;
+}
+
+interface ReconcileDeps extends ReconcileStores {
+  readonly embedder: ToolEmbedder;
+  readonly chunker: Chunker;
 }
 
 // ---------------------------------------------------------------------------
-// reconcileToolCatalog — incremental fingerprint-based reindex
+// reconcileToolCatalogPage — reconcile ONE bounded slice of the catalog
 // ---------------------------------------------------------------------------
 
-/** Reconcile the live tool catalog against the Vectorize index.
+/** Reconcile a single page of the live tool catalog into the vector + lexical
+ *  index, returning the cursor for the next page.
  *
- *  Algorithm:
- *  1. Collect `ToolDocumentInput` for every tool (tools.list + tools.schema).
- *  2. Fingerprint each tool.
- *  3. Load stored `FingerprintRow`s; diff: new ∪ changed → re-embed + upsert.
- *     For CHANGED tools, delete old chunk ids before upserting new.
- *  4. Tools in storage but absent from the live catalog → skip deletion (v1),
- *     count them into `removedSkipped`.
- *  5. Unchanged tools → skip entirely.
- *
- *  The owner parameter is the org-level scope used for all storage writes. */
-export const reconcileToolCatalog = (input: {
-  readonly namespace: string;
-  readonly executor: Executor;
-  readonly embedder: ToolEmbedder;
-  readonly store: VectorStore;
-  readonly chunker: Chunker;
-  readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
-  readonly owner: Owner;
-  /** Optional FTS5 lexical store. When present, each reindexed tool is also
-   *  written here (one doc per tool) so a hybrid lexical index stays in lockstep
-   *  with the vector index. */
-  readonly lexicalStore?: FtsLexicalStore;
-}): Effect.Effect<ReconcileResult, SemanticSearchError> =>
+ *  `tools.list` has no native pagination, so a page re-lists the (stably sorted)
+ *  catalog — cheap, descriptors only — and slices `[cursor, cursor + pageSize)`.
+ *  Only the slice pays the CPU-heavy `tools.schema` codegen + embedding, so each
+ *  page stays within one invocation's CPU budget. This is the unit a durable
+ *  driver (e.g. a Cloudflare Workflow step) calls in a loop; removal of tools
+ *  that left the catalog is handled separately by `sweepRemoved`. */
+export const reconcileToolCatalogPage = (
+  input: ReconcileDeps & { readonly cursor: number; readonly pageSize?: number },
+): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
+    const pageSize = input.pageSize ?? DEFAULT_REINDEX_PAGE_SIZE;
+    const cursor = Math.max(0, input.cursor);
 
-    // -------------------------------------------------------------------------
-    // Step 1 — Collect tool documents (list + schema).
-    // -------------------------------------------------------------------------
-    const docs = yield* collectToolDocumentInputs(namespace, executor);
-    const total = docs.length;
+    const all = yield* listToolDescriptors(executor);
+    const total = all.length;
+    const slice = all.slice(cursor, cursor + pageSize);
+    const nextCursor = cursor + slice.length < total ? cursor + slice.length : null;
 
-    if (total === 0) {
-      return { namespace, total: 0, reembedded: 0, unchanged: 0, removedSkipped: 0 };
+    if (slice.length === 0) {
+      return { namespace, total, processed: 0, reembedded: 0, unchanged: 0, nextCursor };
     }
 
-    // -------------------------------------------------------------------------
-    // Step 1b — Populate the FTS5 lexical store with EVERY live tool, when one
-    // is configured. Unlike the vector index (gated below by the fingerprint
-    // diff to avoid re-embedding), the lexical store carries no embedding cost,
-    // so it is rebuilt in full on each reindex. That keeps it complete even
-    // when the vector index is unchanged or the lexical store was attached to a
-    // deployment whose vectors were already indexed. The id is namespace-
-    // prefixed so tools sharing a path across namespaces never collide in a
-    // shared D1 database.
-    // -------------------------------------------------------------------------
+    // Collect docs (schema → TS) for THIS slice only.
+    const docs = yield* collectDocsForTools(executor, slice);
+
+    // Lexical store carries no embedding cost, so rebuild it in full for the
+    // slice every page (delete-then-insert keyed by namespace-prefixed id).
     if (input.lexicalStore) {
       const lexicalDocs: readonly FtsDocumentInput[] = docs.map((doc) => ({
         id: `${namespace}:${doc.path}`,
@@ -96,82 +119,201 @@ export const reconcileToolCatalog = (input: {
       yield* input.lexicalStore.upsert(lexicalDocs);
     }
 
-    // -------------------------------------------------------------------------
-    // Step 2 — Fingerprint each live tool.
-    // -------------------------------------------------------------------------
-    const liveByPath = new Map(
-      docs.map((doc) => [doc.path, { doc, fingerprint: fingerprintTool(doc) }]),
-    );
+    // Load stored fingerprints for just this slice's paths (not the whole index).
+    const slicePaths = docs.map((doc) => doc.path);
+    const storedByPath = yield* loadFingerprintsForPaths(fingerprints, owner, slicePaths);
 
-    // -------------------------------------------------------------------------
-    // Step 3 — Load all stored fingerprints.
-    // -------------------------------------------------------------------------
-    const storedEntries = yield* fingerprints.list().pipe(
-      Effect.mapError(
-        (cause) =>
-          new SemanticSearchError({
-            message: "Failed to load stored fingerprints for reconcile.",
-            cause,
-          }),
-      ),
-    );
-    const storedByPath = new Map(storedEntries.map((entry) => [entry.key, entry.data]));
-
-    // -------------------------------------------------------------------------
-    // Step 4 — Diff: classify each live tool as new, changed, or unchanged.
-    // -------------------------------------------------------------------------
+    // Diff: classify each tool in the slice as new/changed (re-embed) or unchanged.
     const toEmbed: Array<{
       doc: (typeof docs)[number];
       fingerprint: string;
       oldChunkIds: readonly string[] | null;
     }> = [];
     let unchanged = 0;
-
-    for (const [path, { doc, fingerprint }] of liveByPath) {
-      const stored = storedByPath.get(path);
+    for (const doc of docs) {
+      const fingerprint = fingerprintTool(doc);
+      const stored = storedByPath.get(doc.path);
       if (stored !== undefined && stored.fingerprint === fingerprint) {
         unchanged++;
       } else {
-        toEmbed.push({
-          doc,
-          fingerprint,
-          oldChunkIds: stored?.chunkIds ?? null,
-        });
+        toEmbed.push({ doc, fingerprint, oldChunkIds: stored?.chunkIds ?? null });
       }
     }
 
-    // -------------------------------------------------------------------------
-    // Step 5 — Count removed (stored but no longer live) — skip deletion in v1.
-    // -------------------------------------------------------------------------
-    let removedSkipped = 0;
-    for (const storedPath of storedByPath.keys()) {
-      if (!liveByPath.has(storedPath)) {
-        removedSkipped++;
-        // Intentionally NOT deleting: per-isolate catalog variance makes
-        // deletion unsafe in v1 — log the count so the operator is aware.
-      }
-    }
-    if (removedSkipped > 0) {
-      yield* Effect.logWarning(
-        `reconcileToolCatalog [${namespace}]: ${removedSkipped} tool(s) present in ` +
-          `storage but absent from the live catalog — skipping deletion (v1).`,
-      );
-    }
-
-    // -------------------------------------------------------------------------
-    // Step 6 — Re-embed and upsert changed/new tools.
-    // -------------------------------------------------------------------------
     if (toEmbed.length === 0) {
-      return { namespace, total, reembedded: 0, unchanged, removedSkipped };
+      return { namespace, total, processed: slice.length, reembedded: 0, unchanged, nextCursor };
     }
 
-    // Chunk all tools to re-embed.
+    yield* embedAndUpsert({ namespace, embedder, store, chunker, fingerprints, owner }, toEmbed);
+
+    return {
+      namespace,
+      total,
+      processed: slice.length,
+      reembedded: toEmbed.length,
+      unchanged,
+      nextCursor,
+    };
+  });
+
+// ---------------------------------------------------------------------------
+// sweepRemoved — delete tools that left the catalog
+// ---------------------------------------------------------------------------
+
+/** Delete index entries for tools no longer present in the live catalog.
+ *
+ *  Uses the cheap `listToolDescriptors` (paths only — no schema codegen) for
+ *  liveness and diffs it against all stored fingerprints, so it fits one
+ *  invocation regardless of catalog size. For each removed tool it deletes the
+ *  vector chunks, the lexical document, and the fingerprint row. Guards against
+ *  an empty live list (a transient `tools.list` failure must not wipe the index). */
+export const sweepRemoved = (
+  input: ReconcileStores,
+): Effect.Effect<SweepResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const { namespace, executor, store, fingerprints, owner } = input;
+
+    const live = yield* listToolDescriptors(executor);
+    // Safety: never treat an empty live catalog as "everything removed".
+    if (live.length === 0) {
+      return { namespace, removed: 0 };
+    }
+    const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
+
+    const storedEntries = yield* fingerprints.list().pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to load stored fingerprints for sweep.",
+            cause,
+          }),
+      ),
+    );
+    const removed = storedEntries.filter((entry) => !livePaths.has(entry.key));
+    if (removed.length === 0) {
+      return { namespace, removed: 0 };
+    }
+
+    yield* Effect.forEach(
+      removed,
+      (entry) =>
+        Effect.gen(function* () {
+          const { key: path, data } = entry;
+          if (data.chunkIds.length > 0) {
+            yield* store.deleteByIds([...data.chunkIds]);
+          }
+          if (input.lexicalStore) {
+            yield* input.lexicalStore.deleteByIds([`${namespace}:${path}`]);
+          }
+          yield* fingerprints.remove({ owner, key: path }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({
+                  message: `Failed to delete fingerprint row for removed tool "${path}".`,
+                  cause,
+                }),
+            ),
+          );
+        }),
+      { concurrency: 8, discard: true },
+    );
+
+    return { namespace, removed: removed.length };
+  });
+
+// ---------------------------------------------------------------------------
+// reconcileToolCatalog — full reconcile (loop pages + sweep)
+// ---------------------------------------------------------------------------
+
+/** Reconcile the entire live tool catalog into the vector + lexical index.
+ *
+ *  Drives `reconcileToolCatalogPage` over every page in-process, then runs
+ *  `sweepRemoved`. This is the convenience entry for hosts that can complete the
+ *  whole reconcile in one execution (local / self-host, or small catalogs). At
+ *  large catalog sizes on a CPU-bounded host (a Worker), drive the page +
+ *  sweep primitives from a durable scheduler instead so each step gets its own
+ *  CPU budget. */
+export const reconcileToolCatalog = (
+  input: ReconcileDeps & { readonly pageSize?: number },
+): Effect.Effect<ReconcileResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    let cursor = 0;
+    let total = 0;
+    let reembedded = 0;
+    let unchanged = 0;
+
+    for (;;) {
+      const page = yield* reconcileToolCatalogPage({ ...input, cursor });
+      total = page.total;
+      reembedded += page.reembedded;
+      unchanged += page.unchanged;
+      if (page.nextCursor === null) break;
+      cursor = page.nextCursor;
+    }
+
+    const swept = yield* sweepRemoved(input);
+
+    return { namespace: input.namespace, total, reembedded, unchanged, removed: swept.removed };
+  });
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/** Load stored fingerprint rows for a specific set of paths (one page), keyed by
+ *  path. Avoids loading the whole fingerprint store per page. */
+const loadFingerprintsForPaths = (
+  fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>,
+  owner: Owner,
+  paths: readonly string[],
+): Effect.Effect<ReadonlyMap<string, FingerprintRow>, SemanticSearchError> =>
+  Effect.forEach(
+    paths,
+    (path) =>
+      fingerprints
+        .getForOwner({ owner, key: path })
+        .pipe(Effect.map((entry) => [path, entry?.data ?? null] as const)),
+    { concurrency: 16 },
+  ).pipe(
+    Effect.map(
+      (pairs) =>
+        new Map(pairs.flatMap(([path, data]) => (data === null ? [] : [[path, data] as const]))),
+    ),
+    Effect.mapError(
+      (cause) => new SemanticSearchError({ message: "Failed to load stored fingerprints.", cause }),
+    ),
+  );
+
+/** Embed the new/changed tools of a page, upsert their vectors (deleting any old
+ *  chunks first), and persist their fingerprint rows. */
+const embedAndUpsert = (
+  deps: {
+    readonly namespace: string;
+    readonly embedder: ToolEmbedder;
+    readonly store: VectorStore;
+    readonly chunker: Chunker;
+    readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
+    readonly owner: Owner;
+  },
+  toEmbed: ReadonlyArray<{
+    readonly doc: {
+      readonly path: string;
+      readonly name: string;
+      readonly description: string;
+      readonly integration: string;
+    };
+    readonly fingerprint: string;
+    readonly oldChunkIds: readonly string[] | null;
+  }>,
+): Effect.Effect<void, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const { namespace, embedder, store, chunker, fingerprints, owner } = deps;
+
     const chunkedGroups = toEmbed.map((item) => ({
       ...item,
       chunks: chunker.chunk(namespace, item.doc),
     }));
 
-    // Gather all embedding texts, preserving their group + chunk positions.
     const allTexts: string[] = [];
     for (const group of chunkedGroups) {
       for (const chunk of group.chunks) {
@@ -179,10 +321,8 @@ export const reconcileToolCatalog = (input: {
       }
     }
 
-    // Single batched embedding call over all changed chunks.
     const allVectors = yield* embedder.embedDocuments(allTexts);
 
-    // Build VectorInput records and collect new chunkIds per tool.
     let vectorOffset = 0;
     const records: VectorInput[] = [];
     const fingerprintUpdates: Array<{ path: string; row: FingerprintRow }> = [];
@@ -195,7 +335,7 @@ export const reconcileToolCatalog = (input: {
         const vec = allVectors[vectorOffset++];
         if (vec === undefined) {
           return yield* new SemanticSearchError({
-            message: `reconcileToolCatalog: embedding vector missing at offset ${vectorOffset - 1}`,
+            message: `reconcileToolCatalogPage: embedding vector missing at offset ${vectorOffset - 1}`,
           });
         }
         records.push({
@@ -216,12 +356,7 @@ export const reconcileToolCatalog = (input: {
 
       fingerprintUpdates.push({
         path: doc.path,
-        row: {
-          path: doc.path,
-          integration: doc.integration,
-          fingerprint,
-          chunkIds: newChunkIds,
-        },
+        row: { path: doc.path, integration: doc.integration, fingerprint, chunkIds: newChunkIds },
       });
 
       // Delete OLD chunk ids for changed tools before upserting new ones.
@@ -230,14 +365,10 @@ export const reconcileToolCatalog = (input: {
       }
     }
 
-    // Upsert all new vectors in one call. `store.upsert` (makeVectorStore)
-    // chunks internally into UPSERT_BATCH_SIZE (50) sequential batches, so the
-    // underlying Vectorize binding never receives more than 50 vectors per
-    // call — well under Cloudflare's 1,000-vector / 2 MB per-upsert caps —
-    // regardless of how many tools changed.
+    // `store.upsert` chunks internally (≤50/batch) so the Vectorize binding never
+    // exceeds Cloudflare's per-upsert caps regardless of page size.
     yield* store.upsert(records);
 
-    // Persist updated fingerprint rows.
     yield* Effect.forEach(
       fingerprintUpdates,
       ({ path, row }) =>
@@ -253,12 +384,4 @@ export const reconcileToolCatalog = (input: {
         ),
       { concurrency: 8, discard: true },
     );
-
-    return {
-      namespace,
-      total,
-      reembedded: toEmbed.length,
-      unchanged,
-      removedSkipped,
-    };
   });
