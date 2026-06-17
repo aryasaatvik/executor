@@ -2,6 +2,7 @@ import { Effect } from "effect";
 
 import { SemanticSearchError } from "./errors";
 import {
+  FTS_COUNT_SQL,
   FTS_DELETE_BY_ID_SQL,
   FTS_INSERT_SQL,
   FTS_SCHEMA_STATEMENTS,
@@ -151,6 +152,22 @@ export const makeD1FtsLexicalStore = (d1: D1Database): FtsLexicalStore => {
               );
             },
             catch: (cause) => new SemanticSearchError({ message: "D1 FTS5 search failed.", cause }),
+          }),
+        ),
+      ),
+
+    count: (namespace: string) =>
+      ensureSchema.pipe(
+        Effect.flatMap(() =>
+          Effect.tryPromise({
+            try: async () => {
+              const { results } = await d1
+                .prepare(FTS_COUNT_SQL)
+                .bind(namespace)
+                .all<{ readonly n: number }>();
+              return results[0]?.n ?? 0;
+            },
+            catch: (cause) => new SemanticSearchError({ message: "D1 FTS5 count failed.", cause }),
           }),
         ),
       ),

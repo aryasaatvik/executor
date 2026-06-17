@@ -1,4 +1,4 @@
-import type { Executor } from "@executor-js/sdk/core";
+import type { Executor, Tool } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import type { ToolDocumentInput } from "./chunker";
@@ -70,60 +70,81 @@ export const buildLexicalText = (doc: ToolDocumentInput): string => {
 export const addressToPath = (address: string): string =>
   address.startsWith(ADDRESS_PREFIX) ? address.slice(ADDRESS_PREFIX.length) : address;
 
-/** Collect the full `ToolDocumentInput` set from the live catalog.
+/** List the live tool descriptors, stably sorted by address.
  *
- *  For each tool returned by `tools.list`, we attempt to fetch its schema via
- *  `tools.schema(address)` to populate the TypeScript facets (inputTypeScript,
- *  outputTypeScript, typeScriptDefinitions). If the schema fetch fails for any
- *  individual tool we degrade gracefully to an identity-only document (no TS
- *  fields) — never failing the whole collection for one tool.
- *
- *  Bounded concurrency (16) keeps the catalog walk fast while avoiding
- *  unbounded fan-out. */
-export const collectToolDocumentInputs = (
-  namespace: string,
+ *  Cheap — descriptors only, NO per-tool schema fetch — so it is safe to call
+ *  once per reindex page (to slice deterministically) and in the removal sweep
+ *  (for liveness). The stable sort gives paged reindex consistent cursor indices
+ *  even though `tools.list` has no native pagination. */
+export const listToolDescriptors = (
   executor: Executor,
-): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
+): Effect.Effect<readonly Tool[], SemanticSearchError> =>
   executor.tools.list({ includeAnnotations: false }).pipe(
     Effect.mapError(
       (cause) => new SemanticSearchError({ message: "Failed to list tools for indexing.", cause }),
     ),
-    Effect.flatMap((tools) =>
-      Effect.forEach(
-        tools,
-        (tool) => {
-          const path = addressToPath(String(tool.address));
-          const base: ToolDocumentInput = {
-            path,
-            name: String(tool.name),
-            integration: String(tool.integration),
-            description: stripHtml(String(tool.description ?? "")),
-          };
-          // Attempt schema fetch; on any failure degrade to identity-only.
-          return executor.tools.schema(tool.address).pipe(
-            Effect.map((view): ToolDocumentInput => {
-              const doc: ToolDocumentInput =
-                view === null
-                  ? base
-                  : {
-                      ...base,
-                      ...(view.inputTypeScript !== undefined
-                        ? { inputTypeScript: view.inputTypeScript }
-                        : {}),
-                      ...(view.outputTypeScript !== undefined
-                        ? { outputTypeScript: view.outputTypeScript }
-                        : {}),
-                      ...(view.typeScriptDefinitions !== undefined
-                        ? { typeScriptDefinitions: view.typeScriptDefinitions }
-                        : {}),
-                    };
-              return { ...doc, lexicalText: buildLexicalText(doc) };
-            }),
-            // Degrade: schema fetch failed — use identity-only document.
-            Effect.catch(() => Effect.succeed({ ...base, lexicalText: buildLexicalText(base) })),
-          );
-        },
-        { concurrency: 16 },
-      ),
+    Effect.map((tools) =>
+      [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address))),
     ),
+  );
+
+/** Collect `ToolDocumentInput` for a specific set of tool descriptors.
+ *
+ *  For each tool we attempt to fetch its schema via `tools.schema(address)` to
+ *  populate the TypeScript facets; on any per-tool failure we degrade gracefully
+ *  to an identity-only document (never failing the whole batch for one tool).
+ *  This per-tool schema → TypeScript codegen is the CPU-heavy part of indexing,
+ *  so callers bound the input (one page) to stay within a single invocation's
+ *  CPU budget.
+ *
+ *  Bounded concurrency (16) keeps the walk fast while avoiding unbounded fan-out. */
+export const collectDocsForTools = (
+  executor: Executor,
+  tools: readonly Tool[],
+): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
+  Effect.forEach(
+    tools,
+    (tool) => {
+      const path = addressToPath(String(tool.address));
+      const base: ToolDocumentInput = {
+        path,
+        name: String(tool.name),
+        integration: String(tool.integration),
+        description: stripHtml(String(tool.description ?? "")),
+      };
+      // Attempt schema fetch; on any failure degrade to identity-only.
+      return executor.tools.schema(tool.address).pipe(
+        Effect.map((view): ToolDocumentInput => {
+          const doc: ToolDocumentInput =
+            view === null
+              ? base
+              : {
+                  ...base,
+                  ...(view.inputTypeScript !== undefined
+                    ? { inputTypeScript: view.inputTypeScript }
+                    : {}),
+                  ...(view.outputTypeScript !== undefined
+                    ? { outputTypeScript: view.outputTypeScript }
+                    : {}),
+                  ...(view.typeScriptDefinitions !== undefined
+                    ? { typeScriptDefinitions: view.typeScriptDefinitions }
+                    : {}),
+                };
+          return { ...doc, lexicalText: buildLexicalText(doc) };
+        }),
+        // Degrade: schema fetch failed — use identity-only document.
+        Effect.catch(() => Effect.succeed({ ...base, lexicalText: buildLexicalText(base) })),
+      );
+    },
+    { concurrency: 16 },
+  );
+
+/** Collect the full `ToolDocumentInput` set from the live catalog (list + schema).
+ *  Convenience for non-paged callers; paged reindex uses `listToolDescriptors`
+ *  to slice, then `collectDocsForTools` on each slice. */
+export const collectToolDocumentInputs = (
+  executor: Executor,
+): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
+  listToolDescriptors(executor).pipe(
+    Effect.flatMap((tools) => collectDocsForTools(executor, tools)),
   );
