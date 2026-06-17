@@ -16,6 +16,7 @@ const mockStore = (rows: readonly FtsSearchResult[]): FtsLexicalStore => ({
   upsert: () => Effect.void,
   deleteByIds: () => Effect.void,
   search: () => Effect.succeed(rows),
+  count: () => Effect.succeed(rows.length),
 });
 
 describe("makeFtsLexicalProvider — namespace filtering", () => {
