@@ -29,13 +29,35 @@ export const SemanticSearchHandlers = HttpApiBuilder.group(
   ExecutorApiWithSemanticSearch,
   "semanticSearch",
   (handlers) =>
-    handlers.handle("reindex", () =>
-      captureEngineError(
-        Effect.gen(function* () {
-          const search = yield* SemanticSearchExtensionService;
-          const executor = yield* ExecutorService;
-          return yield* search.reindex(executor);
-        }),
+    handlers
+      .handle("reindex", () =>
+        captureEngineError(
+          Effect.gen(function* () {
+            const search = yield* SemanticSearchExtensionService;
+            const executor = yield* ExecutorService;
+            return yield* search.reindex(executor);
+          }),
+        ),
+      )
+      .handle("search", ({ query }) =>
+        captureEngineError(
+          Effect.gen(function* () {
+            const search = yield* SemanticSearchExtensionService;
+            const executor = yield* ExecutorService;
+            return yield* search.search(executor, {
+              query: query.q,
+              namespace: query.namespace,
+              limit: query.limit,
+            });
+          }),
+        ),
+      )
+      .handle("status", () =>
+        captureEngineError(
+          Effect.gen(function* () {
+            const search = yield* SemanticSearchExtensionService;
+            return yield* search.status();
+          }),
+        ),
       ),
-    ),
 );
