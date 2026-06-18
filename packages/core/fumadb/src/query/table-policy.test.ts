@@ -515,6 +515,25 @@ describe("FumaDB table policies", () => {
           ],
         });
 
+        await tenantA.upsertMany("posts", {
+          target: ["id"],
+          update: ["title"],
+          values: [
+            {
+              id: "post-a-1",
+              tenantId: "tenant-a",
+              authorId: "author-a",
+              title: "tenant-a-bulk-upserted",
+            },
+            {
+              id: "post-a-4",
+              tenantId: "tenant-a",
+              authorId: "author-a",
+              title: "A Four",
+            },
+          ],
+        });
+
         await expect(
           tenantA.findMany("posts", {
             select: ["id", "title"],
