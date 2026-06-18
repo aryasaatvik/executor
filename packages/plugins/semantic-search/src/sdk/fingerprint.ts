@@ -41,7 +41,7 @@ const canonicalize = (value: unknown): string => {
 // cyrb53 — a fast, stable 53-bit hash with good avalanche properties.
 // Produces a consistent unsigned integer across all JS environments.
 // Source: https://github.com/bryc/code/blob/master/jshash/experimental/cyrb53.js
-function cyrb53(str: string, seed = 0): number {
+export function cyrb53(str: string, seed = 0): number {
   let h1 = 0xdeadbeef ^ seed;
   let h2 = 0x41c6ce57 ^ seed;
   for (let i = 0; i < str.length; i++) {

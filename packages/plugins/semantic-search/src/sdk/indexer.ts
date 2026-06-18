@@ -27,7 +27,7 @@ import {
 } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
-import { fingerprintTool } from "./fingerprint";
+import { cyrb53, fingerprintTool } from "./fingerprint";
 import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
@@ -134,19 +134,6 @@ const ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD = 512;
 const INDEX_STORAGE_CONCURRENCY = 2;
 
 const nowIso = (): string => new Date().toISOString();
-
-const cyrb53 = (str: string): number => {
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-  for (let i = 0; i < str.length; i++) {
-    const ch = str.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
-};
 
 const partitionForPath = (path: string, partitionCount: number): number =>
   Math.abs(cyrb53(path)) % Math.max(1, Math.floor(partitionCount));
@@ -463,7 +450,7 @@ export const seedIndexPartitionPage = (
       runId: input.runId,
       partition: input.partition,
       processed: selected.length,
-      changed: selected.length,
+      changed: 0,
       unchanged: 0,
     };
   });
@@ -800,10 +787,7 @@ const finalizeCompletedEmbedJobs = (
     let finalized = 0;
     for (const { data: job } of jobs) {
       const chunkEntries = preloadedChunks?.get(job.path) ?? (yield* queryChunksForJob(input, job));
-      if (
-        chunkEntries.length === 0 ||
-        chunkEntries.some((entry) => entry.data.status !== "committed")
-      ) {
+      if (chunkEntries.some((entry) => entry.data.status !== "committed")) {
         continue;
       }
 

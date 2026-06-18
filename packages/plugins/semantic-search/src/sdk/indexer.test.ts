@@ -330,4 +330,71 @@ describe("indexer", () => {
       expect([...fingerprints.data.values()]).toHaveLength(1);
     }),
   );
+
+  it.effect("commits zero-chunk embed jobs so fingerprints can warm future runs", () =>
+    Effect.gen(function* () {
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
+      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const blobs = makeBlobs();
+      const store: VectorStore = {
+        maxTopK: 100,
+        query: () => Effect.succeed([]),
+        upsert: () => Effect.die("zero-chunk jobs must not upsert vectors"),
+        deleteByIds: () => Effect.void,
+      };
+      const embedder: ToolEmbedder = {
+        model: "test",
+        dimensions: 3,
+        embedDocuments: () => Effect.die("zero-chunk jobs must not embed"),
+        embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
+      };
+
+      const createdAt = new Date(0).toISOString();
+      const job: IndexJob = {
+        runId: "run-zero",
+        namespace,
+        partition: 0,
+        ordinal: 0,
+        address: "tools.github.repos.empty",
+        path: "github.repos.empty",
+        name: "repos.empty",
+        integration: "github",
+        description: "Empty tool",
+        status: "pendingEmbed",
+        fingerprint: "fp-zero",
+        oldChunkIds: [],
+        chunkIds: [],
+        createdAt,
+        updatedAt: createdAt,
+      };
+      yield* jobs.put({ owner, key: `${job.runId}:${job.path}`, data: job });
+
+      const result = yield* embedIndexPartitionPage({
+        namespace,
+        executor: makeExecutor({ raw: 0, codegen: 0 }),
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+        embedder,
+        store,
+        chunker: makeFacetChunker(),
+        runId: job.runId,
+        partition: 0,
+        limit: 10,
+      });
+
+      expect(result).toMatchObject({ processed: 1, chunks: 0 });
+      expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("committed");
+      expect(fingerprints.data.get(job.path)).toMatchObject({
+        path: job.path,
+        fingerprint: "fp-zero",
+        chunkIds: [],
+      });
+    }),
+  );
 });
