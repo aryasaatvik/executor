@@ -93,7 +93,6 @@ scenario(
           transport: "remote",
           name: "Refresh MCP",
           endpoint: server.endpoint,
-          remoteTransport: "streamable-http",
           slug,
         },
       });
