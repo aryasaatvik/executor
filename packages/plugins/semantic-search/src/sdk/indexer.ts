@@ -130,6 +130,7 @@ const DEFAULT_EMBED_MAX_CHUNKS = 128;
 const DEFAULT_EMBED_MAX_ESTIMATED_INPUT_TOKENS = 64_000;
 const DEFAULT_EMBED_MAX_ESTIMATED_RESPONSE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_EMBED_MAX_ESTIMATED_TOKENS_PER_TEXT = 2_048;
+const DEFAULT_EMBED_COMMIT_GROUP_SIZE = 32;
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const ESTIMATED_RESPONSE_BYTES_PER_DIMENSION = 16;
 const ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD = 512;
@@ -699,63 +700,71 @@ export const embedIndexPartitionPage = (
       };
     }
 
-    const selectedTexts = yield* Effect.forEach(
-      selectedChunks,
-      (entry) => getPayloadText(input, entry.data.embeddingTextKey),
-      { concurrency: INDEX_STORAGE_CONCURRENCY },
-    );
-    const vectors = yield* input.embedder.embedDocuments(selectedTexts);
-    const records: VectorInput[] = [];
-    for (let i = 0; i < selectedChunks.length; i++) {
-      const chunk = selectedChunks[i]?.data;
-      const vec = vectors[i];
-      if (chunk === undefined || vec === undefined) {
-        return yield* new SemanticSearchError({
-          message: `embedIndexPartitionPage: embedding vector missing at offset ${i}`,
+    const updatedAt = nowIso();
+    const affectedPaths = new Set<string>();
+    let committedChunks = 0;
+
+    for (let start = 0; start < selectedChunks.length; start += DEFAULT_EMBED_COMMIT_GROUP_SIZE) {
+      const group = selectedChunks.slice(start, start + DEFAULT_EMBED_COMMIT_GROUP_SIZE);
+      const texts = yield* Effect.forEach(
+        group,
+        (entry) => getPayloadText(input, entry.data.embeddingTextKey),
+        { concurrency: INDEX_STORAGE_CONCURRENCY },
+      );
+      const vectors = yield* input.embedder.embedDocuments(texts);
+      const records: VectorInput[] = [];
+
+      for (let i = 0; i < group.length; i++) {
+        const chunk = group[i]?.data;
+        const vec = vectors[i];
+        if (chunk === undefined || vec === undefined) {
+          return yield* new SemanticSearchError({
+            message: `embedIndexPartitionPage: embedding vector missing at group offset ${i}; expected ${group.length} vectors and received ${vectors.length}.`,
+          });
+        }
+        records.push({
+          id: chunk.chunkId,
+          values: vec,
+          namespace: input.namespace,
+          metadata: {
+            path: chunk.path,
+            name: chunk.name,
+            description: chunk.description,
+            integration: chunk.integration,
+            facet: chunk.facet,
+            chunkIndex: chunk.chunkIndex,
+          },
         });
       }
-      records.push({
-        id: chunk.chunkId,
-        values: vec,
-        namespace: input.namespace,
-        metadata: {
-          path: chunk.path,
-          name: chunk.name,
-          description: chunk.description,
-          integration: chunk.integration,
-          facet: chunk.facet,
-          chunkIndex: chunk.chunkIndex,
-        },
-      });
-    }
 
-    if (records.length > 0) {
       yield* input.store.upsert(records);
+      yield* Effect.forEach(
+        group,
+        (entry) =>
+          input.chunks
+            .put({
+              owner: input.owner,
+              key: entry.key,
+              data: { ...entry.data, status: "committed", updatedAt },
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new SemanticSearchError({
+                    message: `Failed to mark chunk "${entry.data.chunkId}" committed.`,
+                    cause,
+                  }),
+              ),
+            ),
+        { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
+      );
+
+      committedChunks += records.length;
+      for (const entry of group) {
+        affectedPaths.add(entry.data.path);
+      }
     }
 
-    const updatedAt = nowIso();
-    yield* Effect.forEach(
-      selectedChunks,
-      (entry) =>
-        input.chunks
-          .put({
-            owner: input.owner,
-            key: entry.key,
-            data: { ...entry.data, status: "committed", updatedAt },
-          })
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new SemanticSearchError({
-                  message: `Failed to mark chunk "${entry.data.chunkId}" committed.`,
-                  cause,
-                }),
-            ),
-          ),
-      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
-    );
-
-    const affectedPaths = new Set(selectedChunks.map((entry) => entry.data.path));
     const finalizationCandidates = jobs.filter(({ data: job }) => {
       if (affectedPaths.has(job.path)) return true;
       return !(chunkEntriesByPath.get(job.path) ?? []).some(
@@ -773,7 +782,7 @@ export const embedIndexPartitionPage = (
       runId: input.runId,
       partition: input.partition,
       processed: Math.max(affectedPaths.size, finalized),
-      chunks: records.length,
+      chunks: committedChunks,
     };
   });
 
@@ -822,7 +831,7 @@ const finalizeCompletedEmbedJobs = (
         );
 
       if (job.oldChunkIds.length > 0) {
-        yield* input.store.deleteByIds([...job.oldChunkIds]);
+        yield* input.store.deleteByIds(job.oldChunkIds);
       }
 
       if (input.lexicalStore) {
@@ -924,7 +933,7 @@ export const sweepRemoved = (input: {
       (entry) =>
         Effect.gen(function* () {
           if (entry.data.chunkIds.length > 0) {
-            yield* input.store.deleteByIds([...entry.data.chunkIds]);
+            yield* input.store.deleteByIds(entry.data.chunkIds);
           }
           if (input.lexicalStore) {
             yield* input.lexicalStore.deleteByIds([`${input.namespace}:${entry.key}`]);
