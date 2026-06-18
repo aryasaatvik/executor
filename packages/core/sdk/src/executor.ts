@@ -1,4 +1,5 @@
-import { Effect, Inspectable, Layer, Option, Predicate, Schema } from "effect";
+import { Cache, Duration, Effect, Inspectable, Layer, Option, Predicate, Schema } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 import { FetchHttpClient, type HttpClient } from "effect/unstable/http";
 import { fumadb } from "@executor-js/fumadb";
 import { memoryAdapter } from "@executor-js/fumadb/adapters/memory";
@@ -172,8 +173,14 @@ import {
 } from "./owner-policy";
 import { ToolSchemaView, type IntegrationDetectionResult } from "./types";
 import { type Tool, type ToolAnnotations, type ToolDef, type ToolListFilter } from "./tool";
-import { buildToolTypeScriptPreview } from "./schema-types";
+import { buildToolTypeScriptPreview, type ToolTypeScriptPreview } from "./schema-types";
 import { collectReferencedDefinitions } from "./schema-refs";
+import {
+  TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+  TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+  ToolTypeScriptPreviewCacheEntry,
+  toolTypeScriptPreviewCacheKey,
+} from "./tool-typescript-preview-cache";
 import {
   refreshAccessToken,
   exchangeClientCredentials,
@@ -626,6 +633,13 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
    * values stay out of the relational tier.
    */
   readonly blobs?: BlobStore;
+  /**
+   * Durable key/value store for derived executor artifacts. Defaults to an
+   * isolate-local in-memory store; hosts can provide Effect's
+   * `KeyValueStore.KeyValueStore` backed by platform storage such as
+   * Cloudflare KV.
+   */
+  readonly keyValueStore?: KeyValueStore.KeyValueStore;
   readonly plugins?: TPlugins;
   /** Config-level credential providers, merged with every
    *  `plugin.credentialProviders`. Config providers register first, so the
@@ -2011,6 +2025,25 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     const fuma = makeFumaClient(rootDb);
     const core = makeCoreDb(fuma);
     const blobs = config.blobs ?? makeFumaBlobStore(fuma);
+    const typeScriptPreviewStore =
+      config.keyValueStore === undefined
+        ? undefined
+        : KeyValueStore.toSchemaStore(config.keyValueStore, ToolTypeScriptPreviewCacheEntry);
+    const typeScriptPreviewCache = yield* Cache.make({
+      capacity: 2_048,
+      timeToLive: Duration.minutes(10),
+      lookup: (key: string) =>
+        Effect.gen(function* () {
+          if (typeScriptPreviewStore === undefined) return null;
+
+          const entry = yield* typeScriptPreviewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isNone(entry)) return null;
+
+          return entry.value.preview;
+        }),
+    });
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
 
     // Runtime-observed output shapes ("muscle memory"): learned on the
@@ -2039,6 +2072,44 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       }
       return [...byId.values()];
     };
+
+    const buildCachedToolTypeScriptPreview = (input: {
+      readonly inputSchema?: unknown;
+      readonly outputSchema?: unknown;
+      readonly defs: ReadonlyMap<string, unknown>;
+    }): Effect.Effect<ToolTypeScriptPreview, StorageFailure> =>
+      Effect.gen(function* () {
+        const definitions = Object.fromEntries(input.defs);
+        const key = yield* toolTypeScriptPreviewCacheKey({
+          inputSchema: input.inputSchema,
+          outputSchema: input.outputSchema,
+          definitions,
+        });
+        const cached = yield* Cache.get(typeScriptPreviewCache, key);
+        if (cached !== null) return cached;
+
+        const preview = yield* Effect.tryPromise({
+          try: () =>
+            buildToolTypeScriptPreview({
+              inputSchema: input.inputSchema,
+              outputSchema: input.outputSchema,
+              defs: input.defs,
+            }),
+          catch: (cause) =>
+            storageFailureFromUnknown("Failed to build tool TypeScript preview", cause),
+        });
+        yield* Cache.set(typeScriptPreviewCache, key, preview);
+        if (typeScriptPreviewStore !== undefined) {
+          yield* typeScriptPreviewStore
+            .set(key, {
+              version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+              compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+              preview,
+            })
+            .pipe(Effect.ignore);
+        }
+        return preview;
+      });
 
     const staticDeclToIntegration = (integration: StaticIntegrationDecl): Integration => ({
       slug: IntegrationSlug.make(integration.id),
@@ -4348,15 +4419,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             tool.annotations?.requiresApproval,
           );
           if (effective.action === "block") return null;
-          const preview = yield* Effect.tryPromise({
-            try: () =>
-              buildToolTypeScriptPreview({
-                inputSchema: tool.inputSchema,
-                outputSchema: tool.outputSchema,
-                defs: new Map(),
-              }),
-            catch: (cause) =>
-              storageFailureFromUnknown("Failed to build static tool TypeScript preview", cause),
+          const preview = yield* buildCachedToolTypeScriptPreview({
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            defs: new Map(),
           }).pipe(Effect.option);
           return ToolSchemaView.make({
             address,
@@ -4441,15 +4507,11 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         for (const def of definitionRows) defs.set(def.name, decodeJsonColumn(def.schema));
 
         const referenced = collectReferencedDefinitions([inputSchema, effectiveOutputSchema], defs);
-        const preview = yield* Effect.tryPromise({
-          try: () =>
-            buildToolTypeScriptPreview({
-              inputSchema,
-              outputSchema: effectiveOutputSchema,
-              defs,
-            }),
-          catch: (cause) =>
-            storageFailureFromUnknown("Failed to build tool TypeScript preview", cause),
+        const referencedDefs = new Map<string, unknown>(Object.entries(referenced));
+        const preview = yield* buildCachedToolTypeScriptPreview({
+          inputSchema,
+          outputSchema: effectiveOutputSchema,
+          defs: referencedDefs,
         }).pipe(Effect.option);
 
         const view = preview;
