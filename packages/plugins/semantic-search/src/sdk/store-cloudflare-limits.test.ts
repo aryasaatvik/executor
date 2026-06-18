@@ -114,6 +114,39 @@ describe("withCloudflareLimits", () => {
     );
   });
 
+  describe("upsert — metadata byte-length guard", () => {
+    it.effect("rejects metadata over 10 KiB", () =>
+      Effect.gen(function* () {
+        const { store, state } = makeFakeStore();
+        const wrapped = withCloudflareLimits(store);
+        const metadata = { description: "x".repeat(10 * 1024) };
+        expect(Buffer.byteLength(JSON.stringify(metadata), "utf8")).toBeGreaterThan(10 * 1024);
+
+        const exit = yield* wrapped
+          .upsert([{ id: "valid-id", values: [1, 0, 0], metadata }])
+          .pipe(Effect.exit);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(state.upsertCalls).toHaveLength(0);
+      }),
+    );
+
+    it.effect("passes through metadata within the 10 KiB limit", () =>
+      Effect.gen(function* () {
+        const { store, state } = makeFakeStore();
+        const wrapped = withCloudflareLimits(store);
+        const metadata = { description: "x".repeat(1_024) };
+
+        const exit = yield* wrapped
+          .upsert([{ id: "valid-id", values: [1, 0, 0], metadata }])
+          .pipe(Effect.exit);
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(state.upsertCalls).toHaveLength(1);
+      }),
+    );
+  });
+
   describe("query — topK cap guard", () => {
     it.effect("rejects topK = 21 (one over the metadata-all cap)", () =>
       Effect.gen(function* () {

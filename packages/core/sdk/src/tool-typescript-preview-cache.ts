@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 
 import { sha256Hex } from "./blob";
+import { cacheKeyPayload } from "./cache-key";
 import type { TypeScriptRenderOptions } from "./schema-types";
 
 export const TOOL_TYPESCRIPT_PREVIEW_CACHE_PREFIX = "tool-typescript-preview/";
@@ -26,28 +27,15 @@ interface ToolTypeScriptPreviewCacheKeyInput {
   readonly options?: TypeScriptRenderOptions;
 }
 
-const normalizeForHash = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(normalizeForHash);
-  if (value === null || typeof value !== "object") return value;
-
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    out[key] = normalizeForHash((value as Record<string, unknown>)[key]);
-  }
-  return out;
-};
-
 const cachePayload = (input: ToolTypeScriptPreviewCacheKeyInput): string =>
-  JSON.stringify(
-    normalizeForHash({
-      version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-      compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-      inputSchema: input.inputSchema,
-      outputSchema: input.outputSchema,
-      definitions: input.definitions,
-      options: input.options ?? {},
-    }),
-  );
+  cacheKeyPayload({
+    version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+    compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+    inputSchema: input.inputSchema,
+    outputSchema: input.outputSchema,
+    definitions: input.definitions,
+    options: input.options ?? {},
+  });
 
 export const toolTypeScriptPreviewCacheKey = (
   input: ToolTypeScriptPreviewCacheKeyInput,

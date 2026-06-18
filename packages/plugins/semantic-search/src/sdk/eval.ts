@@ -72,7 +72,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "google",
     description:
       "Creates an event on the specified calendar. The event can include a title, description, start/end time, attendees, location, and recurrence rules.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   calendarId: string;        // 'primary' or a calendar id
   summary: string;           // event title
   description?: string;
@@ -82,7 +82,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   location?: string;
   recurrence?: string[];     // RRULE strings
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   htmlLink: string;
   status: 'confirmed' | 'tentative' | 'cancelled';
@@ -97,12 +97,12 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "google",
     description:
       "Creates an event based on a simple text string such as 'Appointment at Somewhere on June 3rd 10am-10:25am'. Google parses the natural-language text to populate the event fields.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   calendarId: string;
   text: string;   // natural-language event description
   sendUpdates?: 'all' | 'externalOnly' | 'none';
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   htmlLink: string;
   summary: string;
@@ -116,12 +116,12 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "google",
     description:
       "Deletes an event from a calendar. Once deleted the event is removed from the calendar view. For recurring events you can target a single instance or the entire series.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   calendarId: string;
   eventId: string;
   sendUpdates?: 'all' | 'externalOnly' | 'none';
 }`,
-    outputTypeScript: "void",
+    outputSchemaText: "void",
   },
   {
     path: "tools.google.org.x.gmail.users.messages.send",
@@ -129,12 +129,12 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "google",
     description:
       "Sends the specified message to the recipients in the To, Cc, and Bcc headers. The message body is supplied as a base64url-encoded RFC 2822 email string.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   userId: string;           // 'me' for the authenticated user
   raw: string;              // base64url-encoded RFC 2822 message
   threadId?: string;        // supply to reply in an existing thread
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   threadId: string;
   labelIds: string[];
@@ -146,7 +146,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "github",
     description:
       "Create an issue in a repository. Any user with pull access to a repository can create an issue. Issues can include a title, body, labels, assignees, and milestone.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   owner: string;
   repo: string;
   title: string;
@@ -155,7 +155,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   assignees?: string[];
   milestone?: number;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: number;
   number: number;
   html_url: string;
@@ -169,7 +169,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "github",
     description:
       "Create a pull request to propose and collaborate on changes to a repository. The pull request includes a title, body, head branch, and base branch to merge into.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   owner: string;
   repo: string;
   title: string;
@@ -178,7 +178,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   body?: string;
   draft?: boolean;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: number;
   number: number;
   html_url: string;
@@ -193,8 +193,8 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "github",
     description:
       "Gets a repository's metadata, including its description, default branch, visibility, star count, and clone URL.",
-    inputTypeScript: `{ owner: string; repo: string }`,
-    outputTypeScript: `{
+    inputSchemaText: `{ owner: string; repo: string }`,
+    outputSchemaText: `{
   id: number;
   name: string;
   full_name: string;
@@ -210,7 +210,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "stripe",
     description:
       "To charge a credit or debit card, you create a Charge object. Stripe attempts to immediately collect funds from the customer's payment source. Pass amount in the smallest currency unit (e.g. cents for USD).",
-    inputTypeScript: `{
+    inputSchemaText: `{
   amount: number;          // in smallest currency unit (e.g. cents)
   currency: string;        // ISO 4217 code, e.g. 'usd'
   source?: string;         // card token or payment method id
@@ -219,7 +219,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   metadata?: Record<string, string>;
   capture?: boolean;       // default true; false for auth-only
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   amount: number;
   currency: string;
@@ -234,14 +234,14 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "stripe",
     description:
       "Refund a charge that has previously been created but not yet refunded. Funds will be refunded to the credit or debit card that was originally charged. You can refund the full amount or a partial amount.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   charge?: string;           // charge id to refund
   payment_intent?: string;   // or payment_intent id
   amount?: number;           // omit to refund the full charge
   reason?: 'duplicate' | 'fraudulent' | 'requested_by_customer';
   metadata?: Record<string, string>;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   amount: number;
   currency: string;
@@ -255,7 +255,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "stripe",
     description:
       "Creates a new customer object you can later charge or attach payment methods to. Customer objects allow you to perform recurring charges, track multiple payments, and store payment details.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   email?: string;
   name?: string;
   phone?: string;
@@ -263,7 +263,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   payment_method?: string;
   metadata?: Record<string, string>;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   email: string | null;
   name: string | null;
@@ -277,14 +277,14 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "slack",
     description:
       "Sends a message to a channel. The channel can be a public channel, private channel, or direct message. Supports rich formatting via Block Kit or simple markdown text.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   channel: string;     // channel ID or name
   text?: string;       // plain text fallback
   blocks?: unknown[];  // Block Kit blocks
   thread_ts?: string;  // reply in a thread
   mrkdwn?: boolean;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   ok: boolean;
   channel: string;
   ts: string;          // message timestamp (also the message id)
@@ -297,7 +297,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     integration: "linear",
     description:
       "Create a new issue in a Linear team, with title, description, assignee, and priority. Issues track work items and bugs within a team's backlog.",
-    inputTypeScript: `{
+    inputSchemaText: `{
   teamId: string;
   title: string;
   description?: string;     // markdown
@@ -306,7 +306,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   labelIds?: string[];
   stateId?: string;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   identifier: string;  // e.g. 'ENG-123'
   title: string;
@@ -320,7 +320,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
     name: "subscriptions.create",
     integration: "stripe",
     description: SUBSCRIPTION_DESC,
-    inputTypeScript: `{
+    inputSchemaText: `{
   customer: string;
   items: Array<{ price: string; quantity?: number }>;
   trial_period_days?: number;
@@ -332,7 +332,7 @@ const SAMPLE: readonly ToolDocumentInput[] = [
   billing_cycle_anchor?: number | 'now';
   metadata?: Record<string, string>;
 }`,
-    outputTypeScript: `{
+    outputSchemaText: `{
   id: string;
   status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid' | 'incomplete';
   current_period_start: number;
@@ -429,8 +429,8 @@ const loadRealCatalog = (): readonly ToolDocumentInput[] => {
       name: row.name,
       integration: row.integration,
       description: stripHtml((colToString(row.description as string | Buffer | null) ?? "").trim()),
-      inputTypeScript: inputTs ? inputTs.slice(0, 1500) : undefined,
-      outputTypeScript: outputTs ? outputTs.slice(0, 1500) : undefined,
+      inputSchemaText: inputTs ? inputTs.slice(0, 1500) : undefined,
+      outputSchemaText: outputTs ? outputTs.slice(0, 1500) : undefined,
     };
 
     tools.push({ ...doc, lexicalText: buildLexicalText(doc) });

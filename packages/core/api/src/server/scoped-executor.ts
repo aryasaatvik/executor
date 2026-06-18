@@ -283,7 +283,7 @@ export const makeScopedExecutor = <
         config.waitUntil?.(released);
       },
     });
-    const keyValueStore = yield* Effect.serviceOption(KeyValueStore.KeyValueStore);
+    const cache = yield* Effect.serviceOption(KeyValueStore.KeyValueStore);
     // Explicit config wins; otherwise fall back to the request origin if a host
     // provided one (HTTP middleware / MCP session DO). Stays `undefined` for
     // non-request callers — `coreTools.webBaseUrl` is optional and only the
@@ -335,9 +335,9 @@ export const makeScopedExecutor = <
       subject: Subject.make(accountId),
       db,
       blobs,
-      ...Option.match(keyValueStore, {
+      ...Option.match(cache, {
         onNone: () => ({}),
-        onSome: (store) => ({ keyValueStore: store }),
+        onSome: (store) => ({ cache: store }),
       }),
       plugins,
       httpClientLayer,
