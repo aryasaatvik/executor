@@ -208,7 +208,7 @@ describe("indexer", () => {
 
   it.effect("limits seeded tools when maxTools is provided", () =>
     Effect.gen(function* () {
-      const executor = {
+      const executor: Pick<Executor, "tools"> = {
         tools: {
           list: () =>
             Effect.succeed([
@@ -242,13 +242,22 @@ describe("indexer", () => {
             ]),
           schema: () => Effect.succeed(null),
         },
-      } as unknown as Executor;
+      };
       const runs = makeCollection<IndexRun>(indexRuns.name);
       const jobs = makeCollection<IndexJob>(indexJobs.name);
       const chunks = makeCollection<IndexChunk>(indexChunks.name);
       const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
       const blobs = makeBlobs();
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      const base = {
+        namespace,
+        executor: executor as Executor,
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+      };
 
       const started = yield* startIndexRun({
         ...base,
