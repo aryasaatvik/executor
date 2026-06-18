@@ -219,7 +219,6 @@ scenario(
         transport: "remote",
         name: "Broken MCP",
         endpoint: "http://127.0.0.1:1/mcp",
-        remoteTransport: "auto",
         slug,
       },
     });
@@ -231,7 +230,6 @@ scenario(
       config: {
         transport: "remote",
         endpoint: "http://127.0.0.1:1/mcp",
-        remoteTransport: "auto",
       },
     });
   }),
@@ -260,7 +258,6 @@ scenario(
           transport: "remote",
           name: "E2E MCP",
           endpoint: server.endpoint,
-          remoteTransport: "streamable-http",
           slug,
         },
       });

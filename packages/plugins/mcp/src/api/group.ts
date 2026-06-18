@@ -34,7 +34,6 @@ const AddRemoteServerPayload = Schema.Struct({
   /** Agent-visible catalog description. Defaults to the display name. */
   description: Schema.optional(Schema.String),
   endpoint: Schema.String,
-  remoteTransport: Schema.optional(Schema.Literals(["streamable-http", "sse", "auto"])),
   slug: Schema.optional(Schema.String),
   queryParams: Schema.optional(StringMap),
   headers: Schema.optional(StringMap),
