@@ -156,9 +156,6 @@ const jobKey = (runId: string, path: string): string => `${runId}:${path}`;
 const chunkKey = (runId: string, path: string, chunkId: string): string =>
   `${runId}:${path}:${chunkId}`;
 
-const storageError = (message: string, cause: unknown): SemanticSearchError =>
-  new SemanticSearchError({ message, cause });
-
 const jobToDescriptor = (job: StagedIndexJob): IndexableToolDescriptor => ({
   address: job.address,
   name: job.name,
@@ -184,7 +181,12 @@ const queryJobs = (
       orderBy: [{ field: "ordinal", direction: "asc" }],
       limit: input.limit ?? DEFAULT_PAGE_LIMIT,
     })
-    .pipe(Effect.mapError((cause) => storageError("Failed to query staged index jobs.", cause)));
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({ message: "Failed to query staged index jobs.", cause }),
+      ),
+    );
 
 const queryChunksForJob = (
   deps: StagedIndexCollections,
@@ -200,7 +202,10 @@ const queryChunksForJob = (
     })
     .pipe(
       Effect.map((entries) => [...entries].sort((a, b) => a.data.chunkIndex - b.data.chunkIndex)),
-      Effect.mapError((cause) => storageError("Failed to query staged index chunks.", cause)),
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({ message: "Failed to query staged index chunks.", cause }),
+      ),
     );
 
 interface EmbedBudget {
@@ -242,13 +247,15 @@ const putPayloadText = (
   Effect.gen(function* () {
     const digest = yield* sha256Hex(text);
     const key = payloadKey(kind, digest);
-    yield* deps.blobs
-      .put(key, text, { owner: deps.owner })
-      .pipe(
-        Effect.mapError((cause) =>
-          storageError(`Failed to persist staged ${kind} payload "${key}".`, cause),
-        ),
-      );
+    yield* deps.blobs.put(key, text, { owner: deps.owner }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: `Failed to persist staged ${kind} payload "${key}".`,
+            cause,
+          }),
+      ),
+    );
     return key;
   });
 
@@ -257,7 +264,10 @@ const getPayloadText = (
   key: string,
 ): Effect.Effect<string, SemanticSearchError> =>
   deps.blobs.get(key).pipe(
-    Effect.mapError((cause) => storageError(`Failed to load staged payload "${key}".`, cause)),
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({ message: `Failed to load staged payload "${key}".`, cause }),
+    ),
     Effect.flatMap((text) =>
       text === null
         ? Effect.fail(new SemanticSearchError({ message: `Staged payload "${key}" is missing.` }))
@@ -303,7 +313,13 @@ const loadFingerprints = (
       (pairs) =>
         new Map(pairs.flatMap(([path, data]) => (data === null ? [] : [[path, data] as const]))),
     ),
-    Effect.mapError((cause) => storageError("Failed to load staged fingerprint rows.", cause)),
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({
+          message: "Failed to load staged fingerprint rows.",
+          cause,
+        }),
+    ),
   );
 
 const putJob = (
@@ -311,7 +327,13 @@ const putJob = (
   job: StagedIndexJob,
 ): Effect.Effect<void, SemanticSearchError> =>
   deps.jobs.put({ owner: deps.owner, key: jobKey(job.runId, job.path), data: job }).pipe(
-    Effect.mapError((cause) => storageError(`Failed to persist staged job "${job.path}".`, cause)),
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({
+          message: `Failed to persist staged job "${job.path}".`,
+          cause,
+        }),
+    ),
     Effect.asVoid,
   );
 
@@ -324,13 +346,15 @@ const removeChunksForJob = (
       Effect.forEach(
         entries,
         (entry) =>
-          deps.chunks
-            .remove({ owner: deps.owner, key: entry.key })
-            .pipe(
-              Effect.mapError((cause) =>
-                storageError(`Failed to remove staged chunk "${entry.key}".`, cause),
-              ),
+          deps.chunks.remove({ owner: deps.owner, key: entry.key }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({
+                  message: `Failed to remove staged chunk "${entry.key}".`,
+                  cause,
+                }),
             ),
+          ),
         { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
       ),
     ),
@@ -358,7 +382,12 @@ export const startIndexRun = (
           updatedAt: createdAt,
         },
       })
-      .pipe(Effect.mapError((cause) => storageError("Failed to create staged index run.", cause)));
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({ message: "Failed to create staged index run.", cause }),
+        ),
+      );
 
     return {
       runId: input.runId,
@@ -374,7 +403,12 @@ export const seedIndexPartitionPage = (
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(Effect.mapError((cause) => storageError("Failed to load staged index run.", cause)));
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({ message: "Failed to load staged index run.", cause }),
+        ),
+      );
     if (run === null) {
       return yield* new SemanticSearchError({
         message: `Staged index run "${input.runId}" does not exist.`,
@@ -387,7 +421,12 @@ export const seedIndexPartitionPage = (
       .filter(({ path }) => partitionForPath(path, run.data.partitionCount) === input.partition);
     const existing = yield* input.jobs
       .count({ where: { runId: input.runId, partition: input.partition } })
-      .pipe(Effect.mapError((cause) => storageError("Failed to count seeded index jobs.", cause)));
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({ message: "Failed to count seeded index jobs.", cause }),
+        ),
+      );
     const selected = partitionDescriptors.slice(
       existing,
       existing + (input.limit ?? DEFAULT_PAGE_LIMIT),
@@ -597,7 +636,10 @@ const putChunk = (
       },
     });
   }).pipe(
-    Effect.mapError((cause) => storageError(`Failed to persist chunk "${chunk.id}".`, cause)),
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({ message: `Failed to persist chunk "${chunk.id}".`, cause }),
+    ),
     Effect.asVoid,
   );
 
@@ -720,8 +762,12 @@ export const embedIndexPartitionPage = (
             data: { ...entry.data, status: "committed", updatedAt },
           })
           .pipe(
-            Effect.mapError((cause) =>
-              storageError(`Failed to mark chunk "${entry.data.chunkId}" committed.`, cause),
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({
+                  message: `Failed to mark chunk "${entry.data.chunkId}" committed.`,
+                  cause,
+                }),
             ),
           ),
       { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
@@ -787,8 +833,12 @@ const finalizeCompletedEmbedJobs = (
           },
         })
         .pipe(
-          Effect.mapError((cause) =>
-            storageError(`Failed to persist fingerprint row for "${job.path}".`, cause),
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({
+                message: `Failed to persist fingerprint row for "${job.path}".`,
+                cause,
+              }),
           ),
         );
 
@@ -825,11 +875,21 @@ export const indexRunStatus = (
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(Effect.mapError((cause) => storageError("Failed to load staged index run.", cause)));
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({ message: "Failed to load staged index run.", cause }),
+        ),
+      );
     const count = (status: StagedIndexJob["status"]) =>
       input.jobs
         .count({ where: { runId: input.runId, status } })
-        .pipe(Effect.mapError((cause) => storageError(`Failed to count ${status} jobs.`, cause)));
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({ message: `Failed to count ${status} jobs.`, cause }),
+          ),
+        );
     const [pendingDiff, unchanged, pendingMaterialize, pendingEmbed, committed, failed] =
       yield* Effect.all(
         [
@@ -870,13 +930,15 @@ export const sweepRemoved = (input: {
     if (live.length === 0) return { namespace: input.namespace, removed: 0 };
 
     const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
-    const stored = yield* input.fingerprints
-      .list()
-      .pipe(
-        Effect.mapError((cause) =>
-          storageError("Failed to load fingerprint rows for removed-tool sweep.", cause),
-        ),
-      );
+    const stored = yield* input.fingerprints.list().pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to load fingerprint rows for removed-tool sweep.",
+            cause,
+          }),
+      ),
+    );
     const removed = stored.filter((entry) => !livePaths.has(entry.key));
 
     yield* Effect.forEach(
@@ -889,16 +951,15 @@ export const sweepRemoved = (input: {
           if (input.lexicalStore) {
             yield* input.lexicalStore.deleteByIds([`${input.namespace}:${entry.key}`]);
           }
-          yield* input.fingerprints
-            .remove({ owner: input.owner, key: entry.key })
-            .pipe(
-              Effect.mapError((cause) =>
-                storageError(
-                  `Failed to delete fingerprint row for removed tool "${entry.key}".`,
+          yield* input.fingerprints.remove({ owner: input.owner, key: entry.key }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({
+                  message: `Failed to delete fingerprint row for removed tool "${entry.key}".`,
                   cause,
-                ),
-              ),
-            );
+                }),
+            ),
+          );
         }),
       { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
     );
@@ -912,13 +973,15 @@ export const completeIndexRun = (
 ): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const result = yield* sweep;
-    const existing = yield* input.runs
-      .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(
-        Effect.mapError((cause) =>
-          storageError("Failed to load staged run for completion.", cause),
-        ),
-      );
+    const existing = yield* input.runs.getForOwner({ owner: input.owner, key: input.runId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to load staged run for completion.",
+            cause,
+          }),
+      ),
+    );
     const updatedAt = nowIso();
     if (existing !== null) {
       yield* input.runs
@@ -928,7 +991,10 @@ export const completeIndexRun = (
           data: { ...existing.data, status: "completed", updatedAt },
         })
         .pipe(
-          Effect.mapError((cause) => storageError("Failed to mark staged run completed.", cause)),
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({ message: "Failed to mark staged run completed.", cause }),
+          ),
         );
     }
     return { runId: input.runId, removed: result.removed };

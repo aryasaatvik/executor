@@ -35,8 +35,8 @@ const namespace = "test-ns";
 const makeBlobs = () =>
   pluginBlobStore(makeInMemoryBlobStore(), { org: "test-org", user: null }, "semanticSearch");
 
-const makeExecutor = (counters: { raw: number; codegen: number }): Executor =>
-  ({
+const makeExecutor = (counters: { raw: number; codegen: number }): Executor => {
+  const executor: Pick<Executor, "tools"> = {
     tools: {
       list: () =>
         Effect.succeed([
@@ -50,21 +50,26 @@ const makeExecutor = (counters: { raw: number; codegen: number }): Executor =>
             pluginId: "test",
           },
         ]),
-      schema: (_address: never, options?: { includeTypeScript?: boolean }) => {
+      schema: (address, options) => {
         const includeTypeScript = options?.includeTypeScript ?? true;
         if (includeTypeScript) counters.codegen++;
         else counters.raw++;
         return Effect.succeed({
+          address,
           inputSchema: { type: "object", properties: { owner: { type: "string" } } },
           inputTypeScript: includeTypeScript ? "{ owner: string }" : undefined,
         });
       },
     },
-  }) as unknown as Executor;
+  };
+  return executor as Executor;
+};
 
-const makeCollection = <T extends object>(
-  collection: string,
-): PluginStorageCollectionFacade<any> & { readonly data: Map<string, T> } => {
+type TestCollection<T extends object> = PluginStorageCollectionFacade<any> & {
+  readonly data: Map<string, T>;
+};
+
+const makeCollection = <T extends object>(collection: string): TestCollection<T> => {
   const data = new Map<string, T>();
   let id = 0;
   const entry = (key: string, value: T): PluginStorageEntry<T> => ({
@@ -83,7 +88,7 @@ const makeCollection = <T extends object>(
       ([key, expected]) => (value as Record<string, unknown>)[key] === expected,
     );
   };
-  return {
+  const facade = {
     data,
     get: ({ key }: { key: string }) =>
       Effect.succeed(data.has(key) ? entry(key, data.get(key)!) : null),
@@ -127,7 +132,9 @@ const makeCollection = <T extends object>(
       stats: () => Effect.succeed({ count: 0, min: null, max: null, percentiles: [] }),
     },
     remove: ({ key }: { key: string }) => Effect.sync(() => data.delete(key)),
-  } as unknown as PluginStorageCollectionFacade<any> & { readonly data: Map<string, T> };
+  };
+  // oxlint-disable-next-line executor/no-double-cast -- test fixture implements the storage facade methods exercised by these indexer tests
+  return facade as unknown as TestCollection<T>;
 };
 
 describe("staged indexer", () => {
