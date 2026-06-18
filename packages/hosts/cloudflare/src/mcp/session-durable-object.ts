@@ -14,7 +14,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Cause, Deferred, Effect } from "effect";
 import type * as Tracer from "effect/Tracer";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { TransportState } from "agents/mcp";
+import { DurableObjectEventStore, type TransportState } from "agents/mcp";
 
 import { jsonRpcErrorBody } from "@executor-js/host-mcp";
 import { RequestWebOrigin } from "@executor-js/api/server";
@@ -99,6 +99,9 @@ const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const TRANSPORT_STATE_KEY = "transport";
 const SESSION_META_KEY = "session-meta";
 const LAST_ACTIVITY_KEY = "last-activity-ms";
+const MCP_EVENT_STORE_KEY_PREFIX = "__mcp_event__:";
+const MCP_STREAM_REQUEST_IDS_KEY_PREFIX = "__mcp_stream_reqs__:";
+const STORAGE_DELETE_CHUNK_SIZE = 128;
 const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
 
 // ---------------------------------------------------------------------------
@@ -340,6 +343,17 @@ export abstract class McpSessionDOBase<
     };
   }
 
+  private async deleteStoragePrefix(prefix: string): Promise<void> {
+    for (;;) {
+      const rows = await this.ctx.storage.list({
+        prefix,
+        limit: STORAGE_DELETE_CHUNK_SIZE,
+      });
+      if (rows.size === 0) return;
+      await this.ctx.storage.delete([...rows.keys()]);
+    }
+  }
+
   private clearSessionState(): Effect.Effect<void> {
     return Effect.promise(async () => {
       this.sessionMeta = null;
@@ -354,6 +368,10 @@ export abstract class McpSessionDOBase<
         this.ctx.storage.delete(SESSION_META_KEY).catch(() => false),
         // oxlint-disable-next-line executor/no-promise-catch -- boundary: Durable Object storage cleanup is best-effort after session invalidation
         this.ctx.storage.delete(LAST_ACTIVITY_KEY).catch(() => false),
+        // oxlint-disable-next-line executor/no-promise-catch -- boundary: agents DurableObjectEventStore cleanup is best-effort after session invalidation
+        this.deleteStoragePrefix(MCP_EVENT_STORE_KEY_PREFIX).catch(() => undefined),
+        // oxlint-disable-next-line executor/no-promise-catch -- boundary: agents stream request-id mapping cleanup is best-effort after session invalidation
+        this.deleteStoragePrefix(MCP_STREAM_REQUEST_IDS_KEY_PREFIX).catch(() => undefined),
         // oxlint-disable-next-line executor/no-promise-catch -- boundary: Durable Object alarm cleanup is best-effort after session invalidation
         this.ctx.storage.deleteAlarm().catch(() => undefined),
       ]);
@@ -378,6 +396,7 @@ export abstract class McpSessionDOBase<
       const transport = yield* makeMcpWorkerTransport({
         sessionIdGenerator: () => self.sessionId,
         storage: self.makeStorage(),
+        eventStore: new DurableObjectEventStore(self.ctx.storage),
         enableJsonResponse: options.enableJsonResponse,
       });
       self.transportJsonResponseMode = options.enableJsonResponse ?? false;

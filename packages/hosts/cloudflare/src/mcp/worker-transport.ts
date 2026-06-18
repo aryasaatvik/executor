@@ -17,36 +17,6 @@ export type McpWorkerTransport = Readonly<{
   close: () => Effect.Effect<void>;
 }>;
 
-type HandleRequestResult = {
-  readonly response: Response;
-  readonly replacedStandaloneSse: boolean;
-};
-
-const closeExistingStandaloneSse = (transport: WorkerTransport): boolean => {
-  const streamId =
-    typeof Reflect.get(transport, "standaloneSseStreamId") === "string"
-      ? Reflect.get(transport, "standaloneSseStreamId")
-      : "_GET_stream";
-  const streamMapping = Reflect.get(transport, "streamMapping");
-  if (!(streamMapping instanceof Map)) return false;
-
-  const stream = streamMapping.get(streamId);
-  if (!stream) return false;
-
-  if (
-    typeof stream === "object" &&
-    stream !== null &&
-    typeof Reflect.get(stream, "cleanup") === "function"
-  ) {
-    Reflect.get(stream, "cleanup")();
-  }
-  streamMapping.delete(streamId);
-  return true;
-};
-
-const isStandaloneSseGet = (request: Request): boolean =>
-  request.method === "GET" && (request.headers.get("accept") ?? "").includes("text/event-stream");
-
 export const makeMcpWorkerTransport = (
   options: WorkerTransportOptions,
 ): Effect.Effect<McpWorkerTransport> =>
@@ -60,41 +30,13 @@ export const makeMcpWorkerTransport = (
         catch: (cause) => new McpWorkerTransportError({ cause }),
       }).pipe(Effect.withSpan(`mcp.worker_transport.${name}`));
 
-    const handleWithStandaloneSseReplacement = async (
-      request: Request,
-    ): Promise<HandleRequestResult> => {
-      if (!isStandaloneSseGet(request)) {
-        return {
-          response: await transport.handleRequest(request),
-          replacedStandaloneSse: false,
-        };
-      }
-
-      const initial = await transport.handleRequest(request);
-      if (initial.status !== 409) {
-        return { response: initial, replacedStandaloneSse: false };
-      }
-
-      const replacedStandaloneSse = closeExistingStandaloneSse(transport);
-      return {
-        response: replacedStandaloneSse ? await transport.handleRequest(request) : initial,
-        replacedStandaloneSse,
-      };
-    };
-
     return {
       transport,
       connect: (server: McpServer) => use("connect", () => server.connect(transport)),
       handleRequest: (request: Request) =>
-        Effect.gen(function* () {
-          const result = yield* use("handle_request", () =>
-            requestIdQueue.run(request, () => handleWithStandaloneSseReplacement(request)),
-          );
-          yield* Effect.annotateCurrentSpan({
-            "mcp.transport.replaced_standalone_sse": result.replacedStandaloneSse,
-          });
-          return result.response;
-        }),
+        use("handle_request", () =>
+          requestIdQueue.run(request, () => transport.handleRequest(request)),
+        ),
       close: () =>
         Effect.ignore(
           Effect.tryPromise({
