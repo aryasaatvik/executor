@@ -27,3 +27,89 @@ export type FingerprintRow = typeof FingerprintRow.Type;
 export const toolFingerprints = definePluginStorageCollection("toolFingerprints", FingerprintRow, {
   indexes: ["path"],
 });
+
+export const StagedIndexRunStatus = Schema.Literals(["running", "completed", "failed"]);
+export type StagedIndexRunStatus = typeof StagedIndexRunStatus.Type;
+
+export const StagedIndexRun = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  status: StagedIndexRunStatus,
+  partitionCount: Schema.Number,
+  total: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type StagedIndexRun = typeof StagedIndexRun.Type;
+
+export const stagedIndexRuns = definePluginStorageCollection("stagedIndexRuns", StagedIndexRun, {
+  indexes: ["runId", "namespace", "status"],
+});
+
+export const StagedIndexJobStatus = Schema.Literals([
+  "pendingDiff",
+  "unchanged",
+  "pendingMaterialize",
+  "pendingEmbed",
+  "committed",
+  "failed",
+]);
+export type StagedIndexJobStatus = typeof StagedIndexJobStatus.Type;
+
+export const StagedIndexJob = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  partition: Schema.Number,
+  ordinal: Schema.Number,
+  address: Schema.String,
+  path: Schema.String,
+  name: Schema.String,
+  integration: Schema.String,
+  description: Schema.String,
+  status: StagedIndexJobStatus,
+  fingerprint: Schema.optional(Schema.String),
+  oldChunkIds: Schema.Array(Schema.String),
+  chunkIds: Schema.Array(Schema.String),
+  lexicalTextKey: Schema.optional(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type StagedIndexJob = typeof StagedIndexJob.Type;
+
+export const stagedIndexJobs = definePluginStorageCollection("stagedIndexJobs", StagedIndexJob, {
+  indexes: ["runId", "namespace", "partition", "status", "path", "ordinal"],
+});
+
+export const StagedIndexChunkStatus = Schema.Literals(["pendingEmbed", "committed", "failed"]);
+export type StagedIndexChunkStatus = typeof StagedIndexChunkStatus.Type;
+
+export const StagedIndexChunk = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  partition: Schema.Number,
+  path: Schema.String,
+  chunkId: Schema.String,
+  facet: Schema.String,
+  chunkIndex: Schema.Number,
+  embeddingTextKey: Schema.String,
+  embeddingTextBytes: Schema.Number,
+  embeddingTextTokens: Schema.Number,
+  name: Schema.String,
+  integration: Schema.String,
+  description: Schema.String,
+  status: StagedIndexChunkStatus,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type StagedIndexChunk = typeof StagedIndexChunk.Type;
+
+export const stagedIndexChunks = definePluginStorageCollection(
+  "stagedIndexChunks",
+  StagedIndexChunk,
+  {
+    indexes: ["runId", "namespace", "partition", "status", "path"],
+  },
+);

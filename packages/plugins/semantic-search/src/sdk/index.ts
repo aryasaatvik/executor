@@ -14,13 +14,23 @@ export {
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export {
-  reconcileToolCatalog,
-  reconcileToolCatalogPage,
+  startIndexRun,
+  diffIndexPartitionPage,
+  materializeIndexPartitionPage,
+  embedIndexPartitionPage,
+  indexRunStatus,
+  completeIndexRun,
+  runIndexRun,
   sweepRemoved,
-  DEFAULT_REINDEX_PAGE_SIZE,
-  type ReconcileResult,
-  type ReconcilePageResult,
-  type SweepResult,
+  type StartIndexRunInput,
+  type StartIndexRunResult,
+  type StagedPageInput,
+  type IndexDiffPageResult,
+  type IndexMaterializePageResult,
+  type IndexEmbedPageResult,
+  type CompleteIndexRunResult,
+  type IndexRunResult,
+  type StagedIndexStatus,
 } from "./indexer";
 export { SemanticSearchError } from "./errors";
 
@@ -43,7 +53,16 @@ export { makeHybridToolDiscoveryProvider, type HybridOptions } from "./hybrid";
 export { fingerprintTool, type FingerprintInput } from "./fingerprint";
 
 // Collections (plugin storage)
-export { toolFingerprints, FingerprintRow } from "./collections";
+export {
+  toolFingerprints,
+  stagedIndexRuns,
+  stagedIndexJobs,
+  stagedIndexChunks,
+  FingerprintRow,
+  StagedIndexRun,
+  StagedIndexJob,
+  StagedIndexChunk,
+} from "./collections";
 
 // Store limit decorator
 export { withCloudflareLimits } from "./store-cloudflare-limits";

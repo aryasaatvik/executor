@@ -1,408 +1,1005 @@
-import type { Executor, Tool } from "@executor-js/sdk/core";
-import type { Owner, PluginStorageCollectionFacade } from "@executor-js/sdk/core";
+import type {
+  Executor,
+  Owner,
+  PluginBlobStore,
+  PluginStorageCollectionFacade,
+} from "@executor-js/sdk/core";
+import { sha256Hex } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
-import type { Chunker } from "./chunker";
-import type { FingerprintRow } from "./collections";
-import { toolFingerprints } from "./collections";
+import type { Chunker, ToolChunk } from "./chunker";
+import {
+  type FingerprintRow,
+  type StagedIndexChunk,
+  type StagedIndexJob,
+  stagedIndexChunks,
+  stagedIndexJobs,
+  stagedIndexRuns,
+  toolFingerprints,
+} from "./collections";
 import {
   addressToPath,
   buildLexicalText,
-  collectDocsForTools,
+  collectDocForTool,
+  collectFingerprintInputs,
+  type IndexableToolDescriptor,
   listToolDescriptors,
 } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { fingerprintTool } from "./fingerprint";
-import type { VectorStore, VectorInput } from "./store";
+import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
-// ---------------------------------------------------------------------------
-// Results
-// ---------------------------------------------------------------------------
-
-export interface ReconcileResult {
-  /** The namespace this reconcile ran against. */
-  readonly namespace: string;
-  /** Total tools in the live catalog. */
-  readonly total: number;
-  /** Number of tools whose embeddings were refreshed (new + changed). */
-  readonly reembedded: number;
-  /** Number of tools whose stored fingerprint matched — skipped re-embedding. */
-  readonly unchanged: number;
-  /** Number of tools removed from the index because they left the catalog. */
-  readonly removed: number;
+export interface StagedIndexCollections {
+  readonly runs: PluginStorageCollectionFacade<typeof stagedIndexRuns>;
+  readonly jobs: PluginStorageCollectionFacade<typeof stagedIndexJobs>;
+  readonly chunks: PluginStorageCollectionFacade<typeof stagedIndexChunks>;
+  readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
+  readonly blobs: PluginBlobStore;
+  readonly owner: Owner;
 }
 
-export interface ReconcilePageResult {
-  readonly namespace: string;
-  /** Total tools in the live catalog (size of the sorted descriptor list). */
-  readonly total: number;
-  /** Tools handled in this page. */
-  readonly processed: number;
-  readonly reembedded: number;
-  readonly unchanged: number;
-  /** Index of the next page, or `null` when the catalog is exhausted. */
-  readonly nextCursor: number | null;
-}
-
-export interface SweepResult {
-  readonly namespace: string;
-  /** Tools deleted from the index (vector chunks + lexical doc + fingerprint). */
-  readonly removed: number;
-}
-
-/** Default tools-per-page. Bounds the CPU-heavy schema→TS codegen + embedding so
- *  one page fits within a single Worker invocation's CPU budget. */
-export const DEFAULT_REINDEX_PAGE_SIZE = 200;
-
-interface ReconcileStores {
+interface StagedIndexStores extends StagedIndexCollections {
   readonly namespace: string;
   readonly executor: Executor;
-  readonly store: VectorStore;
-  readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
-  readonly owner: Owner;
-  /** Optional FTS5 lexical store kept in lockstep with the vector index. */
   readonly lexicalStore?: FtsLexicalStore;
 }
 
-interface ReconcileDeps extends ReconcileStores {
+interface StagedIndexDeps extends StagedIndexStores {
   readonly embedder: ToolEmbedder;
+  readonly store: VectorStore;
   readonly chunker: Chunker;
 }
 
-// ---------------------------------------------------------------------------
-// reconcileToolCatalogPage — reconcile ONE bounded slice of the catalog
-// ---------------------------------------------------------------------------
+export interface StartIndexRunInput {
+  readonly runId: string;
+  readonly partitionCount: number;
+}
 
-/** Reconcile a single page of the live tool catalog into the vector + lexical
- *  index, returning the cursor for the next page.
- *
- *  `tools.list` has no native pagination, so a page re-lists the (stably sorted)
- *  catalog — cheap, descriptors only — and slices `[cursor, cursor + pageSize)`.
- *  Only the slice pays the CPU-heavy `tools.schema` codegen + embedding, so each
- *  page stays within one invocation's CPU budget. This is the unit a durable
- *  driver (e.g. a Cloudflare Workflow step) calls in a loop; removal of tools
- *  that left the catalog is handled separately by `sweepRemoved`.
- *
- *  Pass a pre-listed `descriptors` snapshot to reuse one catalog read across an
- *  in-process page loop (see `reconcileToolCatalog`); omit it and the page reads
- *  the catalog itself (the durable-step path, where each step is its own read).
- *
- *  NOTE: the schema → TS codegen runs for EVERY tool in the slice, including
- *  fingerprint-unchanged ones, because the fingerprint is derived from the
- *  schema — a schema-only change can't be detected without fetching it. So
- *  per-page CPU is dominated by codegen and is similar on re-runs; the
- *  incremental win is skipping the EMBEDDING of unchanged tools, not their
- *  schema fetch. */
-export const reconcileToolCatalogPage = (
-  input: ReconcileDeps & {
-    readonly cursor: number;
-    readonly pageSize?: number;
-    readonly descriptors?: readonly Tool[];
+export interface StartIndexRunResult {
+  readonly runId: string;
+  readonly namespace: string;
+  readonly total: number;
+  readonly partitionCount: number;
+}
+
+export interface StagedPageInput {
+  readonly runId: string;
+  readonly partition: number;
+  readonly limit?: number;
+  readonly materializeConcurrency?: number;
+  readonly maxChunks?: number;
+  readonly maxEstimatedInputTokens?: number;
+  readonly maxEstimatedResponseBytes?: number;
+  readonly maxEstimatedTokensPerText?: number;
+}
+
+export interface IndexDiffPageResult {
+  readonly runId: string;
+  readonly partition: number;
+  readonly processed: number;
+  readonly changed: number;
+  readonly unchanged: number;
+}
+
+export interface IndexMaterializePageResult {
+  readonly runId: string;
+  readonly partition: number;
+  readonly processed: number;
+  readonly chunks: number;
+}
+
+export interface IndexEmbedPageResult {
+  readonly runId: string;
+  readonly partition: number;
+  readonly processed: number;
+  readonly chunks: number;
+}
+
+export interface CompleteIndexRunResult {
+  readonly runId: string;
+  readonly removed: number;
+}
+
+export interface StagedIndexStatus {
+  readonly runId: string;
+  readonly namespace: string;
+  readonly total: number;
+  readonly pendingDiff: number;
+  readonly unchanged: number;
+  readonly pendingMaterialize: number;
+  readonly pendingEmbed: number;
+  readonly committed: number;
+  readonly failed: number;
+}
+
+export interface IndexRunResult {
+  readonly namespace: string;
+  readonly total: number;
+  readonly reembedded: number;
+  readonly unchanged: number;
+  readonly removed: number;
+}
+
+const DEFAULT_PAGE_LIMIT = 25;
+const DEFAULT_MATERIALIZE_CONCURRENCY = 1;
+const DEFAULT_EMBED_MAX_CHUNKS = 128;
+const DEFAULT_EMBED_MAX_ESTIMATED_INPUT_TOKENS = 64_000;
+const DEFAULT_EMBED_MAX_ESTIMATED_RESPONSE_BYTES = 8 * 1024 * 1024;
+const DEFAULT_EMBED_MAX_ESTIMATED_TOKENS_PER_TEXT = 2_048;
+const ESTIMATED_CHARS_PER_TOKEN = 4;
+const ESTIMATED_RESPONSE_BYTES_PER_DIMENSION = 16;
+const ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD = 512;
+const STAGED_STORAGE_CONCURRENCY = 2;
+
+const nowIso = (): string => new Date().toISOString();
+
+const cyrb53 = (str: string): number => {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+};
+
+const partitionForPath = (path: string, partitionCount: number): number =>
+  Math.abs(cyrb53(path)) % Math.max(1, Math.floor(partitionCount));
+
+const jobKey = (runId: string, path: string): string => `${runId}:${path}`;
+
+const chunkKey = (runId: string, path: string, chunkId: string): string =>
+  `${runId}:${path}:${chunkId}`;
+
+const storageError = (message: string, cause: unknown): SemanticSearchError =>
+  new SemanticSearchError({ message, cause });
+
+const jobToDescriptor = (job: StagedIndexJob): IndexableToolDescriptor => ({
+  address: job.address,
+  name: job.name,
+  integration: job.integration,
+  description: job.description,
+});
+
+const queryJobs = (
+  deps: StagedIndexCollections,
+  input: {
+    readonly runId: string;
+    readonly partition: number;
+    readonly status: StagedIndexJob["status"];
+    readonly limit?: number;
   },
-): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
-  Effect.gen(function* () {
-    const { namespace, executor, embedder, store, chunker, fingerprints, owner } = input;
-    const pageSize = input.pageSize ?? DEFAULT_REINDEX_PAGE_SIZE;
-    const cursor = Math.max(0, input.cursor);
+): Effect.Effect<
+  readonly { readonly key: string; readonly data: StagedIndexJob }[],
+  SemanticSearchError
+> =>
+  deps.jobs
+    .query({
+      where: { runId: input.runId, partition: input.partition, status: input.status },
+      orderBy: [{ field: "ordinal", direction: "asc" }],
+      limit: input.limit ?? DEFAULT_PAGE_LIMIT,
+    })
+    .pipe(Effect.mapError((cause) => storageError("Failed to query staged index jobs.", cause)));
 
-    const all = input.descriptors ?? (yield* listToolDescriptors(executor));
-    const total = all.length;
-    const slice = all.slice(cursor, cursor + pageSize);
-    const nextCursor = cursor + slice.length < total ? cursor + slice.length : null;
-
-    if (slice.length === 0) {
-      return { namespace, total, processed: 0, reembedded: 0, unchanged: 0, nextCursor };
-    }
-
-    // Collect docs (schema → TS) for THIS slice only.
-    const docs = yield* collectDocsForTools(executor, slice);
-
-    // Lexical store carries no embedding cost, so rebuild it in full for the
-    // slice every page (delete-then-insert keyed by namespace-prefixed id).
-    if (input.lexicalStore) {
-      const lexicalDocs: readonly FtsDocumentInput[] = docs.map((doc) => ({
-        id: `${namespace}:${doc.path}`,
-        namespace,
-        path: doc.path,
-        name: doc.name,
-        description: doc.description,
-        integration: doc.integration,
-        lexicalText: buildLexicalText(doc),
-      }));
-      yield* input.lexicalStore.upsert(lexicalDocs);
-    }
-
-    // Load stored fingerprints for just this slice's paths (not the whole index).
-    const slicePaths = docs.map((doc) => doc.path);
-    const storedByPath = yield* loadFingerprintsForPaths(fingerprints, owner, slicePaths);
-
-    // Diff: classify each tool in the slice as new/changed (re-embed) or unchanged.
-    const toEmbed: Array<{
-      doc: (typeof docs)[number];
-      fingerprint: string;
-      oldChunkIds: readonly string[] | null;
-    }> = [];
-    let unchanged = 0;
-    for (const doc of docs) {
-      const fingerprint = fingerprintTool(doc);
-      const stored = storedByPath.get(doc.path);
-      if (stored !== undefined && stored.fingerprint === fingerprint) {
-        unchanged++;
-      } else {
-        toEmbed.push({ doc, fingerprint, oldChunkIds: stored?.chunkIds ?? null });
-      }
-    }
-
-    if (toEmbed.length === 0) {
-      return { namespace, total, processed: slice.length, reembedded: 0, unchanged, nextCursor };
-    }
-
-    yield* embedAndUpsert({ namespace, embedder, store, chunker, fingerprints, owner }, toEmbed);
-
-    return {
-      namespace,
-      total,
-      processed: slice.length,
-      reembedded: toEmbed.length,
-      unchanged,
-      nextCursor,
-    };
-  });
-
-// ---------------------------------------------------------------------------
-// sweepRemoved — delete tools that left the catalog
-// ---------------------------------------------------------------------------
-
-/** Delete index entries for tools no longer present in the live catalog.
- *
- *  Uses the cheap `listToolDescriptors` (paths only — no schema codegen) for
- *  liveness and diffs it against all stored fingerprints, so it fits one
- *  invocation regardless of catalog size. For each removed tool it deletes the
- *  vector chunks, the lexical document, and the fingerprint row. Guards against
- *  an empty live list (a transient `tools.list` failure must not wipe the index).
- *  Accepts a pre-listed `descriptors` snapshot to share one catalog read with a
- *  preceding in-process page loop. */
-export const sweepRemoved = (
-  input: ReconcileStores & { readonly descriptors?: readonly Tool[] },
-): Effect.Effect<SweepResult, SemanticSearchError> =>
-  Effect.gen(function* () {
-    const { namespace, executor, store, fingerprints, owner } = input;
-
-    const live = input.descriptors ?? (yield* listToolDescriptors(executor));
-    // Safety: never treat an empty live catalog as "everything removed".
-    if (live.length === 0) {
-      return { namespace, removed: 0 };
-    }
-    const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
-
-    const storedEntries = yield* fingerprints.list().pipe(
-      Effect.mapError(
-        (cause) =>
-          new SemanticSearchError({
-            message: "Failed to load stored fingerprints for sweep.",
-            cause,
-          }),
-      ),
-    );
-    const removed = storedEntries.filter((entry) => !livePaths.has(entry.key));
-    if (removed.length === 0) {
-      return { namespace, removed: 0 };
-    }
-
-    yield* Effect.forEach(
-      removed,
-      (entry) =>
-        Effect.gen(function* () {
-          const { key: path, data } = entry;
-          if (data.chunkIds.length > 0) {
-            yield* store.deleteByIds([...data.chunkIds]);
-          }
-          if (input.lexicalStore) {
-            yield* input.lexicalStore.deleteByIds([`${namespace}:${path}`]);
-          }
-          yield* fingerprints.remove({ owner, key: path }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new SemanticSearchError({
-                  message: `Failed to delete fingerprint row for removed tool "${path}".`,
-                  cause,
-                }),
-            ),
-          );
-        }),
-      { concurrency: 8, discard: true },
+const queryChunksForJob = (
+  deps: StagedIndexCollections,
+  job: StagedIndexJob,
+): Effect.Effect<
+  readonly { readonly key: string; readonly data: StagedIndexChunk }[],
+  SemanticSearchError
+> =>
+  deps.chunks
+    .query({
+      where: { runId: job.runId, path: job.path },
+      orderBy: [{ field: "path", direction: "asc" }],
+    })
+    .pipe(
+      Effect.map((entries) => [...entries].sort((a, b) => a.data.chunkIndex - b.data.chunkIndex)),
+      Effect.mapError((cause) => storageError("Failed to query staged index chunks.", cause)),
     );
 
-    return { namespace, removed: removed.length };
-  });
+interface EmbedBudget {
+  readonly maxChunks: number;
+  readonly maxEstimatedInputTokens: number;
+  readonly maxEstimatedResponseBytes: number;
+  readonly maxEstimatedTokensPerText: number;
+}
 
-// ---------------------------------------------------------------------------
-// reconcileToolCatalog — full reconcile (loop pages + sweep)
-// ---------------------------------------------------------------------------
+const resolveEmbedBudget = (input: StagedPageInput): EmbedBudget => ({
+  maxChunks: Math.max(1, Math.floor(input.maxChunks ?? DEFAULT_EMBED_MAX_CHUNKS)),
+  maxEstimatedInputTokens: Math.max(
+    1,
+    Math.floor(input.maxEstimatedInputTokens ?? DEFAULT_EMBED_MAX_ESTIMATED_INPUT_TOKENS),
+  ),
+  maxEstimatedResponseBytes: Math.max(
+    1,
+    Math.floor(input.maxEstimatedResponseBytes ?? DEFAULT_EMBED_MAX_ESTIMATED_RESPONSE_BYTES),
+  ),
+  maxEstimatedTokensPerText: Math.max(
+    1,
+    Math.floor(input.maxEstimatedTokensPerText ?? DEFAULT_EMBED_MAX_ESTIMATED_TOKENS_PER_TEXT),
+  ),
+});
 
-/** Reconcile the entire live tool catalog into the vector + lexical index.
- *
- *  Drives `reconcileToolCatalogPage` over every page in-process, then runs
- *  `sweepRemoved`. This is the convenience entry for hosts that can complete the
- *  whole reconcile in one execution (local / self-host, or small catalogs). At
- *  large catalog sizes on a CPU-bounded host (a Worker), drive the page +
- *  sweep primitives from a durable scheduler instead so each step gets its own
- *  CPU budget. */
-export const reconcileToolCatalog = (
-  input: ReconcileDeps & { readonly pageSize?: number },
-): Effect.Effect<ReconcileResult, SemanticSearchError> =>
+const estimateTokens = (text: string): number =>
+  Math.max(1, Math.ceil(text.length / ESTIMATED_CHARS_PER_TOKEN));
+
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
+
+const payloadKey = (kind: "embedding-text" | "lexical-text", digest: string): string =>
+  `semantic-search/staged/${kind}/${digest}.txt`;
+
+const putPayloadText = (
+  deps: StagedIndexCollections,
+  kind: "embedding-text" | "lexical-text",
+  text: string,
+): Effect.Effect<string, SemanticSearchError> =>
   Effect.gen(function* () {
-    // One catalog snapshot for the whole in-process run: avoids N+1 `tools.list`
-    // round-trips across pages + sweep, and gives a consistent `total` and diff
-    // even if the catalog changes mid-run. (The durable-step path re-lists per
-    // step by design, since each step is a separate invocation.)
-    const descriptors = yield* listToolDescriptors(input.executor);
-    const total = descriptors.length;
-    let cursor = 0;
-    let reembedded = 0;
-    let unchanged = 0;
-
-    for (;;) {
-      const page = yield* reconcileToolCatalogPage({ ...input, cursor, descriptors });
-      reembedded += page.reembedded;
-      unchanged += page.unchanged;
-      if (page.nextCursor === null) break;
-      cursor = page.nextCursor;
-    }
-
-    const swept = yield* sweepRemoved({ ...input, descriptors });
-
-    return { namespace: input.namespace, total, reembedded, unchanged, removed: swept.removed };
+    const digest = yield* sha256Hex(text);
+    const key = payloadKey(kind, digest);
+    yield* deps.blobs
+      .put(key, text, { owner: deps.owner })
+      .pipe(
+        Effect.mapError((cause) =>
+          storageError(`Failed to persist staged ${kind} payload "${key}".`, cause),
+        ),
+      );
+    return key;
   });
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
+const getPayloadText = (
+  deps: StagedIndexCollections,
+  key: string,
+): Effect.Effect<string, SemanticSearchError> =>
+  deps.blobs.get(key).pipe(
+    Effect.mapError((cause) => storageError(`Failed to load staged payload "${key}".`, cause)),
+    Effect.flatMap((text) =>
+      text === null
+        ? Effect.fail(new SemanticSearchError({ message: `Staged payload "${key}" is missing.` }))
+        : Effect.succeed(text),
+    ),
+  );
 
-/** Load stored fingerprint rows for a specific set of paths (one page), keyed by
- *  path. Avoids loading the whole fingerprint store per page. */
-const loadFingerprintsForPaths = (
-  fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>,
-  owner: Owner,
+const estimateEmbeddingResponseBytes = (dimensions: number): number =>
+  Math.max(
+    1,
+    Math.floor(
+      dimensions * ESTIMATED_RESPONSE_BYTES_PER_DIMENSION +
+        ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD,
+    ),
+  );
+
+const wouldExceedEmbedBudget = (
+  current: {
+    readonly chunks: number;
+    readonly inputTokens: number;
+    readonly responseBytes: number;
+  },
+  next: { readonly inputTokens: number; readonly responseBytes: number },
+  budget: EmbedBudget,
+): boolean =>
+  current.chunks + 1 > budget.maxChunks ||
+  current.inputTokens + next.inputTokens > budget.maxEstimatedInputTokens ||
+  current.responseBytes + next.responseBytes > budget.maxEstimatedResponseBytes;
+
+const loadFingerprints = (
+  deps: StagedIndexCollections,
   paths: readonly string[],
 ): Effect.Effect<ReadonlyMap<string, FingerprintRow>, SemanticSearchError> =>
   Effect.forEach(
     paths,
     (path) =>
-      fingerprints
-        .getForOwner({ owner, key: path })
+      deps.fingerprints
+        .getForOwner({ owner: deps.owner, key: path })
         .pipe(Effect.map((entry) => [path, entry?.data ?? null] as const)),
-    { concurrency: 16 },
+    { concurrency: STAGED_STORAGE_CONCURRENCY },
   ).pipe(
     Effect.map(
       (pairs) =>
         new Map(pairs.flatMap(([path, data]) => (data === null ? [] : [[path, data] as const]))),
     ),
-    Effect.mapError(
-      (cause) => new SemanticSearchError({ message: "Failed to load stored fingerprints.", cause }),
+    Effect.mapError((cause) => storageError("Failed to load staged fingerprint rows.", cause)),
+  );
+
+const putJob = (
+  deps: StagedIndexCollections,
+  job: StagedIndexJob,
+): Effect.Effect<void, SemanticSearchError> =>
+  deps.jobs.put({ owner: deps.owner, key: jobKey(job.runId, job.path), data: job }).pipe(
+    Effect.mapError((cause) => storageError(`Failed to persist staged job "${job.path}".`, cause)),
+    Effect.asVoid,
+  );
+
+const removeChunksForJob = (
+  deps: StagedIndexCollections,
+  job: StagedIndexJob,
+): Effect.Effect<void, SemanticSearchError> =>
+  queryChunksForJob(deps, job).pipe(
+    Effect.flatMap((entries) =>
+      Effect.forEach(
+        entries,
+        (entry) =>
+          deps.chunks
+            .remove({ owner: deps.owner, key: entry.key })
+            .pipe(
+              Effect.mapError((cause) =>
+                storageError(`Failed to remove staged chunk "${entry.key}".`, cause),
+              ),
+            ),
+        { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+      ),
     ),
   );
 
-/** Embed the new/changed tools of a page, upsert their vectors (deleting any old
- *  chunks first), and persist their fingerprint rows. */
-const embedAndUpsert = (
-  deps: {
-    readonly namespace: string;
-    readonly embedder: ToolEmbedder;
-    readonly store: VectorStore;
-    readonly chunker: Chunker;
-    readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
-    readonly owner: Owner;
-  },
-  toEmbed: ReadonlyArray<{
-    readonly doc: {
-      readonly path: string;
-      readonly name: string;
-      readonly description: string;
-      readonly integration: string;
-    };
-    readonly fingerprint: string;
-    readonly oldChunkIds: readonly string[] | null;
-  }>,
-): Effect.Effect<void, SemanticSearchError> =>
+export const startIndexRun = (
+  input: StagedIndexStores & StartIndexRunInput,
+): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const { namespace, embedder, store, chunker, fingerprints, owner } = deps;
+    const partitionCount = Math.max(1, Math.floor(input.partitionCount));
+    const descriptors = yield* listToolDescriptors(input.executor);
+    const createdAt = nowIso();
 
-    const chunkedGroups = toEmbed.map((item) => ({
-      ...item,
-      chunks: chunker.chunk(namespace, item.doc),
-    }));
+    yield* input.runs
+      .put({
+        owner: input.owner,
+        key: input.runId,
+        data: {
+          runId: input.runId,
+          namespace: input.namespace,
+          status: "running",
+          partitionCount,
+          total: descriptors.length,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      })
+      .pipe(Effect.mapError((cause) => storageError("Failed to create staged index run.", cause)));
 
-    const allTexts: string[] = [];
-    for (const group of chunkedGroups) {
-      for (const chunk of group.chunks) {
-        allTexts.push(chunk.embeddingText);
-      }
-    }
+    return {
+      runId: input.runId,
+      namespace: input.namespace,
+      total: descriptors.length,
+      partitionCount,
+    };
+  });
 
-    const allVectors = yield* embedder.embedDocuments(allTexts);
-
-    let vectorOffset = 0;
-    const records: VectorInput[] = [];
-    const fingerprintUpdates: Array<{ path: string; row: FingerprintRow }> = [];
-
-    for (const group of chunkedGroups) {
-      const { doc, fingerprint, oldChunkIds, chunks } = group;
-      const newChunkIds: string[] = [];
-
-      for (const chunkItem of chunks) {
-        const vec = allVectors[vectorOffset++];
-        if (vec === undefined) {
-          return yield* new SemanticSearchError({
-            message: `reconcileToolCatalogPage: embedding vector missing at offset ${vectorOffset - 1}`,
-          });
-        }
-        records.push({
-          id: chunkItem.id,
-          values: [...vec],
-          namespace,
-          metadata: {
-            path: doc.path,
-            name: doc.name,
-            description: doc.description,
-            integration: doc.integration,
-            facet: chunkItem.facet,
-            chunkIndex: chunkItem.chunkIndex,
-          },
-        });
-        newChunkIds.push(chunkItem.id);
-      }
-
-      fingerprintUpdates.push({
-        path: doc.path,
-        row: { path: doc.path, integration: doc.integration, fingerprint, chunkIds: newChunkIds },
+export const seedIndexPartitionPage = (
+  input: StagedIndexStores & StagedPageInput,
+): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const run = yield* input.runs
+      .getForOwner({ owner: input.owner, key: input.runId })
+      .pipe(Effect.mapError((cause) => storageError("Failed to load staged index run.", cause)));
+    if (run === null) {
+      return yield* new SemanticSearchError({
+        message: `Staged index run "${input.runId}" does not exist.`,
       });
-
-      // Delete OLD chunk ids for changed tools before upserting new ones.
-      if (oldChunkIds !== null && oldChunkIds.length > 0) {
-        yield* store.deleteByIds([...oldChunkIds]);
-      }
     }
 
-    // `store.upsert` chunks internally (≤50/batch) so the Vectorize binding never
-    // exceeds Cloudflare's per-upsert caps regardless of page size.
-    yield* store.upsert(records);
+    const descriptors = yield* listToolDescriptors(input.executor);
+    const partitionDescriptors = descriptors
+      .map((tool, ordinal) => ({ tool, ordinal, path: addressToPath(String(tool.address)) }))
+      .filter(({ path }) => partitionForPath(path, run.data.partitionCount) === input.partition);
+    const existing = yield* input.jobs
+      .count({ where: { runId: input.runId, partition: input.partition } })
+      .pipe(Effect.mapError((cause) => storageError("Failed to count seeded index jobs.", cause)));
+    const selected = partitionDescriptors.slice(
+      existing,
+      existing + (input.limit ?? DEFAULT_PAGE_LIMIT),
+    );
+    if (selected.length === 0) {
+      return {
+        runId: input.runId,
+        partition: input.partition,
+        processed: 0,
+        changed: 0,
+        unchanged: 0,
+      };
+    }
+
+    const createdAt = nowIso();
+    yield* Effect.forEach(
+      selected,
+      ({ tool, ordinal, path }) => {
+        const job: StagedIndexJob = {
+          runId: input.runId,
+          namespace: input.namespace,
+          partition: input.partition,
+          ordinal,
+          address: String(tool.address),
+          path,
+          name: String(tool.name),
+          integration: String(tool.integration),
+          description: String(tool.description ?? ""),
+          status: "pendingDiff",
+          oldChunkIds: [],
+          chunkIds: [],
+          createdAt,
+          updatedAt: createdAt,
+        };
+        return putJob(input, job);
+      },
+      { concurrency: 1, discard: true },
+    );
+
+    return {
+      runId: input.runId,
+      partition: input.partition,
+      processed: selected.length,
+      changed: selected.length,
+      unchanged: 0,
+    };
+  });
+
+export const diffIndexPartitionPage = (
+  input: StagedIndexStores & StagedPageInput,
+): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const jobs = yield* queryJobs(input, {
+      runId: input.runId,
+      partition: input.partition,
+      status: "pendingDiff",
+      limit: input.limit,
+    });
+    if (jobs.length === 0) {
+      return {
+        runId: input.runId,
+        partition: input.partition,
+        processed: 0,
+        changed: 0,
+        unchanged: 0,
+      };
+    }
+
+    const fingerprintInputs = yield* collectFingerprintInputs(
+      input.executor,
+      jobs.map((entry) => jobToDescriptor(entry.data)),
+    );
+    const stored = yield* loadFingerprints(
+      input,
+      fingerprintInputs.map(({ input: fp }) => fp.path),
+    );
+
+    let changed = 0;
+    let unchanged = 0;
+    const byPath = new Map(jobs.map((entry) => [entry.data.path, entry.data]));
+    const updatedAt = nowIso();
 
     yield* Effect.forEach(
-      fingerprintUpdates,
-      ({ path, row }) =>
-        fingerprints.put({ owner, key: path, data: row }).pipe(
-          Effect.mapError(
-            (cause) =>
-              new SemanticSearchError({
-                message: `Failed to persist fingerprint row for tool "${path}".`,
-                cause,
-              }),
-          ),
-          Effect.asVoid,
-        ),
-      { concurrency: 8, discard: true },
+      fingerprintInputs,
+      ({ input: fp }) => {
+        const job = byPath.get(fp.path);
+        if (job === undefined) return Effect.void;
+        const fingerprint = fingerprintTool(fp);
+        const storedRow = stored.get(fp.path);
+        const next: StagedIndexJob =
+          storedRow !== undefined && storedRow.fingerprint === fingerprint
+            ? {
+                ...job,
+                status: "unchanged",
+                fingerprint,
+                oldChunkIds: storedRow.chunkIds,
+                chunkIds: storedRow.chunkIds,
+                updatedAt,
+              }
+            : {
+                ...job,
+                status: "pendingMaterialize",
+                fingerprint,
+                oldChunkIds: storedRow?.chunkIds ?? [],
+                chunkIds: [],
+                updatedAt,
+              };
+        if (next.status === "unchanged") unchanged++;
+        else changed++;
+        return putJob(input, next);
+      },
+      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
     );
+
+    return {
+      runId: input.runId,
+      partition: input.partition,
+      processed: jobs.length,
+      changed,
+      unchanged,
+    };
+  });
+
+export const materializeIndexPartitionPage = (
+  input: StagedIndexDeps & StagedPageInput,
+): Effect.Effect<IndexMaterializePageResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const jobs = yield* queryJobs(input, {
+      runId: input.runId,
+      partition: input.partition,
+      status: "pendingMaterialize",
+      limit: input.limit,
+    });
+    if (jobs.length === 0) {
+      return { runId: input.runId, partition: input.partition, processed: 0, chunks: 0 };
+    }
+
+    const updatedAt = nowIso();
+    const materializeConcurrency = Math.max(
+      1,
+      Math.floor(input.materializeConcurrency ?? DEFAULT_MATERIALIZE_CONCURRENCY),
+    );
+
+    const chunkCounts = yield* Effect.forEach(
+      jobs,
+      (entry) =>
+        Effect.gen(function* () {
+          const job = entry.data;
+          const doc = yield* collectDocForTool(input.executor, jobToDescriptor(job));
+          const chunks = input.chunker.chunk(input.namespace, doc);
+          const lexicalText = doc.lexicalText ?? buildLexicalText(doc);
+          const lexicalTextKey = yield* putPayloadText(input, "lexical-text", lexicalText);
+          yield* removeChunksForJob(input, job);
+          yield* Effect.forEach(chunks, (chunk) => putChunk(input, job, chunk, updatedAt), {
+            concurrency: STAGED_STORAGE_CONCURRENCY,
+            discard: true,
+          });
+          yield* putJob(input, {
+            ...job,
+            status: "pendingEmbed",
+            chunkIds: chunks.map((chunk) => chunk.id),
+            lexicalTextKey,
+            updatedAt,
+          });
+          return chunks.length;
+        }),
+      { concurrency: materializeConcurrency },
+    );
+    const chunkCount = chunkCounts.reduce((sum, count) => sum + count, 0);
+
+    return {
+      runId: input.runId,
+      partition: input.partition,
+      processed: jobs.length,
+      chunks: chunkCount,
+    };
+  });
+
+const putChunk = (
+  deps: StagedIndexCollections,
+  job: StagedIndexJob,
+  chunk: ToolChunk,
+  timestamp: string,
+): Effect.Effect<void, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const embeddingTextKey = yield* putPayloadText(deps, "embedding-text", chunk.embeddingText);
+    yield* deps.chunks.put({
+      owner: deps.owner,
+      key: chunkKey(job.runId, job.path, chunk.id),
+      data: {
+        runId: job.runId,
+        namespace: job.namespace,
+        partition: job.partition,
+        path: job.path,
+        chunkId: chunk.id,
+        facet: chunk.facet,
+        chunkIndex: chunk.chunkIndex,
+        embeddingTextKey,
+        embeddingTextBytes: utf8Bytes(chunk.embeddingText),
+        embeddingTextTokens: estimateTokens(chunk.embeddingText),
+        name: chunk.name,
+        integration: chunk.integration,
+        description: job.description,
+        status: "pendingEmbed",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      },
+    });
+  }).pipe(
+    Effect.mapError((cause) => storageError(`Failed to persist chunk "${chunk.id}".`, cause)),
+    Effect.asVoid,
+  );
+
+export const embedIndexPartitionPage = (
+  input: StagedIndexDeps & StagedPageInput,
+): Effect.Effect<IndexEmbedPageResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const budget = resolveEmbedBudget(input);
+    const jobs = yield* queryJobs(input, {
+      runId: input.runId,
+      partition: input.partition,
+      status: "pendingEmbed",
+      limit: input.limit,
+    });
+    if (jobs.length === 0) {
+      return { runId: input.runId, partition: input.partition, processed: 0, chunks: 0 };
+    }
+
+    const chunkEntriesByPath = new Map<
+      string,
+      readonly { readonly key: string; readonly data: StagedIndexChunk }[]
+    >();
+    for (const jobEntry of jobs) {
+      chunkEntriesByPath.set(jobEntry.data.path, yield* queryChunksForJob(input, jobEntry.data));
+    }
+
+    const selectedChunks: { readonly key: string; readonly data: StagedIndexChunk }[] = [];
+    const vectorResponseBytes = estimateEmbeddingResponseBytes(input.embedder.dimensions);
+    let selectedInputTokens = 0;
+    let selectedResponseBytes = 0;
+    let budgetFull = false;
+
+    for (const { data: job } of jobs) {
+      if (budgetFull) break;
+      const pending = (chunkEntriesByPath.get(job.path) ?? []).filter(
+        (entry) => entry.data.status === "pendingEmbed",
+      );
+      for (const entry of pending) {
+        const inputTokens = entry.data.embeddingTextTokens;
+        if (inputTokens > budget.maxEstimatedTokensPerText) {
+          return yield* new SemanticSearchError({
+            message: `Staged index chunk "${entry.data.chunkId}" is estimated at ${inputTokens} tokens, above the per-text embedding budget of ${budget.maxEstimatedTokensPerText}. Lower the chunker facet budget or raise maxEstimatedTokensPerText.`,
+          });
+        }
+
+        const next = { inputTokens, responseBytes: vectorResponseBytes };
+        const current = {
+          chunks: selectedChunks.length,
+          inputTokens: selectedInputTokens,
+          responseBytes: selectedResponseBytes,
+        };
+        if (selectedChunks.length > 0 && wouldExceedEmbedBudget(current, next, budget)) {
+          budgetFull = true;
+          break;
+        }
+
+        selectedChunks.push(entry);
+        selectedInputTokens += inputTokens;
+        selectedResponseBytes += vectorResponseBytes;
+      }
+    }
+
+    if (selectedChunks.length === 0) {
+      const finalized = yield* finalizeCompletedEmbedJobs(
+        input,
+        jobs,
+        chunkEntriesByPath,
+        nowIso(),
+      );
+      return {
+        runId: input.runId,
+        partition: input.partition,
+        processed: finalized,
+        chunks: 0,
+      };
+    }
+
+    const selectedTexts = yield* Effect.forEach(
+      selectedChunks,
+      (entry) => getPayloadText(input, entry.data.embeddingTextKey),
+      { concurrency: STAGED_STORAGE_CONCURRENCY },
+    );
+    const vectors = yield* input.embedder.embedDocuments(selectedTexts);
+    const records: VectorInput[] = [];
+    for (let i = 0; i < selectedChunks.length; i++) {
+      const chunk = selectedChunks[i]?.data;
+      const vec = vectors[i];
+      if (chunk === undefined || vec === undefined) {
+        return yield* new SemanticSearchError({
+          message: `embedIndexPartitionPage: embedding vector missing at offset ${i}`,
+        });
+      }
+      records.push({
+        id: chunk.chunkId,
+        values: vec,
+        namespace: input.namespace,
+        metadata: {
+          path: chunk.path,
+          name: chunk.name,
+          description: chunk.description,
+          integration: chunk.integration,
+          facet: chunk.facet,
+          chunkIndex: chunk.chunkIndex,
+        },
+      });
+    }
+
+    if (records.length > 0) {
+      yield* input.store.upsert(records);
+    }
+
+    const updatedAt = nowIso();
+    yield* Effect.forEach(
+      selectedChunks,
+      (entry) =>
+        input.chunks
+          .put({
+            owner: input.owner,
+            key: entry.key,
+            data: { ...entry.data, status: "committed", updatedAt },
+          })
+          .pipe(
+            Effect.mapError((cause) =>
+              storageError(`Failed to mark chunk "${entry.data.chunkId}" committed.`, cause),
+            ),
+          ),
+      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+    );
+
+    const affectedPaths = new Set(selectedChunks.map((entry) => entry.data.path));
+    const finalizationCandidates = jobs.filter(({ data: job }) => {
+      if (affectedPaths.has(job.path)) return true;
+      return !(chunkEntriesByPath.get(job.path) ?? []).some(
+        (entry) => entry.data.status === "pendingEmbed",
+      );
+    });
+    const finalized = yield* finalizeCompletedEmbedJobs(
+      input,
+      finalizationCandidates,
+      undefined,
+      updatedAt,
+    );
+
+    return {
+      runId: input.runId,
+      partition: input.partition,
+      processed: Math.max(affectedPaths.size, finalized),
+      chunks: records.length,
+    };
+  });
+
+const finalizeCompletedEmbedJobs = (
+  input: StagedIndexDeps,
+  jobs: readonly { readonly key: string; readonly data: StagedIndexJob }[],
+  preloadedChunks:
+    | ReadonlyMap<string, readonly { readonly key: string; readonly data: StagedIndexChunk }[]>
+    | undefined,
+  updatedAt: string,
+): Effect.Effect<number, SemanticSearchError> =>
+  Effect.gen(function* () {
+    let finalized = 0;
+    for (const { data: job } of jobs) {
+      const chunkEntries = preloadedChunks?.get(job.path) ?? (yield* queryChunksForJob(input, job));
+      if (
+        chunkEntries.length === 0 ||
+        chunkEntries.some((entry) => entry.data.status !== "committed")
+      ) {
+        continue;
+      }
+
+      const fingerprint = job.fingerprint;
+      if (fingerprint === undefined) {
+        return yield* new SemanticSearchError({
+          message: `Staged index job "${job.path}" reached embedding without a fingerprint.`,
+        });
+      }
+
+      yield* input.fingerprints
+        .put({
+          owner: input.owner,
+          key: job.path,
+          data: {
+            path: job.path,
+            integration: job.integration,
+            fingerprint,
+            chunkIds: job.chunkIds,
+          },
+        })
+        .pipe(
+          Effect.mapError((cause) =>
+            storageError(`Failed to persist fingerprint row for "${job.path}".`, cause),
+          ),
+        );
+
+      if (job.oldChunkIds.length > 0) {
+        yield* input.store.deleteByIds([...job.oldChunkIds]);
+      }
+
+      if (input.lexicalStore) {
+        const lexicalText =
+          job.lexicalTextKey === undefined
+            ? `${job.integration} · ${job.path} · ${job.name}`
+            : yield* getPayloadText(input, job.lexicalTextKey);
+        const lexicalDoc: FtsDocumentInput = {
+          id: `${input.namespace}:${job.path}`,
+          namespace: input.namespace,
+          path: job.path,
+          name: job.name,
+          description: job.description,
+          integration: job.integration,
+          lexicalText,
+        };
+        yield* input.lexicalStore.upsert([lexicalDoc]);
+      }
+
+      yield* putJob(input, { ...job, status: "committed", updatedAt });
+      finalized++;
+    }
+    return finalized;
+  });
+
+export const indexRunStatus = (
+  input: StagedIndexCollections & { readonly namespace: string; readonly runId: string },
+): Effect.Effect<StagedIndexStatus, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const run = yield* input.runs
+      .getForOwner({ owner: input.owner, key: input.runId })
+      .pipe(Effect.mapError((cause) => storageError("Failed to load staged index run.", cause)));
+    const count = (status: StagedIndexJob["status"]) =>
+      input.jobs
+        .count({ where: { runId: input.runId, status } })
+        .pipe(Effect.mapError((cause) => storageError(`Failed to count ${status} jobs.`, cause)));
+    const [pendingDiff, unchanged, pendingMaterialize, pendingEmbed, committed, failed] =
+      yield* Effect.all(
+        [
+          count("pendingDiff"),
+          count("unchanged"),
+          count("pendingMaterialize"),
+          count("pendingEmbed"),
+          count("committed"),
+          count("failed"),
+        ],
+        { concurrency: STAGED_STORAGE_CONCURRENCY },
+      );
+    return {
+      runId: input.runId,
+      namespace: run?.data.namespace ?? input.namespace,
+      total:
+        run?.data.total ??
+        pendingDiff + unchanged + pendingMaterialize + pendingEmbed + committed + failed,
+      pendingDiff,
+      unchanged,
+      pendingMaterialize,
+      pendingEmbed,
+      committed,
+      failed,
+    };
+  });
+
+export const sweepRemoved = (input: {
+  readonly namespace: string;
+  readonly executor: Executor;
+  readonly store: VectorStore;
+  readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
+  readonly owner: Owner;
+  readonly lexicalStore?: FtsLexicalStore;
+}): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const live = yield* listToolDescriptors(input.executor);
+    if (live.length === 0) return { namespace: input.namespace, removed: 0 };
+
+    const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
+    const stored = yield* input.fingerprints
+      .list()
+      .pipe(
+        Effect.mapError((cause) =>
+          storageError("Failed to load fingerprint rows for removed-tool sweep.", cause),
+        ),
+      );
+    const removed = stored.filter((entry) => !livePaths.has(entry.key));
+
+    yield* Effect.forEach(
+      removed,
+      (entry) =>
+        Effect.gen(function* () {
+          if (entry.data.chunkIds.length > 0) {
+            yield* input.store.deleteByIds([...entry.data.chunkIds]);
+          }
+          if (input.lexicalStore) {
+            yield* input.lexicalStore.deleteByIds([`${input.namespace}:${entry.key}`]);
+          }
+          yield* input.fingerprints
+            .remove({ owner: input.owner, key: entry.key })
+            .pipe(
+              Effect.mapError((cause) =>
+                storageError(
+                  `Failed to delete fingerprint row for removed tool "${entry.key}".`,
+                  cause,
+                ),
+              ),
+            );
+        }),
+      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+    );
+
+    return { namespace: input.namespace, removed: removed.length };
+  });
+
+export const completeIndexRun = (
+  input: StagedIndexDeps & { readonly runId: string },
+  sweep: Effect.Effect<{ readonly removed: number }, SemanticSearchError>,
+): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const result = yield* sweep;
+    const existing = yield* input.runs
+      .getForOwner({ owner: input.owner, key: input.runId })
+      .pipe(
+        Effect.mapError((cause) =>
+          storageError("Failed to load staged run for completion.", cause),
+        ),
+      );
+    const updatedAt = nowIso();
+    if (existing !== null) {
+      yield* input.runs
+        .put({
+          owner: input.owner,
+          key: input.runId,
+          data: { ...existing.data, status: "completed", updatedAt },
+        })
+        .pipe(
+          Effect.mapError((cause) => storageError("Failed to mark staged run completed.", cause)),
+        );
+    }
+    return { runId: input.runId, removed: result.removed };
+  });
+
+export const runIndexRun = (
+  input: StagedIndexDeps & {
+    readonly runId: string;
+    readonly partitionCount: number;
+    readonly pageLimit?: number;
+  },
+): Effect.Effect<IndexRunResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const started = yield* startIndexRun(input);
+    for (let partition = 0; partition < started.partitionCount; partition++) {
+      for (;;) {
+        const page = yield* seedIndexPartitionPage({
+          ...input,
+          partition,
+          limit: input.pageLimit,
+        });
+        if (page.processed === 0) break;
+      }
+    }
+    for (let partition = 0; partition < started.partitionCount; partition++) {
+      for (;;) {
+        const page = yield* diffIndexPartitionPage({
+          ...input,
+          partition,
+          limit: input.pageLimit,
+        });
+        if (page.processed === 0) break;
+      }
+    }
+    for (let partition = 0; partition < started.partitionCount; partition++) {
+      for (;;) {
+        const page = yield* materializeIndexPartitionPage({
+          ...input,
+          partition,
+          limit: input.pageLimit,
+        });
+        if (page.processed === 0) break;
+      }
+    }
+    for (let partition = 0; partition < started.partitionCount; partition++) {
+      for (;;) {
+        const page = yield* embedIndexPartitionPage({
+          ...input,
+          partition,
+          limit: input.pageLimit,
+        });
+        if (page.processed === 0) break;
+      }
+    }
+    const completed = yield* completeIndexRun(
+      input,
+      sweepRemoved({
+        namespace: input.namespace,
+        executor: input.executor,
+        store: input.store,
+        fingerprints: input.fingerprints,
+        owner: input.owner,
+        lexicalStore: input.lexicalStore,
+      }),
+    );
+    const status = yield* indexRunStatus(input);
+    return {
+      namespace: input.namespace,
+      total: status.total,
+      reembedded: status.committed,
+      unchanged: status.unchanged,
+      removed: completed.removed,
+    };
   });

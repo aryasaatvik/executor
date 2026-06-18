@@ -7,17 +7,32 @@ import {
 import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
-import { toolFingerprints } from "./collections";
+import {
+  stagedIndexChunks,
+  stagedIndexJobs,
+  stagedIndexRuns,
+  toolFingerprints,
+} from "./collections";
 import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import {
-  reconcileToolCatalog,
-  reconcileToolCatalogPage,
+  completeIndexRun,
+  diffIndexPartitionPage,
+  embedIndexPartitionPage,
+  indexRunStatus,
+  materializeIndexPartitionPage,
+  runIndexRun,
+  seedIndexPartitionPage,
+  startIndexRun,
   sweepRemoved,
-  type ReconcilePageResult,
-  type ReconcileResult,
-  type SweepResult,
+  type CompleteIndexRunResult,
+  type IndexDiffPageResult,
+  type IndexEmbedPageResult,
+  type IndexMaterializePageResult,
+  type IndexRunResult,
+  type StagedIndexStatus,
+  type StartIndexRunResult,
 } from "./indexer";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import type { VectorStore } from "./store";
@@ -40,6 +55,13 @@ export interface SemanticSearchPluginOptions {
   readonly model?: string;
   /** Embedding dimensionality — MUST equal the vector index's dimensions. */
   readonly dimensions?: number;
+  /** Gemini embedding batch size (texts per request; the Google provider allows
+   *  up to 2048 values per call, but Workers memory is the practical ceiling).
+   *  Larger batches
+   *  mean fewer, fatter requests — lower peak RPM for the same tokens — which is
+   *  the key lever when a reindex fans out across many concurrent workers and is
+   *  request-rate-bound. Defaults to the embedder's own default. */
+  readonly embedderBatchSize?: number;
   /** Inject a custom embedder (tests). Overrides `model`/`geminiApiKey`/`dimensions`. */
   readonly embedder?: ToolEmbedder;
   /** Chunker used when indexing the tool catalog. Defaults to `makeFacetChunker()`.
@@ -70,6 +92,7 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
 
 /** Default page size for the operator `search` surface. */
 const DEFAULT_SEARCH_LIMIT = 20;
+const DEFAULT_IN_PROCESS_PARTITIONS = 1;
 
 /** A live `tools.search` result page from the operator search surface. */
 export interface SemanticSearchResultPage {
@@ -98,50 +121,263 @@ const makeSemanticSearchExtension = (deps: {
   readonly embedder: ToolEmbedder | undefined;
   readonly store: VectorStore | undefined;
   readonly chunker: Chunker;
-  readonly fingerprints: Parameters<typeof reconcileToolCatalog>[0]["fingerprints"] | undefined;
-  readonly owner: Parameters<typeof reconcileToolCatalog>[0]["owner"] | undefined;
+  readonly fingerprints: Parameters<typeof startIndexRun>[0]["fingerprints"] | undefined;
+  readonly stagedRuns: Parameters<typeof startIndexRun>[0]["runs"] | undefined;
+  readonly stagedJobs: Parameters<typeof startIndexRun>[0]["jobs"] | undefined;
+  readonly stagedChunks: Parameters<typeof startIndexRun>[0]["chunks"] | undefined;
+  readonly blobs: Parameters<typeof startIndexRun>[0]["blobs"] | undefined;
+  readonly owner: Parameters<typeof startIndexRun>[0]["owner"] | undefined;
   readonly lexicalStore: FtsLexicalStore | undefined;
   readonly provider: ToolDiscoveryProvider | undefined;
 }) => ({
-  reindex: (executor: Executor): Effect.Effect<ReconcileResult, SemanticSearchError> =>
-    deps.embedder && deps.store && deps.fingerprints && deps.owner
-      ? reconcileToolCatalog({
+  reindex: (executor: Executor): Effect.Effect<IndexRunResult, SemanticSearchError> =>
+    deps.embedder &&
+    deps.store &&
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? runIndexRun({
           namespace: deps.namespace,
           executor,
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
           fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
           owner: deps.owner,
           lexicalStore: deps.lexicalStore,
+          runId: `manual-${Date.now()}`,
+          partitionCount: DEFAULT_IN_PROCESS_PARTITIONS,
         })
       : notConfigured(),
 
-  /** Reconcile ONE bounded page of the catalog. The unit a durable driver (a
-   *  Cloudflare Workflow step) calls in a loop so each step gets its own CPU
-   *  budget. Pair with `sweep` after the last page. */
-  reindexPage: (
+  startIndexRun: (
     executor: Executor,
-    input: { readonly cursor: number; readonly pageSize?: number },
-  ): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
-    deps.embedder && deps.store && deps.fingerprints && deps.owner
-      ? reconcileToolCatalogPage({
+    input: { readonly runId: string; readonly partitionCount: number },
+  ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? startIndexRun({
+          namespace: deps.namespace,
+          executor,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
+          fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+          runId: input.runId,
+          partitionCount: input.partitionCount,
+        })
+      : notConfigured(),
+
+  diffIndexPartitionPage: (
+    executor: Executor,
+    input: { readonly runId: string; readonly partition: number; readonly limit?: number },
+  ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? diffIndexPartitionPage({
+          namespace: deps.namespace,
+          executor,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
+          fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+          runId: input.runId,
+          partition: input.partition,
+          limit: input.limit,
+        })
+      : notConfigured(),
+
+  seedIndexPartitionPage: (
+    executor: Executor,
+    input: { readonly runId: string; readonly partition: number; readonly limit?: number },
+  ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? seedIndexPartitionPage({
+          namespace: deps.namespace,
+          executor,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
+          fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+          runId: input.runId,
+          partition: input.partition,
+          limit: input.limit,
+        })
+      : notConfigured(),
+
+  materializeIndexPartitionPage: (
+    executor: Executor,
+    input: {
+      readonly runId: string;
+      readonly partition: number;
+      readonly limit?: number;
+      readonly materializeConcurrency?: number;
+    },
+  ): Effect.Effect<IndexMaterializePageResult, SemanticSearchError> =>
+    deps.embedder &&
+    deps.store &&
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? materializeIndexPartitionPage({
           namespace: deps.namespace,
           executor,
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
           fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
           owner: deps.owner,
           lexicalStore: deps.lexicalStore,
-          cursor: input.cursor,
-          pageSize: input.pageSize,
+          runId: input.runId,
+          partition: input.partition,
+          limit: input.limit,
+          materializeConcurrency: input.materializeConcurrency,
         })
       : notConfigured(),
 
-  /** Delete index entries for tools that left the catalog. Run as the terminal
-   *  step after a paged reindex (or standalone). Needs no embedder. */
-  sweep: (executor: Executor): Effect.Effect<SweepResult, SemanticSearchError> =>
+  embedIndexPartitionPage: (
+    executor: Executor,
+    input: {
+      readonly runId: string;
+      readonly partition: number;
+      readonly limit?: number;
+      readonly maxChunks?: number;
+      readonly maxEstimatedInputTokens?: number;
+      readonly maxEstimatedResponseBytes?: number;
+      readonly maxEstimatedTokensPerText?: number;
+    },
+  ): Effect.Effect<IndexEmbedPageResult, SemanticSearchError> =>
+    deps.embedder &&
+    deps.store &&
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? embedIndexPartitionPage({
+          namespace: deps.namespace,
+          executor,
+          embedder: deps.embedder,
+          store: deps.store,
+          chunker: deps.chunker,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
+          fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
+          owner: deps.owner,
+          lexicalStore: deps.lexicalStore,
+          runId: input.runId,
+          partition: input.partition,
+          limit: input.limit,
+          maxChunks: input.maxChunks,
+          maxEstimatedInputTokens: input.maxEstimatedInputTokens,
+          maxEstimatedResponseBytes: input.maxEstimatedResponseBytes,
+          maxEstimatedTokensPerText: input.maxEstimatedTokensPerText,
+        })
+      : notConfigured(),
+
+  completeIndexRun: (
+    executor: Executor,
+    input: { readonly runId: string },
+  ): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
+    deps.embedder &&
+    deps.store &&
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? completeIndexRun(
+          {
+            namespace: deps.namespace,
+            executor,
+            embedder: deps.embedder,
+            store: deps.store,
+            chunker: deps.chunker,
+            runs: deps.stagedRuns,
+            jobs: deps.stagedJobs,
+            chunks: deps.stagedChunks,
+            fingerprints: deps.fingerprints,
+            blobs: deps.blobs,
+            owner: deps.owner,
+            lexicalStore: deps.lexicalStore,
+            runId: input.runId,
+          },
+          sweepRemoved({
+            namespace: deps.namespace,
+            executor,
+            store: deps.store,
+            fingerprints: deps.fingerprints,
+            owner: deps.owner,
+            lexicalStore: deps.lexicalStore,
+          }),
+        )
+      : notConfigured(),
+
+  indexRunStatus: (input: {
+    readonly runId: string;
+  }): Effect.Effect<StagedIndexStatus, SemanticSearchError> =>
+    deps.fingerprints &&
+    deps.stagedRuns &&
+    deps.stagedJobs &&
+    deps.stagedChunks &&
+    deps.blobs &&
+    deps.owner
+      ? indexRunStatus({
+          namespace: deps.namespace,
+          runs: deps.stagedRuns,
+          jobs: deps.stagedJobs,
+          chunks: deps.stagedChunks,
+          fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
+          owner: deps.owner,
+          runId: input.runId,
+        })
+      : notConfigured(),
+
+  /** Delete index entries for tools that left the catalog. Needs no embedder. */
+  sweep: (
+    executor: Executor,
+  ): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
     deps.store && deps.fingerprints && deps.owner
       ? sweepRemoved({
           namespace: deps.namespace,
@@ -227,6 +463,7 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
           apiKey: options.geminiApiKey,
           model: options.model,
           dimensions: options.dimensions,
+          batchSize: options.embedderBatchSize,
         })
       : undefined);
   // Inert without both a vector store and an embedder — the engine then
@@ -257,9 +494,13 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   return {
     id: "semanticSearch" as const,
     packageName: "@executor-js/plugin-semantic-search",
-    pluginStorage: { toolFingerprints },
+    pluginStorage: { toolFingerprints, stagedIndexRuns, stagedIndexJobs, stagedIndexChunks },
     storage: (deps) => ({
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
+      stagedRuns: deps.pluginStorage.collection(stagedIndexRuns),
+      stagedJobs: deps.pluginStorage.collection(stagedIndexJobs),
+      stagedChunks: deps.pluginStorage.collection(stagedIndexChunks),
+      stagedBlobs: deps.blobs,
       // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
       // org-scoped. Scoping by the triggering principal (user vs cron) would
       // split the fingerprint store into disjoint partitions, so each reindex
@@ -273,6 +514,10 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
         store,
         chunker,
         fingerprints: ctx.storage.fingerprints,
+        stagedRuns: ctx.storage.stagedRuns,
+        stagedJobs: ctx.storage.stagedJobs,
+        stagedChunks: ctx.storage.stagedChunks,
+        blobs: ctx.storage.stagedBlobs,
         owner: ctx.storage.owner,
         lexicalStore,
         provider,
