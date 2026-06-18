@@ -154,6 +154,11 @@ import {
   toolTypeScriptPreviewCacheKey,
 } from "./tool-typescript-preview-cache";
 import {
+  TOOL_SCHEMA_VIEW_CACHE_VERSION,
+  ToolSchemaViewCacheEntry,
+  toolSchemaViewCacheKey,
+} from "./tool-schema-view-cache";
+import {
   refreshAccessToken,
   exchangeClientCredentials,
   shouldRefreshToken,
@@ -1638,6 +1643,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       config.keyValueStore === undefined
         ? undefined
         : KeyValueStore.toSchemaStore(config.keyValueStore, ToolTypeScriptPreviewCacheEntry);
+    const toolSchemaViewStore =
+      config.keyValueStore === undefined
+        ? undefined
+        : KeyValueStore.toSchemaStore(config.keyValueStore, ToolSchemaViewCacheEntry);
     const typeScriptPreviewCache = yield* Cache.make({
       capacity: 2_048,
       timeToLive: Duration.minutes(10),
@@ -1651,6 +1660,21 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           if (Option.isNone(entry)) return null;
 
           return entry.value.preview;
+        }),
+    });
+    const toolSchemaViewCache = yield* Cache.make({
+      capacity: 2_048,
+      timeToLive: Duration.minutes(10),
+      lookup: (key: string) =>
+        Effect.gen(function* () {
+          if (toolSchemaViewStore === undefined) return null;
+
+          const entry = yield* toolSchemaViewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isNone(entry)) return null;
+
+          return entry.value.view;
         }),
     });
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
@@ -2941,12 +2965,23 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const staticEntry = staticTools.get(String(address));
         if (staticEntry) {
           const tool = staticToolToTool(staticEntry);
+          const key = yield* toolSchemaViewCacheKey({
+            address: String(address),
+            name: String(tool.name),
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            definitions: {},
+          });
+          const cached = yield* Cache.get(toolSchemaViewCache, key);
+          if (cached !== null) return cached;
+
           const preview = yield* buildCachedToolTypeScriptPreview({
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
             defs: new Map(),
           }).pipe(Effect.option);
-          return ToolSchemaView.make({
+          const view = ToolSchemaView.make({
             address,
             name: tool.name,
             description: tool.description,
@@ -2956,6 +2991,18 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             outputTypeScript: Option.getOrUndefined(preview)?.outputTypeScript,
             typeScriptDefinitions: Option.getOrUndefined(preview)?.typeScriptDefinitions,
           });
+          yield* Cache.set(toolSchemaViewCache, key, view);
+          if (toolSchemaViewStore !== undefined) {
+            yield* toolSchemaViewStore
+              .set(key, {
+                version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+                typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+                typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+                view,
+              })
+              .pipe(Effect.ignore);
+          }
+          return view;
         }
 
         const parsed = parseToolAddress(String(address));
@@ -2982,6 +3029,17 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         });
         const defs = new Map<string, unknown>();
         for (const def of definitionRows) defs.set(def.name, decodeJsonColumn(def.schema));
+        const definitions = Object.fromEntries(defs);
+        const key = yield* toolSchemaViewCacheKey({
+          address: String(address),
+          name: String(tool.name),
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          outputSchema: tool.outputSchema,
+          definitions,
+        });
+        const cached = yield* Cache.get(toolSchemaViewCache, key);
+        if (cached !== null) return cached;
 
         const referenced = collectReferencedDefinitions(
           [tool.inputSchema, tool.outputSchema],
@@ -2994,8 +3052,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           defs: referencedDefs,
         }).pipe(Effect.option);
 
-        const view = preview;
-        return ToolSchemaView.make({
+        const view = ToolSchemaView.make({
           address,
           name: tool.name,
           description: tool.description,
@@ -3005,10 +3062,22 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Object.keys(referenced).length > 0
               ? (referenced as Record<string, unknown>)
               : undefined,
-          inputTypeScript: Option.getOrUndefined(view)?.inputTypeScript,
-          outputTypeScript: Option.getOrUndefined(view)?.outputTypeScript,
-          typeScriptDefinitions: Option.getOrUndefined(view)?.typeScriptDefinitions,
+          inputTypeScript: Option.getOrUndefined(preview)?.inputTypeScript,
+          outputTypeScript: Option.getOrUndefined(preview)?.outputTypeScript,
+          typeScriptDefinitions: Option.getOrUndefined(preview)?.typeScriptDefinitions,
         });
+        yield* Cache.set(toolSchemaViewCache, key, view);
+        if (toolSchemaViewStore !== undefined) {
+          yield* toolSchemaViewStore
+            .set(key, {
+              version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+              typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+              typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+              view,
+            })
+            .pipe(Effect.ignore);
+        }
+        return view;
       });
 
     // ------------------------------------------------------------------

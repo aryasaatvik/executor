@@ -18,6 +18,7 @@ import type { CredentialProvider } from "./provider";
 import { IntegrationDetectionResult } from "./types";
 import { makeTestExecutor } from "./testing";
 import { serveOAuthTestServer } from "./testing/oauth-test-server";
+import { toolSchemaViewCacheKey } from "./tool-schema-view-cache";
 import { toolTypeScriptPreviewCacheKey } from "./tool-typescript-preview-cache";
 
 // removed: v1 secret browser-handoff, source.configure, case-insensitive tool-id
@@ -44,6 +45,21 @@ const TEMPLATE = AuthTemplateSlug.make("apiKey");
 const CONN = ConnectionName.make("main");
 
 const addr = (tool: string): ToolAddress => ToolAddress.make(`tools.${INTEG}.org.${CONN}.${tool}`);
+
+const demoDefinitions = {
+  Pet: { anyOf: [{ $ref: "#/$defs/Dog" }, { $ref: "#/$defs/Cat" }] },
+  Dog: {
+    type: "object",
+    properties: { collar: { $ref: "#/$defs/Collar" } },
+  },
+  Cat: { type: "object", properties: { lives: { type: "number" } } },
+  Collar: { type: "object", properties: { id: { type: "string" } } },
+  Owner: { type: "object", properties: { pet: { $ref: "#/$defs/Pet" } } },
+  // Regression fixture: unused provider definitions can be malformed.
+  // Tool previews must compile only the definitions reachable from the
+  // requested tool's schema roots.
+  Unused: { type: "object", properties: { broken: { $ref: "#/$defs/Missing" } } },
+};
 
 // ---------------------------------------------------------------------------
 // A plugin that registers an integration, produces per-connection tools via
@@ -76,20 +92,7 @@ const demoPlugin = definePlugin(() => ({
         },
         { name: ToolName.make("run"), description: "run" },
       ],
-      definitions: {
-        Pet: { anyOf: [{ $ref: "#/$defs/Dog" }, { $ref: "#/$defs/Cat" }] },
-        Dog: {
-          type: "object",
-          properties: { collar: { $ref: "#/$defs/Collar" } },
-        },
-        Cat: { type: "object", properties: { lives: { type: "number" } } },
-        Collar: { type: "object", properties: { id: { type: "string" } } },
-        Owner: { type: "object", properties: { pet: { $ref: "#/$defs/Pet" } } },
-        // Regression fixture: unused provider definitions can be malformed.
-        // Tool previews must compile only the definitions reachable from the
-        // requested tool's schema roots.
-        Unused: { type: "object", properties: { broken: { $ref: "#/$defs/Missing" } } },
-      },
+      definitions: demoDefinitions,
     }),
   invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
   extension: (ctx) => ({
@@ -437,6 +440,17 @@ describe("createExecutor", () => {
       });
       const cached = yield* keyValueStore.get(cacheKey);
       expect(cached).toContain("preview");
+
+      const schemaViewCacheKey = yield* toolSchemaViewCacheKey({
+        address: String(addr("inspect")),
+        name: schema?.name,
+        description: schema?.description,
+        inputSchema: schema?.inputSchema,
+        outputSchema: schema?.outputSchema,
+        definitions: demoDefinitions,
+      });
+      const cachedSchemaView = yield* keyValueStore.get(schemaViewCacheKey);
+      expect(cachedSchemaView).toContain("view");
     }),
   );
 
