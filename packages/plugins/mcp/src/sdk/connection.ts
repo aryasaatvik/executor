@@ -1,6 +1,5 @@
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
@@ -44,9 +43,8 @@ export type McpConnector = Effect.Effect<
 
 export type RemoteConnectorInput = Omit<
   McpRemoteIntegrationConfig,
-  "authenticationTemplate" | "remoteTransport" | "headers" | "queryParams"
+  "authenticationTemplate" | "headers" | "queryParams"
 > & {
-  readonly remoteTransport?: McpRemoteIntegrationConfig["remoteTransport"];
   readonly headers?: Record<string, string>;
   readonly queryParams?: Record<string, string>;
   readonly authProvider?: OAuthClientProvider;
@@ -299,13 +297,12 @@ export const createMcpConnector = (input: ConnectorInput): McpConnector => {
 
   // Remote transport
   const headers = input.headers ?? {};
-  const remoteTransport = input.remoteTransport ?? "auto";
   const requestInit = Object.keys(headers).length > 0 ? { headers } : undefined;
   const fetch = input.httpClientLayer ? fetchFromHttpClientLayer(input.httpClientLayer) : undefined;
 
   const endpoint = buildEndpointUrl(input.endpoint, input.queryParams ?? {});
 
-  const connectStreamableHttp = connectClient({
+  return connectClient({
     transport: "streamable-http",
     createTransport: () =>
       new StreamableHTTPClientTransport(endpoint, {
@@ -314,31 +311,4 @@ export const createMcpConnector = (input: ConnectorInput): McpConnector => {
         fetch,
       }),
   });
-
-  const connectSse = connectClient({
-    transport: "sse",
-    createTransport: () =>
-      new SSEClientTransport(endpoint, {
-        requestInit,
-        authProvider: input.authProvider,
-        fetch,
-      }),
-  });
-
-  if (remoteTransport === "streamable-http") return connectStreamableHttp;
-  if (remoteTransport === "sse") return connectSse;
-
-  // auto: try streamable-http first, fall back to SSE for TRANSPORT failures
-  // only. A definitive auth wall (401/403) is about the credential, not the
-  // transport: the same endpoint would reject SSE too, and retrying it via
-  // SSE loses the HTTP status (the SSE POST failure is a different, opaque
-  // error), which used to misclassify an expired token as a generic
-  // connection failure. Propagate it as-is instead.
-  return connectStreamableHttp.pipe(
-    Effect.catch((error) => {
-      if (Predicate.isTagged(error, "McpOAuthReauthorizationRequired")) return Effect.fail(error);
-      if (error.httpStatus === 401 || error.httpStatus === 403) return Effect.fail(error);
-      return connectSse;
-    }),
-  );
 };

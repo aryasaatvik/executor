@@ -59,7 +59,6 @@ const toServerInput = (
     name: string;
     description?: string;
     endpoint: string;
-    remoteTransport?: "streamable-http" | "sse" | "auto";
     queryParams?: Record<string, string>;
     headers?: Record<string, string>;
     slug?: string;
@@ -74,7 +73,6 @@ const toServerInput = (
     name: p.name,
     description: p.description,
     endpoint: p.endpoint,
-    remoteTransport: p.remoteTransport,
     queryParams: p.queryParams,
     headers: p.headers,
     slug: p.slug,
