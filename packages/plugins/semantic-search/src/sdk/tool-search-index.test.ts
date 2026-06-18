@@ -20,7 +20,7 @@ import {
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import { chunk, create, embed, refresh } from "./tool-search-index";
+import { chunk, create, embed, plan } from "./tool-search-index";
 import type { VectorInput, VectorStore } from "./store";
 
 const owner: Owner = "org" as Owner;
@@ -132,7 +132,7 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
 };
 
 describe("ToolSearchIndex", () => {
-  it.effect("refreshes, chunks, embeds, and indexes changed tools", () =>
+  it.effect("plans, chunks, embeds, and indexes changed tools", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
@@ -157,7 +157,7 @@ describe("ToolSearchIndex", () => {
 
       const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
       yield* create({ ...base, runId: "run-1", partitionCount: 1 });
-      const refreshed = yield* refresh({
+      const planned = yield* plan({
         ...base,
         runId: "run-1",
         partition: 0,
@@ -169,7 +169,7 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: "run-1",
-        paths: refreshed.paths,
+        paths: planned.paths,
         limit: 10,
       });
       const embedded = yield* embed({
@@ -182,7 +182,7 @@ describe("ToolSearchIndex", () => {
         limit: 10,
       });
 
-      expect(refreshed).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect(planned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
       expect(embedded).toMatchObject({ processed: 1, chunks: chunked.chunks });
@@ -252,7 +252,7 @@ describe("ToolSearchIndex", () => {
         partitionCount: 1,
         maxTools: 2,
       });
-      const refreshed = yield* refresh({
+      const planned = yield* plan({
         ...base,
         runId: "run-limited",
         partition: 0,
@@ -261,7 +261,7 @@ describe("ToolSearchIndex", () => {
       });
 
       expect(started.total).toBe(2);
-      expect(refreshed.processed).toBe(2);
+      expect(planned.processed).toBe(2);
       expect(jobs.data.size).toBe(2);
     }),
   );

@@ -66,14 +66,14 @@ export declare namespace ToolSearchIndex {
     readonly partitionCount: number;
   }
 
-  export interface RefreshInput {
+  export interface PlanInput {
     readonly runId: string;
     readonly partition: number;
     readonly limit?: number;
     readonly maxTools?: number;
   }
 
-  export interface RefreshResult {
+  export interface PlanResult {
     readonly runId: string;
     readonly partition: number;
     readonly processed: number;
@@ -131,7 +131,7 @@ export declare namespace ToolSearchIndex {
     readonly runId: string;
     readonly namespace: string;
     readonly total: number;
-    readonly pendingRefresh: number;
+    readonly pendingPlan: number;
     readonly skipped: number;
     readonly pendingChunk: number;
     readonly pendingEmbedding: number;
@@ -149,7 +149,7 @@ export declare namespace ToolSearchIndex {
 
   export interface Service {
     readonly create: (input: CreateInput) => Effect.Effect<CreateResult, SemanticSearchError>;
-    readonly refresh: (input: RefreshInput) => Effect.Effect<RefreshResult, SemanticSearchError>;
+    readonly plan: (input: PlanInput) => Effect.Effect<PlanResult, SemanticSearchError>;
     readonly chunk: (input: ChunkInput) => Effect.Effect<ChunkResult, SemanticSearchError>;
     readonly embed: (input: EmbedInput) => Effect.Effect<EmbedResult, SemanticSearchError>;
     readonly status: (input: StatusInput) => Effect.Effect<Status, SemanticSearchError>;
@@ -157,10 +157,9 @@ export declare namespace ToolSearchIndex {
   }
 }
 
-export class ToolSearchIndex extends Context.Service<
-  ToolSearchIndex,
-  ToolSearchIndex.Service
->()("@executor-js/semantic-search/ToolSearchIndex") {}
+export class ToolSearchIndex extends Context.Service<ToolSearchIndex, ToolSearchIndex.Service>()(
+  "@executor-js/semantic-search/ToolSearchIndex",
+) {}
 
 const DEFAULT_PAGE_LIMIT = 25;
 const DEFAULT_CHUNK_CONCURRENCY = 1;
@@ -372,7 +371,7 @@ const getJobsByPaths = (
   SemanticSearchError
 > =>
   Effect.forEach(
-    input.paths.slice(0, input.limit ?? input.paths.length),
+    input.paths,
     (path) =>
       deps.jobs
         .getForOwner({ owner: deps.owner, key: jobKey(input.runId, path) })
@@ -380,7 +379,9 @@ const getJobsByPaths = (
     { concurrency: INDEX_STORAGE_CONCURRENCY },
   ).pipe(
     Effect.map((entries) =>
-      entries.flatMap((entry) => (entry === null ? [] : [entry])),
+      entries
+        .flatMap((entry) => (entry === null ? [] : [entry]))
+        .slice(0, input.limit ?? input.paths.length),
     ),
     Effect.mapError(
       (cause) => new SemanticSearchError({ message: "Failed to load index jobs.", cause }),
@@ -423,9 +424,9 @@ export const create = (
     };
   });
 
-export const refresh = (
-  input: IndexStores & ToolSearchIndex.RefreshInput,
-): Effect.Effect<ToolSearchIndex.RefreshResult, SemanticSearchError> =>
+export const plan = (
+  input: IndexStores & ToolSearchIndex.PlanInput,
+): Effect.Effect<ToolSearchIndex.PlanResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
@@ -449,7 +450,7 @@ export const refresh = (
       .pipe(
         Effect.mapError(
           (cause) =>
-            new SemanticSearchError({ message: "Failed to count refreshed index jobs.", cause }),
+            new SemanticSearchError({ message: "Failed to count planned index jobs.", cause }),
         ),
       );
     const selected = partitionDescriptors.slice(
@@ -894,10 +895,10 @@ export const status = (
               new SemanticSearchError({ message: `Failed to count ${status} jobs.`, cause }),
           ),
         );
-    const [storedPendingRefresh, skipped, pendingChunk, pendingEmbedding, indexed, failed] =
+    const [storedPendingPlan, skipped, pendingChunk, pendingEmbedding, indexed, failed] =
       yield* Effect.all(
         [
-          count("pendingRefresh"),
+          count("pendingPlan"),
           count("skipped"),
           count("pendingChunk"),
           count("pendingEmbedding"),
@@ -907,14 +908,14 @@ export const status = (
         { concurrency: INDEX_STORAGE_CONCURRENCY },
       );
     const observed =
-      storedPendingRefresh + skipped + pendingChunk + pendingEmbedding + indexed + failed;
+      storedPendingPlan + skipped + pendingChunk + pendingEmbedding + indexed + failed;
     const total = run?.data.total ?? observed;
-    const pendingRefresh = Math.max(0, total - observed + storedPendingRefresh);
+    const pendingPlan = Math.max(0, total - observed + storedPendingPlan);
     return {
       runId: input.runId,
       namespace: run?.data.namespace ?? input.namespace,
       total,
-      pendingRefresh,
+      pendingPlan,
       skipped,
       pendingChunk,
       pendingEmbedding,
@@ -1024,7 +1025,7 @@ export const run = (
     const started = yield* create(input);
     for (let partition = 0; partition < started.partitionCount; partition++) {
       for (;;) {
-        const page = yield* refresh({
+        const page = yield* plan({
           ...input,
           partition,
           limit: input.pageLimit,
@@ -1061,7 +1062,7 @@ export const run = (
 
 export const make = (input: IndexDeps): ToolSearchIndex.Service => ({
   create: (options) => create({ ...input, ...options }),
-  refresh: (options) => refresh({ ...input, ...options }),
+  plan: (options) => plan({ ...input, ...options }),
   chunk: (options) => chunk({ ...input, ...options }),
   embed: (options) => embed({ ...input, ...options }),
   status: (options) => status({ ...input, ...options }),

@@ -115,7 +115,7 @@ const makeSemanticSearchExtension = (deps: {
 }) => {
   const unconfiguredIndex: ToolSearchIndex.Service = {
     create: () => notConfigured(),
-    refresh: () => notConfigured(),
+    plan: () => notConfigured(),
     chunk: () => notConfigured(),
     embed: () => notConfigured(),
     status: () => notConfigured(),
@@ -178,7 +178,10 @@ const makeSemanticSearchExtension = (deps: {
     /** Delete index entries for tools that left the catalog. Needs no embedder. */
     sweep: (
       executor: Executor,
-    ): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
+    ): Effect.Effect<
+      { readonly namespace: string; readonly removed: number },
+      SemanticSearchError
+    > =>
       deps.store && deps.fingerprints && deps.owner
         ? sweepRemoved({
             namespace: deps.namespace,

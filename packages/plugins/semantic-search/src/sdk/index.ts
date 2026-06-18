@@ -16,7 +16,7 @@ export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-clou
 export {
   ToolSearchIndex,
   create,
-  refresh,
+  plan,
   chunk,
   embed,
   status,

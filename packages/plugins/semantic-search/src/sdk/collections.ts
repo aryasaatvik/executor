@@ -48,7 +48,7 @@ export const indexRuns = definePluginStorageCollection("indexRuns", IndexRun, {
 });
 
 export const IndexJobStatus = Schema.Literals([
-  "pendingRefresh",
+  "pendingPlan",
   "skipped",
   "pendingChunk",
   "pendingEmbedding",
