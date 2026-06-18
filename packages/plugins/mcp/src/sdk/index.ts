@@ -18,7 +18,6 @@ export {
   McpIntegrationConfig,
   McpRemoteIntegrationConfig,
   McpStdioIntegrationConfig,
-  McpRemoteTransport,
   McpTransport,
   McpToolAnnotations,
   McpToolBinding,

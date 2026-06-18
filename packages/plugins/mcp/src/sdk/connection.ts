@@ -1,6 +1,5 @@
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
 import { Effect } from "effect";
@@ -33,9 +32,8 @@ export type McpConnector = Effect.Effect<McpConnection, McpConnectionError>;
 
 export type RemoteConnectorInput = Omit<
   McpRemoteIntegrationConfig,
-  "authenticationTemplate" | "remoteTransport" | "headers" | "queryParams"
+  "authenticationTemplate" | "headers" | "queryParams"
 > & {
-  readonly remoteTransport?: McpRemoteIntegrationConfig["remoteTransport"];
   readonly headers?: Record<string, string>;
   readonly queryParams?: Record<string, string>;
   readonly authProvider?: OAuthClientProvider;
@@ -144,12 +142,11 @@ export const createMcpConnector = (input: ConnectorInput): McpConnector => {
 
   // Remote transport
   const headers = input.headers ?? {};
-  const remoteTransport = input.remoteTransport ?? "auto";
   const requestInit = Object.keys(headers).length > 0 ? { headers } : undefined;
 
   const endpoint = buildEndpointUrl(input.endpoint, input.queryParams ?? {});
 
-  const connectStreamableHttp = connectClient({
+  return connectClient({
     transport: "streamable-http",
     createTransport: () =>
       new StreamableHTTPClientTransport(endpoint, {
@@ -157,19 +154,4 @@ export const createMcpConnector = (input: ConnectorInput): McpConnector => {
         authProvider: input.authProvider,
       }),
   });
-
-  const connectSse = connectClient({
-    transport: "sse",
-    createTransport: () =>
-      new SSEClientTransport(endpoint, {
-        requestInit,
-        authProvider: input.authProvider,
-      }),
-  });
-
-  if (remoteTransport === "streamable-http") return connectStreamableHttp;
-  if (remoteTransport === "sse") return connectSse;
-
-  // auto — try streamable-http first, fall back to SSE
-  return connectStreamableHttp.pipe(Effect.catch(() => connectSse));
 };
