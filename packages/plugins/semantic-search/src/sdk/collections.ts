@@ -48,11 +48,11 @@ export const indexRuns = definePluginStorageCollection("indexRuns", IndexRun, {
 });
 
 export const IndexJobStatus = Schema.Literals([
-  "pendingDiff",
-  "unchanged",
-  "pendingMaterialize",
-  "pendingEmbed",
-  "committed",
+  "pendingRefresh",
+  "skipped",
+  "pendingChunk",
+  "pendingEmbedding",
+  "indexed",
   "failed",
 ]);
 export type IndexJobStatus = typeof IndexJobStatus.Type;
@@ -82,7 +82,7 @@ export const indexJobs = definePluginStorageCollection("indexJobs", IndexJob, {
   indexes: ["runId", "namespace", "partition", "status", "path", "ordinal"],
 });
 
-export const IndexChunkStatus = Schema.Literals(["pendingEmbed", "committed", "failed"]);
+export const IndexChunkStatus = Schema.Literals(["pendingEmbedding", "indexed", "failed"]);
 export type IndexChunkStatus = typeof IndexChunkStatus.Type;
 
 export const IndexChunk = Schema.Struct({

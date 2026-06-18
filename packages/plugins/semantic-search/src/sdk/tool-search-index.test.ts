@@ -20,13 +20,7 @@ import {
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import {
-  diffIndexPartitionPage,
-  embedIndexPartitionPage,
-  materializeIndexPartitionPage,
-  seedIndexPartitionPage,
-  startIndexRun,
-} from "./indexer";
+import { chunk, create, embed, refresh } from "./tool-search-index";
 import type { VectorInput, VectorStore } from "./store";
 
 const owner: Owner = "org" as Owner;
@@ -137,8 +131,8 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
   return facade as unknown as TestCollection<T>;
 };
 
-describe("indexer", () => {
-  it.effect("diffs, materializes, embeds, and commits changed tools by index phase", () =>
+describe("ToolSearchIndex", () => {
+  it.effect("refreshes, chunks, embeds, and indexes changed tools", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
@@ -162,47 +156,40 @@ describe("indexer", () => {
       };
 
       const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
-      yield* startIndexRun({ ...base, runId: "run-1", partitionCount: 1 });
-      const seeded = yield* seedIndexPartitionPage({
+      yield* create({ ...base, runId: "run-1", partitionCount: 1 });
+      const refreshed = yield* refresh({
         ...base,
         runId: "run-1",
         partition: 0,
         limit: 10,
       });
-      const diff = yield* diffIndexPartitionPage({
-        ...base,
-        runId: "run-1",
-        partition: 0,
-        limit: 10,
-      });
-      const materialized = yield* materializeIndexPartitionPage({
+      const chunked = yield* chunk({
         ...base,
         embedder,
         store,
         chunker: makeFacetChunker(),
         runId: "run-1",
-        partition: 0,
+        paths: refreshed.paths,
         limit: 10,
       });
-      const embedded = yield* embedIndexPartitionPage({
+      const embedded = yield* embed({
         ...base,
         embedder,
         store,
         chunker: makeFacetChunker(),
         runId: "run-1",
-        partition: 0,
+        paths: chunked.paths,
         limit: 10,
       });
 
-      expect(seeded).toMatchObject({ processed: 1 });
-      expect(diff).toMatchObject({ processed: 1, changed: 1, unchanged: 0 });
-      expect(materialized.processed).toBe(1);
-      expect(materialized.chunks).toBeGreaterThan(0);
-      expect(embedded).toMatchObject({ processed: 1, chunks: materialized.chunks });
+      expect(refreshed).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect(chunked.processed).toBe(1);
+      expect(chunked.chunks).toBeGreaterThan(0);
+      expect(embedded).toMatchObject({ processed: 1, chunks: chunked.chunks });
       expect(counters).toEqual({ raw: 1, codegen: 1 });
-      expect(upserted).toHaveLength(materialized.chunks);
+      expect(upserted).toHaveLength(chunked.chunks);
       expect([...fingerprints.data.values()]).toHaveLength(1);
-      expect([...jobs.data.values()][0]?.status).toBe("committed");
+      expect([...jobs.data.values()][0]?.status).toBe("indexed");
     }),
   );
 
@@ -259,13 +246,13 @@ describe("indexer", () => {
         owner,
       };
 
-      const started = yield* startIndexRun({
+      const started = yield* create({
         ...base,
         runId: "run-limited",
         partitionCount: 1,
         maxTools: 2,
       });
-      const seeded = yield* seedIndexPartitionPage({
+      const refreshed = yield* refresh({
         ...base,
         runId: "run-limited",
         partition: 0,
@@ -274,7 +261,7 @@ describe("indexer", () => {
       });
 
       expect(started.total).toBe(2);
-      expect(seeded).toMatchObject({ processed: 2, changed: 0, unchanged: 0 });
+      expect(refreshed.processed).toBe(2);
       expect(jobs.data.size).toBe(2);
     }),
   );
@@ -316,7 +303,7 @@ describe("indexer", () => {
         name: "repos.get",
         integration: "github",
         description: "Get a repository",
-        status: "pendingEmbed",
+        status: "pendingEmbedding",
         fingerprint: "fp-budget",
         oldChunkIds: [],
         chunkIds: ["chunk-0", "chunk-1", "chunk-2"],
@@ -345,7 +332,7 @@ describe("indexer", () => {
               name: job.name,
               integration: job.integration,
               description: job.description,
-              status: "pendingEmbed",
+              status: "pendingEmbedding",
               createdAt,
               updatedAt: createdAt,
             };
@@ -373,31 +360,31 @@ describe("indexer", () => {
         chunker: makeFacetChunker(),
       };
 
-      const first = yield* embedIndexPartitionPage({
+      const first = yield* embed({
         ...base,
         runId: job.runId,
-        partition: 0,
+        paths: [job.path],
         limit: 10,
         maxChunks: 2,
       });
       const afterFirstJob = jobs.data.get(`${job.runId}:${job.path}`);
       const firstChunkStatuses = [...chunks.data.values()].map((chunk) => chunk.status);
 
-      const second = yield* embedIndexPartitionPage({
+      const second = yield* embed({
         ...base,
         runId: job.runId,
-        partition: 0,
+        paths: [job.path],
         limit: 10,
         maxChunks: 10,
       });
       const afterSecondJob = jobs.data.get(`${job.runId}:${job.path}`);
 
       expect(first).toMatchObject({ processed: 1, chunks: 2 });
-      expect(afterFirstJob?.status).toBe("pendingEmbed");
-      expect(firstChunkStatuses.filter((status) => status === "committed")).toHaveLength(2);
-      expect(firstChunkStatuses.filter((status) => status === "pendingEmbed")).toHaveLength(1);
+      expect(afterFirstJob?.status).toBe("pendingEmbedding");
+      expect(firstChunkStatuses.filter((status) => status === "indexed")).toHaveLength(2);
+      expect(firstChunkStatuses.filter((status) => status === "pendingEmbedding")).toHaveLength(1);
       expect(second).toMatchObject({ processed: 1, chunks: 1 });
-      expect(afterSecondJob?.status).toBe("committed");
+      expect(afterSecondJob?.status).toBe("indexed");
       expect(mutableEmbeddedGroups.map((group) => group.length)).toEqual([2, 1]);
       expect(upserted).toHaveLength(3);
       expect([...fingerprints.data.values()]).toHaveLength(1);
@@ -435,7 +422,7 @@ describe("indexer", () => {
         name: "repos.empty",
         integration: "github",
         description: "Empty tool",
-        status: "pendingEmbed",
+        status: "pendingEmbedding",
         fingerprint: "fp-zero",
         oldChunkIds: [],
         chunkIds: [],
@@ -444,7 +431,7 @@ describe("indexer", () => {
       };
       yield* jobs.put({ owner, key: `${job.runId}:${job.path}`, data: job });
 
-      const result = yield* embedIndexPartitionPage({
+      const result = yield* embed({
         namespace,
         executor: makeExecutor({ raw: 0, codegen: 0 }),
         runs,
@@ -457,12 +444,12 @@ describe("indexer", () => {
         store,
         chunker: makeFacetChunker(),
         runId: job.runId,
-        partition: 0,
+        paths: [job.path],
         limit: 10,
       });
 
       expect(result).toMatchObject({ processed: 1, chunks: 0 });
-      expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("committed");
+      expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
       expect(fingerprints.data.get(job.path)).toMatchObject({
         path: job.path,
         fingerprint: "fp-zero",

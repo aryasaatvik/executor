@@ -14,24 +14,17 @@ export {
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export {
-  startIndexRun,
-  diffIndexPartitionPage,
-  materializeIndexPartitionPage,
-  embedIndexPartitionPage,
-  indexRunStatus,
-  completeIndexRun,
-  runIndexRun,
+  ToolSearchIndex,
+  create,
+  refresh,
+  chunk,
+  embed,
+  status,
+  complete,
+  run,
+  make as makeToolSearchIndex,
   sweepRemoved,
-  type StartIndexRunInput,
-  type StartIndexRunResult,
-  type IndexPageInput,
-  type IndexDiffPageResult,
-  type IndexMaterializePageResult,
-  type IndexEmbedPageResult,
-  type CompleteIndexRunResult,
-  type IndexRunResult,
-  type IndexStatus,
-} from "./indexer";
+} from "./tool-search-index";
 export { SemanticSearchError } from "./errors";
 
 // Chunker

@@ -12,23 +12,11 @@ import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import {
-  completeIndexRun,
-  diffIndexPartitionPage,
-  embedIndexPartitionPage,
-  indexRunStatus,
-  materializeIndexPartitionPage,
-  runIndexRun,
-  seedIndexPartitionPage,
-  startIndexRun,
+  make as makeToolSearchIndex,
+  run as runToolSearchIndex,
   sweepRemoved,
-  type CompleteIndexRunResult,
-  type IndexDiffPageResult,
-  type IndexEmbedPageResult,
-  type IndexMaterializePageResult,
-  type IndexRunResult,
-  type IndexStatus,
-  type StartIndexRunResult,
-} from "./indexer";
+  type ToolSearchIndex,
+} from "./tool-search-index";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import type { VectorStore } from "./store";
 import { type FtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
@@ -116,16 +104,24 @@ const makeSemanticSearchExtension = (deps: {
   readonly embedder: ToolEmbedder | undefined;
   readonly store: VectorStore | undefined;
   readonly chunker: Chunker;
-  readonly fingerprints: Parameters<typeof startIndexRun>[0]["fingerprints"] | undefined;
-  readonly indexRuns: Parameters<typeof startIndexRun>[0]["runs"] | undefined;
-  readonly indexJobs: Parameters<typeof startIndexRun>[0]["jobs"] | undefined;
-  readonly indexChunks: Parameters<typeof startIndexRun>[0]["chunks"] | undefined;
-  readonly blobs: Parameters<typeof startIndexRun>[0]["blobs"] | undefined;
-  readonly owner: Parameters<typeof startIndexRun>[0]["owner"] | undefined;
+  readonly fingerprints: Parameters<typeof runToolSearchIndex>[0]["fingerprints"] | undefined;
+  readonly indexRuns: Parameters<typeof runToolSearchIndex>[0]["runs"] | undefined;
+  readonly indexJobs: Parameters<typeof runToolSearchIndex>[0]["jobs"] | undefined;
+  readonly indexChunks: Parameters<typeof runToolSearchIndex>[0]["chunks"] | undefined;
+  readonly blobs: Parameters<typeof runToolSearchIndex>[0]["blobs"] | undefined;
+  readonly owner: Parameters<typeof runToolSearchIndex>[0]["owner"] | undefined;
   readonly lexicalStore: FtsLexicalStore | undefined;
   readonly provider: ToolDiscoveryProvider | undefined;
-}) => ({
-  reindex: (executor: Executor): Effect.Effect<IndexRunResult, SemanticSearchError> =>
+}) => {
+  const unconfiguredIndex: ToolSearchIndex.Service = {
+    create: () => notConfigured(),
+    refresh: () => notConfigured(),
+    chunk: () => notConfigured(),
+    embed: () => notConfigured(),
+    status: () => notConfigured(),
+    complete: () => notConfigured(),
+  };
+  const index = (executor: Executor): ToolSearchIndex.Service =>
     deps.embedder &&
     deps.store &&
     deps.fingerprints &&
@@ -134,7 +130,7 @@ const makeSemanticSearchExtension = (deps: {
     deps.indexChunks &&
     deps.blobs &&
     deps.owner
-      ? runIndexRun({
+      ? makeToolSearchIndex({
           namespace: deps.namespace,
           executor,
           embedder: deps.embedder,
@@ -147,189 +143,21 @@ const makeSemanticSearchExtension = (deps: {
           blobs: deps.blobs,
           owner: deps.owner,
           lexicalStore: deps.lexicalStore,
-          runId: `manual-${Date.now()}`,
-          partitionCount: DEFAULT_IN_PROCESS_PARTITIONS,
         })
-      : notConfigured(),
+      : unconfiguredIndex;
 
-  startIndexRun: (
-    executor: Executor,
-    input: { readonly runId: string; readonly partitionCount: number; readonly maxTools?: number },
-  ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? startIndexRun({
-          namespace: deps.namespace,
-          executor,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          runId: input.runId,
-          partitionCount: input.partitionCount,
-          maxTools: input.maxTools,
-        })
-      : notConfigured(),
-
-  diffIndexPartitionPage: (
-    executor: Executor,
-    input: { readonly runId: string; readonly partition: number; readonly limit?: number },
-  ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? diffIndexPartitionPage({
-          namespace: deps.namespace,
-          executor,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          runId: input.runId,
-          partition: input.partition,
-          limit: input.limit,
-        })
-      : notConfigured(),
-
-  seedIndexPartitionPage: (
-    executor: Executor,
-    input: {
-      readonly runId: string;
-      readonly partition: number;
-      readonly limit?: number;
-      readonly maxTools?: number;
-    },
-  ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? seedIndexPartitionPage({
-          namespace: deps.namespace,
-          executor,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          runId: input.runId,
-          partition: input.partition,
-          limit: input.limit,
-          maxTools: input.maxTools,
-        })
-      : notConfigured(),
-
-  materializeIndexPartitionPage: (
-    executor: Executor,
-    input: {
-      readonly runId: string;
-      readonly partition: number;
-      readonly limit?: number;
-      readonly materializeConcurrency?: number;
-    },
-  ): Effect.Effect<IndexMaterializePageResult, SemanticSearchError> =>
-    deps.embedder &&
-    deps.store &&
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? materializeIndexPartitionPage({
-          namespace: deps.namespace,
-          executor,
-          embedder: deps.embedder,
-          store: deps.store,
-          chunker: deps.chunker,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          runId: input.runId,
-          partition: input.partition,
-          limit: input.limit,
-          materializeConcurrency: input.materializeConcurrency,
-        })
-      : notConfigured(),
-
-  embedIndexPartitionPage: (
-    executor: Executor,
-    input: {
-      readonly runId: string;
-      readonly partition: number;
-      readonly limit?: number;
-      readonly maxChunks?: number;
-      readonly maxEstimatedInputTokens?: number;
-      readonly maxEstimatedResponseBytes?: number;
-      readonly maxEstimatedTokensPerText?: number;
-    },
-  ): Effect.Effect<IndexEmbedPageResult, SemanticSearchError> =>
-    deps.embedder &&
-    deps.store &&
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? embedIndexPartitionPage({
-          namespace: deps.namespace,
-          executor,
-          embedder: deps.embedder,
-          store: deps.store,
-          chunker: deps.chunker,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          runId: input.runId,
-          partition: input.partition,
-          limit: input.limit,
-          maxChunks: input.maxChunks,
-          maxEstimatedInputTokens: input.maxEstimatedInputTokens,
-          maxEstimatedResponseBytes: input.maxEstimatedResponseBytes,
-          maxEstimatedTokensPerText: input.maxEstimatedTokensPerText,
-        })
-      : notConfigured(),
-
-  completeIndexRun: (
-    executor: Executor,
-    input: { readonly runId: string },
-  ): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
-    deps.embedder &&
-    deps.store &&
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? completeIndexRun(
-          {
+  return {
+    index,
+    reindex: (executor: Executor): Effect.Effect<ToolSearchIndex.Result, SemanticSearchError> =>
+      deps.embedder &&
+      deps.store &&
+      deps.fingerprints &&
+      deps.indexRuns &&
+      deps.indexJobs &&
+      deps.indexChunks &&
+      deps.blobs &&
+      deps.owner
+        ? runToolSearchIndex({
             namespace: deps.namespace,
             executor,
             embedder: deps.embedder,
@@ -342,104 +170,76 @@ const makeSemanticSearchExtension = (deps: {
             blobs: deps.blobs,
             owner: deps.owner,
             lexicalStore: deps.lexicalStore,
-            runId: input.runId,
-          },
-          sweepRemoved({
+            runId: `manual-${Date.now()}`,
+            partitionCount: DEFAULT_IN_PROCESS_PARTITIONS,
+          })
+        : notConfigured(),
+
+    /** Delete index entries for tools that left the catalog. Needs no embedder. */
+    sweep: (
+      executor: Executor,
+    ): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
+      deps.store && deps.fingerprints && deps.owner
+        ? sweepRemoved({
             namespace: deps.namespace,
             executor,
             store: deps.store,
             fingerprints: deps.fingerprints,
             owner: deps.owner,
             lexicalStore: deps.lexicalStore,
-          }),
-        )
-      : notConfigured(),
-
-  indexRunStatus: (input: {
-    readonly runId: string;
-  }): Effect.Effect<IndexStatus, SemanticSearchError> =>
-    deps.fingerprints &&
-    deps.indexRuns &&
-    deps.indexJobs &&
-    deps.indexChunks &&
-    deps.blobs &&
-    deps.owner
-      ? indexRunStatus({
-          namespace: deps.namespace,
-          runs: deps.indexRuns,
-          jobs: deps.indexJobs,
-          chunks: deps.indexChunks,
-          fingerprints: deps.fingerprints,
-          blobs: deps.blobs,
-          owner: deps.owner,
-          runId: input.runId,
-        })
-      : notConfigured(),
-
-  /** Delete index entries for tools that left the catalog. Needs no embedder. */
-  sweep: (
-    executor: Executor,
-  ): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
-    deps.store && deps.fingerprints && deps.owner
-      ? sweepRemoved({
-          namespace: deps.namespace,
-          executor,
-          store: deps.store,
-          fingerprints: deps.fingerprints,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-        })
-      : notConfigured(),
-
-  /** Run a live `tools.search` through the same provider the engine uses, so the
-   *  operator console sees exactly what the agent would. Inert until configured. */
-  search: (
-    executor: Executor,
-    input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
-  ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
-    const namespace = input.namespace ?? deps.namespace;
-    return deps.provider
-      ? deps.provider
-          .searchTools({
-            executor,
-            query: input.query,
-            namespace,
-            limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
-            offset: 0,
           })
-          .pipe(
-            Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
-            Effect.mapError(
-              (cause) =>
-                new SemanticSearchError({ message: "Semantic search query failed.", cause }),
-            ),
-          )
-      : notConfigured();
-  },
+        : notConfigured(),
 
-  /** Index status for the operator console: vector (fingerprint) + lexical counts. */
-  status: (): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
-    Effect.gen(function* () {
-      const indexed = deps.fingerprints
-        ? yield* deps.fingerprints
-            .count()
+    /** Run a live `tools.search` through the same provider the engine uses, so the
+     *  operator console sees exactly what the agent would. Inert until configured. */
+    search: (
+      executor: Executor,
+      input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
+    ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
+      const namespace = input.namespace ?? deps.namespace;
+      return deps.provider
+        ? deps.provider
+            .searchTools({
+              executor,
+              query: input.query,
+              namespace,
+              limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
+              offset: 0,
+            })
             .pipe(
+              Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
               Effect.mapError(
                 (cause) =>
-                  new SemanticSearchError({ message: "Failed to count indexed tools.", cause }),
+                  new SemanticSearchError({ message: "Semantic search query failed.", cause }),
               ),
             )
-        : 0;
-      // A transient lexical-count failure must not mask the (already-fetched)
-      // vector count: degrade `lexical` to null and still return `indexed`.
-      const lexical = deps.lexicalStore
-        ? yield* deps.lexicalStore
-            .count(deps.namespace)
-            .pipe(Effect.catch(() => Effect.succeed(null)))
-        : null;
-      return { namespace: deps.namespace, indexed, lexical };
-    }),
-});
+        : notConfigured();
+    },
+
+    /** Index status for the operator console: vector (fingerprint) + lexical counts. */
+    status: (): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
+      Effect.gen(function* () {
+        const indexed = deps.fingerprints
+          ? yield* deps.fingerprints
+              .count()
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SemanticSearchError({ message: "Failed to count indexed tools.", cause }),
+                ),
+              )
+          : 0;
+        // A transient lexical-count failure must not mask the (already-fetched)
+        // vector count: degrade `lexical` to null and still return `indexed`.
+        const lexical = deps.lexicalStore
+          ? yield* deps.lexicalStore
+              .count(deps.namespace)
+              .pipe(Effect.catch(() => Effect.succeed(null)))
+          : null;
+        return { namespace: deps.namespace, indexed, lexical };
+      }),
+  };
+};
 
 /** The `executor.semanticSearch` surface, derived from its factory. */
 export type SemanticSearchExtension = ReturnType<typeof makeSemanticSearchExtension>;

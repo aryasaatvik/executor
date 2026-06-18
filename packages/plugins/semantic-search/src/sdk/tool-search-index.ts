@@ -5,7 +5,7 @@ import type {
   PluginStorageCollectionFacade,
 } from "@executor-js/sdk/core";
 import { sha256Hex } from "@executor-js/sdk/core";
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 
 import type { Chunker, ToolChunk } from "./chunker";
 import {
@@ -52,80 +52,118 @@ interface IndexDeps extends IndexStores {
   readonly chunker: Chunker;
 }
 
-export interface StartIndexRunInput {
-  readonly runId: string;
-  readonly partitionCount: number;
-  readonly maxTools?: number;
+export declare namespace ToolSearchIndex {
+  export interface CreateInput {
+    readonly runId: string;
+    readonly partitionCount: number;
+    readonly maxTools?: number;
+  }
+
+  export interface CreateResult {
+    readonly runId: string;
+    readonly namespace: string;
+    readonly total: number;
+    readonly partitionCount: number;
+  }
+
+  export interface RefreshInput {
+    readonly runId: string;
+    readonly partition: number;
+    readonly limit?: number;
+    readonly maxTools?: number;
+  }
+
+  export interface RefreshResult {
+    readonly runId: string;
+    readonly partition: number;
+    readonly processed: number;
+    readonly changed: number;
+    readonly skipped: number;
+    readonly paths: readonly string[];
+    readonly hasMore: boolean;
+  }
+
+  export interface ChunkInput {
+    readonly runId: string;
+    readonly paths: readonly string[];
+    readonly limit?: number;
+    readonly concurrency?: number;
+  }
+
+  export interface ChunkResult {
+    readonly runId: string;
+    readonly processed: number;
+    readonly chunks: number;
+    readonly paths: readonly string[];
+  }
+
+  export interface EmbedInput {
+    readonly runId: string;
+    readonly paths: readonly string[];
+    readonly limit?: number;
+    readonly maxChunks?: number;
+    readonly maxEstimatedInputTokens?: number;
+    readonly maxEstimatedResponseBytes?: number;
+    readonly maxEstimatedTokensPerText?: number;
+  }
+
+  export interface EmbedResult {
+    readonly runId: string;
+    readonly processed: number;
+    readonly chunks: number;
+    readonly paths: readonly string[];
+  }
+
+  export interface CompleteInput {
+    readonly runId: string;
+  }
+
+  export interface CompleteResult {
+    readonly runId: string;
+    readonly removed: number;
+  }
+
+  export interface StatusInput {
+    readonly runId: string;
+  }
+
+  export interface Status {
+    readonly runId: string;
+    readonly namespace: string;
+    readonly total: number;
+    readonly pendingRefresh: number;
+    readonly skipped: number;
+    readonly pendingChunk: number;
+    readonly pendingEmbedding: number;
+    readonly indexed: number;
+    readonly failed: number;
+  }
+
+  export interface Result {
+    readonly namespace: string;
+    readonly total: number;
+    readonly indexed: number;
+    readonly skipped: number;
+    readonly removed: number;
+  }
+
+  export interface Service {
+    readonly create: (input: CreateInput) => Effect.Effect<CreateResult, SemanticSearchError>;
+    readonly refresh: (input: RefreshInput) => Effect.Effect<RefreshResult, SemanticSearchError>;
+    readonly chunk: (input: ChunkInput) => Effect.Effect<ChunkResult, SemanticSearchError>;
+    readonly embed: (input: EmbedInput) => Effect.Effect<EmbedResult, SemanticSearchError>;
+    readonly status: (input: StatusInput) => Effect.Effect<Status, SemanticSearchError>;
+    readonly complete: (input: CompleteInput) => Effect.Effect<CompleteResult, SemanticSearchError>;
+  }
 }
 
-export interface StartIndexRunResult {
-  readonly runId: string;
-  readonly namespace: string;
-  readonly total: number;
-  readonly partitionCount: number;
-}
-
-export interface IndexPageInput {
-  readonly runId: string;
-  readonly partition: number;
-  readonly limit?: number;
-  readonly maxTools?: number;
-  readonly materializeConcurrency?: number;
-  readonly maxChunks?: number;
-  readonly maxEstimatedInputTokens?: number;
-  readonly maxEstimatedResponseBytes?: number;
-  readonly maxEstimatedTokensPerText?: number;
-}
-
-export interface IndexDiffPageResult {
-  readonly runId: string;
-  readonly partition: number;
-  readonly processed: number;
-  readonly changed: number;
-  readonly unchanged: number;
-}
-
-export interface IndexMaterializePageResult {
-  readonly runId: string;
-  readonly partition: number;
-  readonly processed: number;
-  readonly chunks: number;
-}
-
-export interface IndexEmbedPageResult {
-  readonly runId: string;
-  readonly partition: number;
-  readonly processed: number;
-  readonly chunks: number;
-}
-
-export interface CompleteIndexRunResult {
-  readonly runId: string;
-  readonly removed: number;
-}
-
-export interface IndexStatus {
-  readonly runId: string;
-  readonly namespace: string;
-  readonly total: number;
-  readonly pendingDiff: number;
-  readonly unchanged: number;
-  readonly pendingMaterialize: number;
-  readonly pendingEmbed: number;
-  readonly committed: number;
-  readonly failed: number;
-}
-
-export interface IndexRunResult {
-  readonly namespace: string;
-  readonly total: number;
-  readonly reembedded: number;
-  readonly unchanged: number;
-  readonly removed: number;
-}
+export class ToolSearchIndex extends Context.Service<
+  ToolSearchIndex,
+  ToolSearchIndex.Service
+>()("@executor-js/semantic-search/ToolSearchIndex") {}
 
 const DEFAULT_PAGE_LIMIT = 25;
-const DEFAULT_MATERIALIZE_CONCURRENCY = 1;
+const DEFAULT_CHUNK_CONCURRENCY = 1;
 const DEFAULT_EMBED_MAX_CHUNKS = 128;
 const DEFAULT_EMBED_MAX_ESTIMATED_INPUT_TOKENS = 64_000;
 const DEFAULT_EMBED_MAX_ESTIMATED_RESPONSE_BYTES = 8 * 1024 * 1024;
@@ -153,30 +191,6 @@ const jobToDescriptor = (job: IndexJob): IndexableToolDescriptor => ({
   description: job.description,
 });
 
-const queryJobs = (
-  deps: IndexCollections,
-  input: {
-    readonly runId: string;
-    readonly partition: number;
-    readonly status: IndexJob["status"];
-    readonly limit?: number;
-  },
-): Effect.Effect<
-  readonly { readonly key: string; readonly data: IndexJob }[],
-  SemanticSearchError
-> =>
-  deps.jobs
-    .query({
-      where: { runId: input.runId, partition: input.partition, status: input.status },
-      orderBy: [{ field: "ordinal", direction: "asc" }],
-      limit: input.limit ?? DEFAULT_PAGE_LIMIT,
-    })
-    .pipe(
-      Effect.mapError(
-        (cause) => new SemanticSearchError({ message: "Failed to query index jobs.", cause }),
-      ),
-    );
-
 const queryChunksForJob = (
   deps: IndexCollections,
   job: IndexJob,
@@ -203,7 +217,7 @@ interface EmbedBudget {
   readonly maxEstimatedTokensPerText: number;
 }
 
-const resolveEmbedBudget = (input: IndexPageInput): EmbedBudget => ({
+const resolveEmbedBudget = (input: ToolSearchIndex.EmbedInput): EmbedBudget => ({
   maxChunks: Math.max(1, Math.floor(input.maxChunks ?? DEFAULT_EMBED_MAX_CHUNKS)),
   maxEstimatedInputTokens: Math.max(
     1,
@@ -345,9 +359,37 @@ const removeChunksForJob = (
     ),
   );
 
-export const startIndexRun = (
-  input: IndexStores & StartIndexRunInput,
-): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
+const getJobsByPaths = (
+  deps: IndexCollections,
+  input: {
+    readonly runId: string;
+    readonly paths: readonly string[];
+    readonly status: IndexJob["status"];
+    readonly limit?: number;
+  },
+): Effect.Effect<
+  readonly { readonly key: string; readonly data: IndexJob }[],
+  SemanticSearchError
+> =>
+  Effect.forEach(
+    input.paths.slice(0, input.limit ?? input.paths.length),
+    (path) =>
+      deps.jobs
+        .getForOwner({ owner: deps.owner, key: jobKey(input.runId, path) })
+        .pipe(Effect.map((entry) => (entry?.data.status === input.status ? entry : null))),
+    { concurrency: INDEX_STORAGE_CONCURRENCY },
+  ).pipe(
+    Effect.map((entries) =>
+      entries.flatMap((entry) => (entry === null ? [] : [entry])),
+    ),
+    Effect.mapError(
+      (cause) => new SemanticSearchError({ message: "Failed to load index jobs.", cause }),
+    ),
+  );
+
+export const create = (
+  input: IndexStores & ToolSearchIndex.CreateInput,
+): Effect.Effect<ToolSearchIndex.CreateResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const partitionCount = Math.max(1, Math.floor(input.partitionCount));
     const descriptors = yield* listToolDescriptors(input.executor, { maxTools: input.maxTools });
@@ -381,9 +423,9 @@ export const startIndexRun = (
     };
   });
 
-export const seedIndexPartitionPage = (
-  input: IndexStores & IndexPageInput,
-): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
+export const refresh = (
+  input: IndexStores & ToolSearchIndex.RefreshInput,
+): Effect.Effect<ToolSearchIndex.RefreshResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
@@ -407,7 +449,7 @@ export const seedIndexPartitionPage = (
       .pipe(
         Effect.mapError(
           (cause) =>
-            new SemanticSearchError({ message: "Failed to count seeded index jobs.", cause }),
+            new SemanticSearchError({ message: "Failed to count refreshed index jobs.", cause }),
         ),
       );
     const selected = partitionDescriptors.slice(
@@ -420,67 +462,15 @@ export const seedIndexPartitionPage = (
         partition: input.partition,
         processed: 0,
         changed: 0,
-        unchanged: 0,
-      };
-    }
-
-    const createdAt = nowIso();
-    yield* Effect.forEach(
-      selected,
-      ({ tool, ordinal, path }) => {
-        const job: IndexJob = {
-          runId: input.runId,
-          namespace: input.namespace,
-          partition: input.partition,
-          ordinal,
-          address: String(tool.address),
-          path,
-          name: String(tool.name),
-          integration: String(tool.integration),
-          description: String(tool.description ?? ""),
-          status: "pendingDiff",
-          oldChunkIds: [],
-          chunkIds: [],
-          createdAt,
-          updatedAt: createdAt,
-        };
-        return putJob(input, job);
-      },
-      { concurrency: 1, discard: true },
-    );
-
-    return {
-      runId: input.runId,
-      partition: input.partition,
-      processed: selected.length,
-      changed: 0,
-      unchanged: 0,
-    };
-  });
-
-export const diffIndexPartitionPage = (
-  input: IndexStores & IndexPageInput,
-): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
-  Effect.gen(function* () {
-    const jobs = yield* queryJobs(input, {
-      runId: input.runId,
-      partition: input.partition,
-      status: "pendingDiff",
-      limit: input.limit,
-    });
-    if (jobs.length === 0) {
-      return {
-        runId: input.runId,
-        partition: input.partition,
-        processed: 0,
-        changed: 0,
-        unchanged: 0,
+        skipped: 0,
+        paths: [],
+        hasMore: false,
       };
     }
 
     const fingerprintInputs = yield* collectFingerprintInputs(
       input.executor,
-      jobs.map((entry) => jobToDescriptor(entry.data)),
+      selected.map(({ tool }) => tool),
     );
     const stored = yield* loadFingerprints(
       input,
@@ -488,37 +478,60 @@ export const diffIndexPartitionPage = (
     );
 
     let changed = 0;
-    let unchanged = 0;
-    const byPath = new Map(jobs.map((entry) => [entry.data.path, entry.data]));
+    let skipped = 0;
+    const changedPaths: string[] = [];
+    const selectedByPath = new Map(selected.map((entry) => [entry.path, entry]));
     const updatedAt = nowIso();
 
     yield* Effect.forEach(
       fingerprintInputs,
       ({ input: fp }) => {
-        const job = byPath.get(fp.path);
-        if (job === undefined) return Effect.void;
+        const selectedEntry = selectedByPath.get(fp.path);
+        if (selectedEntry === undefined) return Effect.void;
         const fingerprint = fingerprintTool(fp);
         const storedRow = stored.get(fp.path);
+        const { tool, ordinal, path } = selectedEntry;
         const next: IndexJob =
           storedRow !== undefined && storedRow.fingerprint === fingerprint
             ? {
-                ...job,
-                status: "unchanged",
+                runId: input.runId,
+                namespace: input.namespace,
+                partition: input.partition,
+                ordinal,
+                address: String(tool.address),
+                path,
+                name: String(tool.name),
+                integration: String(tool.integration),
+                description: String(tool.description ?? ""),
+                status: "skipped",
                 fingerprint,
                 oldChunkIds: storedRow.chunkIds,
                 chunkIds: storedRow.chunkIds,
                 updatedAt,
+                createdAt: updatedAt,
               }
             : {
-                ...job,
-                status: "pendingMaterialize",
+                runId: input.runId,
+                namespace: input.namespace,
+                partition: input.partition,
+                ordinal,
+                address: String(tool.address),
+                path,
+                name: String(tool.name),
+                integration: String(tool.integration),
+                description: String(tool.description ?? ""),
+                status: "pendingChunk",
                 fingerprint,
                 oldChunkIds: storedRow?.chunkIds ?? [],
                 chunkIds: [],
                 updatedAt,
+                createdAt: updatedAt,
               };
-        if (next.status === "unchanged") unchanged++;
-        else changed++;
+        if (next.status === "skipped") skipped++;
+        else {
+          changed++;
+          changedPaths.push(next.path);
+        }
         return putJob(input, next);
       },
       { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
@@ -527,31 +540,34 @@ export const diffIndexPartitionPage = (
     return {
       runId: input.runId,
       partition: input.partition,
-      processed: jobs.length,
+      processed: selected.length,
       changed,
-      unchanged,
+      skipped,
+      paths: changedPaths,
+      hasMore: existing + selected.length < partitionDescriptors.length,
     };
   });
 
-export const materializeIndexPartitionPage = (
-  input: IndexDeps & IndexPageInput,
-): Effect.Effect<IndexMaterializePageResult, SemanticSearchError> =>
+export const chunk = (
+  input: IndexDeps & ToolSearchIndex.ChunkInput,
+): Effect.Effect<ToolSearchIndex.ChunkResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const jobs = yield* queryJobs(input, {
+    const jobs = yield* getJobsByPaths(input, {
       runId: input.runId,
-      partition: input.partition,
-      status: "pendingMaterialize",
+      status: "pendingChunk",
+      paths: input.paths,
       limit: input.limit,
     });
     if (jobs.length === 0) {
-      return { runId: input.runId, partition: input.partition, processed: 0, chunks: 0 };
+      return { runId: input.runId, processed: 0, chunks: 0, paths: [] };
     }
 
     const updatedAt = nowIso();
-    const materializeConcurrency = Math.max(
+    const chunkConcurrency = Math.max(
       1,
-      Math.floor(input.materializeConcurrency ?? DEFAULT_MATERIALIZE_CONCURRENCY),
+      Math.floor(input.concurrency ?? DEFAULT_CHUNK_CONCURRENCY),
     );
+    const paths: string[] = [];
 
     const chunkCounts = yield* Effect.forEach(
       jobs,
@@ -569,22 +585,23 @@ export const materializeIndexPartitionPage = (
           });
           yield* putJob(input, {
             ...job,
-            status: "pendingEmbed",
+            status: "pendingEmbedding",
             chunkIds: chunks.map((chunk) => chunk.id),
             lexicalTextKey,
             updatedAt,
           });
+          paths.push(job.path);
           return chunks.length;
         }),
-      { concurrency: materializeConcurrency },
+      { concurrency: chunkConcurrency },
     );
     const chunkCount = chunkCounts.reduce((sum, count) => sum + count, 0);
 
     return {
       runId: input.runId,
-      partition: input.partition,
       processed: jobs.length,
       chunks: chunkCount,
+      paths,
     };
   });
 
@@ -613,7 +630,7 @@ const putChunk = (
         name: chunk.name,
         integration: chunk.integration,
         description: job.description,
-        status: "pendingEmbed",
+        status: "pendingEmbedding",
         createdAt: timestamp,
         updatedAt: timestamp,
       },
@@ -626,19 +643,19 @@ const putChunk = (
     Effect.asVoid,
   );
 
-export const embedIndexPartitionPage = (
-  input: IndexDeps & IndexPageInput,
-): Effect.Effect<IndexEmbedPageResult, SemanticSearchError> =>
+export const embed = (
+  input: IndexDeps & ToolSearchIndex.EmbedInput,
+): Effect.Effect<ToolSearchIndex.EmbedResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const budget = resolveEmbedBudget(input);
-    const jobs = yield* queryJobs(input, {
+    const jobs = yield* getJobsByPaths(input, {
       runId: input.runId,
-      partition: input.partition,
-      status: "pendingEmbed",
+      status: "pendingEmbedding",
+      paths: input.paths,
       limit: input.limit,
     });
     if (jobs.length === 0) {
-      return { runId: input.runId, partition: input.partition, processed: 0, chunks: 0 };
+      return { runId: input.runId, processed: 0, chunks: 0, paths: [] };
     }
 
     const chunkEntriesByPath = new Map<
@@ -658,7 +675,7 @@ export const embedIndexPartitionPage = (
     for (const { data: job } of jobs) {
       if (budgetFull) break;
       const pending = (chunkEntriesByPath.get(job.path) ?? []).filter(
-        (entry) => entry.data.status === "pendingEmbed",
+        (entry) => entry.data.status === "pendingEmbedding",
       );
       for (const entry of pending) {
         const inputTokens = entry.data.embeddingTextTokens;
@@ -694,15 +711,15 @@ export const embedIndexPartitionPage = (
       );
       return {
         runId: input.runId,
-        partition: input.partition,
         processed: finalized,
         chunks: 0,
+        paths: jobs.map((entry) => entry.data.path),
       };
     }
 
     const updatedAt = nowIso();
     const affectedPaths = new Set<string>();
-    let committedChunks = 0;
+    let indexedChunks = 0;
 
     for (let start = 0; start < selectedChunks.length; start += DEFAULT_EMBED_COMMIT_GROUP_SIZE) {
       const group = selectedChunks.slice(start, start + DEFAULT_EMBED_COMMIT_GROUP_SIZE);
@@ -719,7 +736,7 @@ export const embedIndexPartitionPage = (
         const vec = vectors[i];
         if (chunk === undefined || vec === undefined) {
           return yield* new SemanticSearchError({
-            message: `embedIndexPartitionPage: embedding vector missing at group offset ${i}; expected ${group.length} vectors and received ${vectors.length}.`,
+            message: `ToolSearchIndex.embed: embedding vector missing at group offset ${i}; expected ${group.length} vectors and received ${vectors.length}.`,
           });
         }
         records.push({
@@ -745,13 +762,13 @@ export const embedIndexPartitionPage = (
             .put({
               owner: input.owner,
               key: entry.key,
-              data: { ...entry.data, status: "committed", updatedAt },
+              data: { ...entry.data, status: "indexed", updatedAt },
             })
             .pipe(
               Effect.mapError(
                 (cause) =>
                   new SemanticSearchError({
-                    message: `Failed to mark chunk "${entry.data.chunkId}" committed.`,
+                    message: `Failed to mark chunk "${entry.data.chunkId}" indexed.`,
                     cause,
                   }),
               ),
@@ -759,7 +776,7 @@ export const embedIndexPartitionPage = (
         { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
       );
 
-      committedChunks += records.length;
+      indexedChunks += records.length;
       for (const entry of group) {
         affectedPaths.add(entry.data.path);
       }
@@ -768,7 +785,7 @@ export const embedIndexPartitionPage = (
     const finalizationCandidates = jobs.filter(({ data: job }) => {
       if (affectedPaths.has(job.path)) return true;
       return !(chunkEntriesByPath.get(job.path) ?? []).some(
-        (entry) => entry.data.status === "pendingEmbed",
+        (entry) => entry.data.status === "pendingEmbedding",
       );
     });
     const finalized = yield* finalizeCompletedEmbedJobs(
@@ -780,9 +797,9 @@ export const embedIndexPartitionPage = (
 
     return {
       runId: input.runId,
-      partition: input.partition,
       processed: Math.max(affectedPaths.size, finalized),
-      chunks: committedChunks,
+      chunks: indexedChunks,
+      paths: [...affectedPaths],
     };
   });
 
@@ -798,7 +815,7 @@ const finalizeCompletedEmbedJobs = (
     let finalized = 0;
     for (const { data: job } of jobs) {
       const chunkEntries = preloadedChunks?.get(job.path) ?? (yield* queryChunksForJob(input, job));
-      if (chunkEntries.some((entry) => entry.data.status !== "committed")) {
+      if (chunkEntries.some((entry) => entry.data.status !== "indexed")) {
         continue;
       }
 
@@ -851,15 +868,15 @@ const finalizeCompletedEmbedJobs = (
         yield* input.lexicalStore.upsert([lexicalDoc]);
       }
 
-      yield* putJob(input, { ...job, status: "committed", updatedAt });
+      yield* putJob(input, { ...job, status: "indexed", updatedAt });
       finalized++;
     }
     return finalized;
   });
 
-export const indexRunStatus = (
+export const status = (
   input: IndexCollections & { readonly namespace: string; readonly runId: string },
-): Effect.Effect<IndexStatus, SemanticSearchError> =>
+): Effect.Effect<ToolSearchIndex.Status, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
@@ -877,29 +894,31 @@ export const indexRunStatus = (
               new SemanticSearchError({ message: `Failed to count ${status} jobs.`, cause }),
           ),
         );
-    const [pendingDiff, unchanged, pendingMaterialize, pendingEmbed, committed, failed] =
+    const [storedPendingRefresh, skipped, pendingChunk, pendingEmbedding, indexed, failed] =
       yield* Effect.all(
         [
-          count("pendingDiff"),
-          count("unchanged"),
-          count("pendingMaterialize"),
-          count("pendingEmbed"),
-          count("committed"),
+          count("pendingRefresh"),
+          count("skipped"),
+          count("pendingChunk"),
+          count("pendingEmbedding"),
+          count("indexed"),
           count("failed"),
         ],
         { concurrency: INDEX_STORAGE_CONCURRENCY },
       );
+    const observed =
+      storedPendingRefresh + skipped + pendingChunk + pendingEmbedding + indexed + failed;
+    const total = run?.data.total ?? observed;
+    const pendingRefresh = Math.max(0, total - observed + storedPendingRefresh);
     return {
       runId: input.runId,
       namespace: run?.data.namespace ?? input.namespace,
-      total:
-        run?.data.total ??
-        pendingDiff + unchanged + pendingMaterialize + pendingEmbed + committed + failed,
-      pendingDiff,
-      unchanged,
-      pendingMaterialize,
-      pendingEmbed,
-      committed,
+      total,
+      pendingRefresh,
+      skipped,
+      pendingChunk,
+      pendingEmbedding,
+      indexed,
       failed,
     };
   });
@@ -954,12 +973,18 @@ export const sweepRemoved = (input: {
     return { namespace: input.namespace, removed: removed.length };
   });
 
-export const completeIndexRun = (
-  input: IndexDeps & { readonly runId: string },
-  sweep: Effect.Effect<{ readonly removed: number }, SemanticSearchError>,
-): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
+export const complete = (
+  input: IndexDeps & ToolSearchIndex.CompleteInput,
+): Effect.Effect<ToolSearchIndex.CompleteResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const result = yield* sweep;
+    const result = yield* sweepRemoved({
+      namespace: input.namespace,
+      executor: input.executor,
+      store: input.store,
+      fingerprints: input.fingerprints,
+      owner: input.owner,
+      lexicalStore: input.lexicalStore,
+    });
     const existing = yield* input.runs.getForOwner({ owner: input.owner, key: input.runId }).pipe(
       Effect.mapError(
         (cause) =>
@@ -987,73 +1012,58 @@ export const completeIndexRun = (
     return { runId: input.runId, removed: result.removed };
   });
 
-export const runIndexRun = (
+export const run = (
   input: IndexDeps & {
     readonly runId: string;
     readonly partitionCount: number;
     readonly pageLimit?: number;
     readonly maxTools?: number;
   },
-): Effect.Effect<IndexRunResult, SemanticSearchError> =>
+): Effect.Effect<ToolSearchIndex.Result, SemanticSearchError> =>
   Effect.gen(function* () {
-    const started = yield* startIndexRun(input);
+    const started = yield* create(input);
     for (let partition = 0; partition < started.partitionCount; partition++) {
       for (;;) {
-        const page = yield* seedIndexPartitionPage({
+        const page = yield* refresh({
           ...input,
           partition,
           limit: input.pageLimit,
         });
         if (page.processed === 0) break;
+        if (page.paths.length > 0) {
+          yield* chunk({
+            ...input,
+            paths: page.paths,
+            limit: input.pageLimit,
+          });
+          for (;;) {
+            const embedded = yield* embed({
+              ...input,
+              paths: page.paths,
+              limit: input.pageLimit,
+            });
+            if (embedded.processed === 0 || embedded.chunks === 0) break;
+          }
+        }
+        if (!page.hasMore) break;
       }
     }
-    for (let partition = 0; partition < started.partitionCount; partition++) {
-      for (;;) {
-        const page = yield* diffIndexPartitionPage({
-          ...input,
-          partition,
-          limit: input.pageLimit,
-        });
-        if (page.processed === 0) break;
-      }
-    }
-    for (let partition = 0; partition < started.partitionCount; partition++) {
-      for (;;) {
-        const page = yield* materializeIndexPartitionPage({
-          ...input,
-          partition,
-          limit: input.pageLimit,
-        });
-        if (page.processed === 0) break;
-      }
-    }
-    for (let partition = 0; partition < started.partitionCount; partition++) {
-      for (;;) {
-        const page = yield* embedIndexPartitionPage({
-          ...input,
-          partition,
-          limit: input.pageLimit,
-        });
-        if (page.processed === 0) break;
-      }
-    }
-    const completed = yield* completeIndexRun(
-      input,
-      sweepRemoved({
-        namespace: input.namespace,
-        executor: input.executor,
-        store: input.store,
-        fingerprints: input.fingerprints,
-        owner: input.owner,
-        lexicalStore: input.lexicalStore,
-      }),
-    );
-    const status = yield* indexRunStatus(input);
+    const completed = yield* complete(input);
+    const current = yield* status(input);
     return {
       namespace: input.namespace,
-      total: status.total,
-      reembedded: status.committed,
-      unchanged: status.unchanged,
+      total: current.total,
+      indexed: current.indexed,
+      skipped: current.skipped,
       removed: completed.removed,
     };
   });
+
+export const make = (input: IndexDeps): ToolSearchIndex.Service => ({
+  create: (options) => create({ ...input, ...options }),
+  refresh: (options) => refresh({ ...input, ...options }),
+  chunk: (options) => chunk({ ...input, ...options }),
+  embed: (options) => embed({ ...input, ...options }),
+  status: (options) => status({ ...input, ...options }),
+  complete: (options) => complete({ ...input, ...options }),
+});
