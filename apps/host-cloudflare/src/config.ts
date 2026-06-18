@@ -1,4 +1,9 @@
-import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  D1Database,
+  DurableObjectNamespace,
+  KVNamespace,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 import type { VectorizeIndex } from "@executor-js/plugin-semantic-search";
 
@@ -20,6 +25,8 @@ export interface CloudflareEnv {
   readonly DB: D1Database;
   /** R2 bucket binding — holds values too large for a D1 row (~1-2MB cap). */
   readonly BLOBS?: R2Bucket;
+  /** KV namespace binding — durable cache for derived executor artifacts. */
+  readonly CACHE?: KVNamespace;
   /** Workers Analytics Engine binding — opt-in sink for execution metrics. When
    *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
    *  finished execution/tool call writes a data point; absent, metrics are off. */

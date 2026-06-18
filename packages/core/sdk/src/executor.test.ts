@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Data, Effect, Predicate, Result } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 
 import { ToolNotFoundError } from "./errors";
 import {
@@ -17,6 +18,7 @@ import type { CredentialProvider } from "./provider";
 import { IntegrationDetectionResult } from "./types";
 import { makeTestExecutor } from "./testing";
 import { serveOAuthTestServer } from "./testing/oauth-test-server";
+import { toolTypeScriptPreviewCacheKey } from "./tool-typescript-preview-cache";
 
 // removed: v1 secret browser-handoff, source.configure, case-insensitive tool-id
 // resolution, secrets/sources/scope-stack. The integration coverage below is
@@ -83,7 +85,10 @@ const demoPlugin = definePlugin(() => ({
         Cat: { type: "object", properties: { lives: { type: "number" } } },
         Collar: { type: "object", properties: { id: { type: "string" } } },
         Owner: { type: "object", properties: { pet: { $ref: "#/$defs/Pet" } } },
-        Unused: { type: "object", properties: { value: { type: "string" } } },
+        // Regression fixture: unused provider definitions can be malformed.
+        // Tool previews must compile only the definitions reachable from the
+        // requested tool's schema roots.
+        Unused: { type: "object", properties: { broken: { $ref: "#/$defs/Missing" } } },
       },
     }),
   invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
@@ -383,8 +388,25 @@ describe("createExecutor", () => {
 
   it.effect("tools.schema returns roots with shared reachable definitions", () =>
     Effect.gen(function* () {
+      const cacheRows = new Map<string, string>();
+      const keyValueStore = KeyValueStore.makeStringOnly({
+        get: (key) => Effect.sync(() => cacheRows.get(key)),
+        set: (key, value) =>
+          Effect.sync(() => {
+            cacheRows.set(key, value);
+          }),
+        remove: (key) =>
+          Effect.sync(() => {
+            cacheRows.delete(key);
+          }),
+        clear: Effect.sync(() => {
+          cacheRows.clear();
+        }),
+        size: Effect.sync(() => cacheRows.size),
+      });
       const executor = yield* makeTestExecutor({
         plugins: [demoPlugin] as const,
+        keyValueStore,
       });
       yield* executor.demo.seed();
       yield* executor.connections.create({
@@ -403,6 +425,16 @@ describe("createExecutor", () => {
       const defs = schema?.schemaDefinitions ?? {};
       // Reachable defs from inspect's input/output are attached; Unused is not.
       expect(Object.keys(defs).sort()).toEqual(["Cat", "Collar", "Dog", "Owner", "Pet"]);
+      expect(schema?.inputTypeScript).not.toBe("unknown");
+      expect(schema?.outputTypeScript).not.toBe("unknown");
+
+      const cacheKey = yield* toolTypeScriptPreviewCacheKey({
+        inputSchema: schema?.inputSchema,
+        outputSchema: schema?.outputSchema,
+        definitions: defs,
+      });
+      const cached = yield* keyValueStore.get(cacheKey);
+      expect(cached).toContain("preview");
     }),
   );
 
