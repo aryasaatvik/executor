@@ -79,6 +79,8 @@ export interface BrowserApprovalStore {
 }
 
 const SESSION_META_KEY = "session-meta";
+const LAST_ACTIVITY_KEY = "last-activity-ms";
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
 
 const resumeApprovalResult = (
@@ -120,6 +122,8 @@ export abstract class McpAgentSessionDOBase<
   private engine: ExecutionEngine<Cause.YieldableError> | null = null;
   private dbHandle: TDbHandle | null = null;
   private sessionMeta: SessionMeta | null = null;
+  private initialized = false;
+  private lastActivityMs = 0;
   private approvalResponses = new Map<string, ResumeResponse>();
   private approvalWaiters = new Map<string, Deferred.Deferred<ResumeResponse>>();
 
@@ -176,6 +180,21 @@ export abstract class McpAgentSessionDOBase<
     await this.ctx.storage.put(SESSION_META_KEY, sessionMeta);
   }
 
+  private async markActivity(now = Date.now()): Promise<void> {
+    this.lastActivityMs = now;
+    await Promise.all([
+      this.ctx.storage.put(LAST_ACTIVITY_KEY, now),
+      this.ctx.storage.setAlarm(now + SESSION_TIMEOUT_MS),
+    ]);
+  }
+
+  private async loadLastActivity(): Promise<number> {
+    if (this.lastActivityMs > 0) return this.lastActivityMs;
+    const stored = await this.ctx.storage.get<number>(LAST_ACTIVITY_KEY);
+    this.lastActivityMs = stored ?? 0;
+    return this.lastActivityMs;
+  }
+
   private resolveAndStoreSessionMeta(token: McpSessionInit) {
     const self = this;
     return Effect.gen(function* () {
@@ -208,7 +227,54 @@ export abstract class McpAgentSessionDOBase<
     return effect.pipe(Effect.ensuring(Effect.promise(() => self.flushTelemetry())));
   }
 
+  private buildRuntime(sessionMeta: SessionMeta, dbHandle: TDbHandle) {
+    const built = this.buildMcpServer(sessionMeta, dbHandle);
+    return sessionMeta.webOrigin
+      ? built.pipe(Effect.provideService(RequestWebOrigin, { origin: sessionMeta.webOrigin }))
+      : built;
+  }
+
+  private closeRuntime(): Effect.Effect<void> {
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.server) {
+        const server = self.server;
+        yield* Effect.promise(() => server.close()).pipe(Effect.ignore);
+      }
+      self.engine = null;
+      if (self.dbHandle) {
+        const dbHandle = self.dbHandle;
+        self.dbHandle = null;
+        yield* Effect.promise(() => Promise.resolve(dbHandle.end())).pipe(Effect.ignore);
+      }
+      self.initialized = false;
+    });
+  }
+
+  private ensureRuntimeForApproval(): Effect.Effect<boolean> {
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.initialized && self.engine) return true;
+
+      const sessionMeta = yield* self.loadSessionMeta();
+      if (!sessionMeta) return false;
+
+      yield* self.closeRuntime();
+      const dbHandle = yield* self.openSessionDbHandle();
+      const { mcpServer, engine } = yield* self.buildRuntime(sessionMeta, dbHandle);
+      self.dbHandle = dbHandle;
+      self.server = mcpServer;
+      self.engine = engine;
+      self.initialized = true;
+      yield* Effect.promise(() => self.markActivity()).pipe(
+        Effect.withSpan("McpSessionDO.markActivity"),
+      );
+      return true;
+    }).pipe(Effect.withSpan("McpSessionDO.ensure_runtime_for_approval"));
+  }
+
   async init(): Promise<void> {
+    if (this.initialized) return;
     const props = isSessionProps(this.props) ? this.props : null;
     if (!props) {
       // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: McpAgent.init is a Promise-only framework hook and props are required before any Effect runtime exists.
@@ -218,13 +284,14 @@ export abstract class McpAgentSessionDOBase<
     const program = Effect.gen(function* () {
       const sessionMeta = yield* self.resolveAndStoreSessionMeta(props.session);
       const dbHandle = yield* self.openSessionDbHandle();
-      const built = self.buildMcpServer(sessionMeta, dbHandle);
-      const { mcpServer, engine } = yield* sessionMeta.webOrigin
-        ? built.pipe(Effect.provideService(RequestWebOrigin, { origin: sessionMeta.webOrigin }))
-        : built;
+      const { mcpServer, engine } = yield* self.buildRuntime(sessionMeta, dbHandle);
       self.dbHandle = dbHandle;
       self.server = mcpServer;
       self.engine = engine;
+      self.initialized = true;
+      yield* Effect.promise(() => self.markActivity()).pipe(
+        Effect.withSpan("McpSessionDO.markActivity"),
+      );
     }).pipe(
       Effect.tapCause((cause) =>
         Effect.gen(function* () {
@@ -263,6 +330,9 @@ export abstract class McpAgentSessionDOBase<
       Effect.gen(function* () {
         const sessionMeta = yield* self.loadSessionMeta();
         if (!sessionMeta) return "not_found" as const;
+        yield* Effect.promise(() => self.markActivity()).pipe(
+          Effect.withSpan("McpSessionDO.markActivity"),
+        );
         return identity.accountId === sessionMeta.userId &&
           identity.organizationId === sessionMeta.organizationId
           ? ("ok" as const)
@@ -285,7 +355,9 @@ export abstract class McpAgentSessionDOBase<
       Effect.gen(function* () {
         const owner = yield* self.validateApprovalIdentity(identity);
         if (owner !== "ok") return { status: owner } as const;
-        if (!self.engine) return { status: "not_found" } as const;
+
+        const restored = yield* self.ensureRuntimeForApproval();
+        if (!restored || !self.engine) return { status: "not_found" } as const;
 
         const paused = yield* self.engine.getPausedExecution(executionId);
         if (!paused) return { status: "not_found" } as const;
@@ -319,7 +391,9 @@ export abstract class McpAgentSessionDOBase<
       Effect.gen(function* () {
         const owner = yield* self.validateApprovalIdentity(identity);
         if (owner !== "ok") return { status: owner } as const;
-        if (!self.engine) return { status: "not_found" } as const;
+
+        const restored = yield* self.ensureRuntimeForApproval();
+        if (!restored || !self.engine) return { status: "not_found" } as const;
 
         const paused = yield* self.engine.getPausedExecution(executionId);
         if (!paused) return { status: "not_found" } as const;
@@ -346,6 +420,15 @@ export abstract class McpAgentSessionDOBase<
   override async destroy(): Promise<void> {
     await this.cleanup();
     await super.destroy();
+  }
+
+  override async alarm(): Promise<void> {
+    const lastActivityMs = await this.loadLastActivity();
+    if (lastActivityMs > 0 && Date.now() - lastActivityMs >= SESSION_TIMEOUT_MS) {
+      await this.destroy();
+      return;
+    }
+    await super.alarm();
   }
 
   private validateApprovalIdentity(
@@ -401,16 +484,6 @@ export abstract class McpAgentSessionDOBase<
   }
 
   private async cleanup(): Promise<void> {
-    if (this.server) {
-      await Effect.runPromise(Effect.ignore(Effect.tryPromise(() => this.server.close())));
-    }
-    this.engine = null;
-    if (this.dbHandle) {
-      const dbHandle = this.dbHandle;
-      this.dbHandle = null;
-      await Effect.runPromise(
-        Effect.ignore(Effect.tryPromise(() => Promise.resolve(dbHandle.end()))),
-      );
-    }
+    await Effect.runPromise(this.closeRuntime());
   }
 }
