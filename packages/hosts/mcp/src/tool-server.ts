@@ -629,9 +629,9 @@ export const createExecutorMcpServer = <E extends Cause.YieldableError>(
     );
 
     yield* Effect.sync(() => {
-      console.error(
-        "[executor] MCP session mode",
+      console.info(
         JSON.stringify({
+          event: "mcp_session_mode",
           ...capabilitySnapshot(server),
           elicitationMode: elicitationMode.mode,
           resumeEnabled: elicitationMode.mode !== "native",
