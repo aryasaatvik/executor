@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Option, Schema } from "effect";
 import {
   ApiKeyAuthMethod,
   ApiKeyAuthTemplate,
@@ -21,14 +21,11 @@ import {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Transport / remote transport
+// Transport
 // ---------------------------------------------------------------------------
 
-export const McpRemoteTransport = Schema.Literals(["streamable-http", "sse", "auto"]);
-export type McpRemoteTransport = typeof McpRemoteTransport.Type;
-
 /** All transport types (used in the connector layer) */
-export const McpTransport = Schema.Literals(["streamable-http", "sse", "stdio", "auto"]);
+export const McpTransport = Schema.Literals(["streamable-http", "stdio"]);
 export type McpTransport = typeof McpTransport.Type;
 
 // ---------------------------------------------------------------------------
@@ -159,11 +156,6 @@ export const McpRemoteIntegrationConfig = Schema.Struct({
   transport: Schema.Literal("remote"),
   /** The MCP server endpoint URL */
   endpoint: Schema.String,
-  /** Transport preference for this remote server */
-  remoteTransport: McpRemoteTransport.pipe(
-    Schema.optionalKey,
-    Schema.withConstructorDefault(Effect.succeed("auto" as const)),
-  ),
   /** Static query params appended to the endpoint URL (non-credential) */
   queryParams: Schema.optional(StringMap),
   /** Static headers sent on every request (non-credential) */

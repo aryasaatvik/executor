@@ -32,7 +32,6 @@ const AddRemoteServerPayload = Schema.Struct({
   transport: Schema.optional(Schema.Literal("remote")),
   name: Schema.String,
   endpoint: Schema.String,
-  remoteTransport: Schema.optional(Schema.Literals(["streamable-http", "sse", "auto"])),
   slug: Schema.optional(Schema.String),
   queryParams: Schema.optional(StringMap),
   headers: Schema.optional(StringMap),

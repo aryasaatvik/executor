@@ -46,7 +46,6 @@ import { probeMcpEndpointShape, type McpShapeProbeResult } from "./probe-shape";
 import {
   McpAuthMethodInput,
   McpAuthShorthand,
-  McpRemoteTransport,
   type McpAuthMethod,
   type McpToolAnnotations,
   expandMcpAuthMethodInputs,
@@ -146,7 +145,6 @@ const McpRemoteServerInputSchema = Schema.Struct({
   transport: Schema.optional(Schema.Literal("remote")),
   name: Schema.String,
   endpoint: Schema.String,
-  remoteTransport: Schema.optional(McpRemoteTransport),
   headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   queryParams: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   slug: Schema.optional(Schema.String),
@@ -270,7 +268,6 @@ const toIntegrationConfig = (input: McpServerInput): McpIntegrationConfigType =>
   return {
     transport: "remote",
     endpoint: input.endpoint,
-    remoteTransport: input.remoteTransport ?? "auto",
     queryParams: input.queryParams,
     headers: input.headers,
     authenticationTemplate: input.authenticationTemplate
@@ -480,7 +477,6 @@ const buildConnectorInput = (
   return Effect.succeed({
     transport: "remote" as const,
     endpoint: config.endpoint,
-    remoteTransport: config.remoteTransport ?? "auto",
     queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
     headers: Object.keys(headers).length > 0 ? headers : undefined,
     authProvider,
@@ -914,7 +910,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
         const parsed = parseMcpIntegrationConfig(credential.config);
         if (!parsed) {
           return yield* new McpConnectionError({
-            transport: "auto",
+            transport: "streamable-http",
             message: `MCP integration "${toolRow.integration}" has no usable config`,
           });
         }
@@ -927,8 +923,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           });
         }
 
-        const transport: string =
-          parsed.transport === "stdio" ? "stdio" : (parsed.remoteTransport ?? "auto");
+        const transport: string = parsed.transport === "stdio" ? "stdio" : "streamable-http";
 
         // An apikey method with unresolved inputs fails the invocation
         // explicitly instead of dialing unauthenticated.
