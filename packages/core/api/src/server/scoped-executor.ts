@@ -32,6 +32,7 @@
 // ---------------------------------------------------------------------------
 
 import { Context, Effect, Option } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 
 import type { McpResource } from "@executor-js/host-mcp";
 import {
@@ -267,9 +268,13 @@ export const makeScopedExecutor = <
   },
 ): Effect.Effect<Executor<TPlugins>, StorageFailure, DbProvider | PluginsProvider | HostConfig> =>
   Effect.gen(function* () {
-    const { db, blobs } = yield* DbProvider.asEffect();
-    const { plugins: pluginsFactory } = yield* PluginsProvider.asEffect();
-    const config = yield* HostConfig.asEffect();
+    const { db, blobs } = yield* DbProvider.asEffect().pipe(
+      Effect.withSpan("executor.stack.db_provider"),
+    );
+    const { plugins: pluginsFactory } = yield* PluginsProvider.asEffect().pipe(
+      Effect.withSpan("executor.stack.plugins_provider"),
+    );
+    const config = yield* HostConfig.asEffect().pipe(Effect.withSpan("executor.stack.host_config"));
     const background = yield* Effect.serviceOption(RequestBackgroundTasks);
     const waitUntil = Option.match(background, {
       onNone: () => config.waitUntil,
@@ -278,6 +283,7 @@ export const makeScopedExecutor = <
         config.waitUntil?.(released);
       },
     });
+    const keyValueStore = yield* Effect.serviceOption(KeyValueStore.KeyValueStore);
     // Explicit config wins; otherwise fall back to the request origin if a host
     // provided one (HTTP middleware / MCP session DO). Stays `undefined` for
     // non-request callers — `coreTools.webBaseUrl` is optional and only the
@@ -329,6 +335,10 @@ export const makeScopedExecutor = <
       subject: Subject.make(accountId),
       db,
       blobs,
+      ...Option.match(keyValueStore, {
+        onNone: () => ({}),
+        onSome: (store) => ({ keyValueStore: store }),
+      }),
       plugins,
       httpClientLayer,
       fetch: hostedFetch,

@@ -1,4 +1,9 @@
-import type { D1Database, DurableObjectNamespace, R2Bucket } from "@cloudflare/workers-types";
+import type {
+  D1Database,
+  DurableObjectNamespace,
+  KVNamespace,
+  R2Bucket,
+} from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 import type { VectorizeIndex } from "@executor-js/plugin-semantic-search";
 
@@ -27,6 +32,8 @@ export interface CloudflareEnv {
    *  DO fetches the built MCP-Apps shell document through it — a deployed
    *  Worker has no filesystem to read the shell from. */
   readonly ASSETS: { readonly fetch: (request: Request) => Promise<Response> };
+  /** KV namespace binding — durable cache for derived executor artifacts. */
+  readonly CACHE?: KVNamespace;
   /** Workers Analytics Engine binding — opt-in sink for execution metrics. When
    *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
    *  finished execution/tool call writes a data point; absent, metrics are off. */
@@ -96,7 +103,14 @@ export interface CloudflareConfig {
 
 type CloudflareConfigEnv = Omit<
   CloudflareEnv,
-  "DB" | "BLOBS" | "ASSETS" | "ANALYTICS" | "VECTORIZE" | "MCP_SESSION" | "MCP_EXECUTION_OWNER"
+  | "DB"
+  | "BLOBS"
+  | "ASSETS"
+  | "CACHE"
+  | "ANALYTICS"
+  | "VECTORIZE"
+  | "MCP_SESSION"
+  | "MCP_EXECUTION_OWNER"
 >;
 
 type CloudflareAccessEnv = Pick<

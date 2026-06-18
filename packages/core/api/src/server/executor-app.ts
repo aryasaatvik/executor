@@ -307,6 +307,7 @@ export interface ExecutorAppOptions<
   McpExport,
   RIdentity = never,
   RMcpAuth = never,
+  RBootExtra = never,
 > {
   /** The host's plugin tuple (drives the API + per-request extension Services). */
   readonly plugins: TPlugins;
@@ -321,7 +322,7 @@ export interface ExecutorAppOptions<
    * handle, the resolved identity, the router config). Satisfies the residual
    * `RDb | RAcct` left by the seams.
    */
-  readonly boot: Layer.Layer<RBoot>;
+  readonly boot: Layer.Layer<RBoot | RBootExtra>;
   /** Optional per-request Layer (cloud's request-scoped postgres socket). */
   readonly requestScoped?: Layer.Layer<RReq>;
 }
@@ -367,6 +368,7 @@ export const make = <
   McpExport = undefined,
   RIdentity = never,
   RMcpAuth = never,
+  RBootExtra = never,
 >(
   options: ExecutorAppOptions<
     TPlugins,
@@ -377,7 +379,8 @@ export const make = <
     RReq,
     McpExport,
     RIdentity,
-    RMcpAuth
+    RMcpAuth,
+    RBootExtra
   >,
 ): ExecutorApp<TPlugins, McpExport> => {
   const { plugins, providers, config } = options;
