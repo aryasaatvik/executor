@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 
 import { sha256Hex } from "./blob";
+import { cacheKeyPayload } from "./cache-key";
 import {
   TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
   TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
@@ -24,35 +25,20 @@ interface ToolSchemaViewCacheKeyInput {
   readonly inputSchema?: unknown;
   readonly outputSchema?: unknown;
   readonly definitions: Readonly<Record<string, unknown>>;
-  readonly includeTypeScript?: boolean;
 }
 
-const normalizeForHash = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(normalizeForHash);
-  if (value === null || typeof value !== "object") return value;
-
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    out[key] = normalizeForHash((value as Record<string, unknown>)[key]);
-  }
-  return out;
-};
-
 const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
-  JSON.stringify(
-    normalizeForHash({
-      version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
-      typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-      typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-      address: input.address,
-      name: input.name,
-      description: input.description,
-      inputSchema: input.inputSchema,
-      outputSchema: input.outputSchema,
-      definitions: input.definitions,
-      includeTypeScript: input.includeTypeScript ?? true,
-    }),
-  );
+  cacheKeyPayload({
+    version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+    typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+    typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+    address: input.address,
+    name: input.name,
+    description: input.description,
+    inputSchema: input.inputSchema,
+    outputSchema: input.outputSchema,
+    definitions: input.definitions,
+  });
 
 export const toolSchemaViewCacheKey = (input: ToolSchemaViewCacheKeyInput): Effect.Effect<string> =>
   sha256Hex(cachePayload(input)).pipe(
