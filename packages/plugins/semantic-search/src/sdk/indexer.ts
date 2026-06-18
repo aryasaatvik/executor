@@ -10,11 +10,11 @@ import { Effect } from "effect";
 import type { Chunker, ToolChunk } from "./chunker";
 import {
   type FingerprintRow,
-  type StagedIndexChunk,
-  type StagedIndexJob,
-  stagedIndexChunks,
-  stagedIndexJobs,
-  stagedIndexRuns,
+  type IndexChunk,
+  type IndexJob,
+  indexChunks,
+  indexJobs,
+  indexRuns,
   toolFingerprints,
 } from "./collections";
 import {
@@ -31,22 +31,22 @@ import { fingerprintTool } from "./fingerprint";
 import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
-export interface StagedIndexCollections {
-  readonly runs: PluginStorageCollectionFacade<typeof stagedIndexRuns>;
-  readonly jobs: PluginStorageCollectionFacade<typeof stagedIndexJobs>;
-  readonly chunks: PluginStorageCollectionFacade<typeof stagedIndexChunks>;
+export interface IndexCollections {
+  readonly runs: PluginStorageCollectionFacade<typeof indexRuns>;
+  readonly jobs: PluginStorageCollectionFacade<typeof indexJobs>;
+  readonly chunks: PluginStorageCollectionFacade<typeof indexChunks>;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly blobs: PluginBlobStore;
   readonly owner: Owner;
 }
 
-interface StagedIndexStores extends StagedIndexCollections {
+interface IndexStores extends IndexCollections {
   readonly namespace: string;
   readonly executor: Executor;
   readonly lexicalStore?: FtsLexicalStore;
 }
 
-interface StagedIndexDeps extends StagedIndexStores {
+interface IndexDeps extends IndexStores {
   readonly embedder: ToolEmbedder;
   readonly store: VectorStore;
   readonly chunker: Chunker;
@@ -64,7 +64,7 @@ export interface StartIndexRunResult {
   readonly partitionCount: number;
 }
 
-export interface StagedPageInput {
+export interface IndexPageInput {
   readonly runId: string;
   readonly partition: number;
   readonly limit?: number;
@@ -102,7 +102,7 @@ export interface CompleteIndexRunResult {
   readonly removed: number;
 }
 
-export interface StagedIndexStatus {
+export interface IndexStatus {
   readonly runId: string;
   readonly namespace: string;
   readonly total: number;
@@ -131,7 +131,7 @@ const DEFAULT_EMBED_MAX_ESTIMATED_TOKENS_PER_TEXT = 2_048;
 const ESTIMATED_CHARS_PER_TOKEN = 4;
 const ESTIMATED_RESPONSE_BYTES_PER_DIMENSION = 16;
 const ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD = 512;
-const STAGED_STORAGE_CONCURRENCY = 2;
+const INDEX_STORAGE_CONCURRENCY = 2;
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -156,7 +156,7 @@ const jobKey = (runId: string, path: string): string => `${runId}:${path}`;
 const chunkKey = (runId: string, path: string, chunkId: string): string =>
   `${runId}:${path}:${chunkId}`;
 
-const jobToDescriptor = (job: StagedIndexJob): IndexableToolDescriptor => ({
+const jobToDescriptor = (job: IndexJob): IndexableToolDescriptor => ({
   address: job.address,
   name: job.name,
   integration: job.integration,
@@ -164,15 +164,15 @@ const jobToDescriptor = (job: StagedIndexJob): IndexableToolDescriptor => ({
 });
 
 const queryJobs = (
-  deps: StagedIndexCollections,
+  deps: IndexCollections,
   input: {
     readonly runId: string;
     readonly partition: number;
-    readonly status: StagedIndexJob["status"];
+    readonly status: IndexJob["status"];
     readonly limit?: number;
   },
 ): Effect.Effect<
-  readonly { readonly key: string; readonly data: StagedIndexJob }[],
+  readonly { readonly key: string; readonly data: IndexJob }[],
   SemanticSearchError
 > =>
   deps.jobs
@@ -183,16 +183,15 @@ const queryJobs = (
     })
     .pipe(
       Effect.mapError(
-        (cause) =>
-          new SemanticSearchError({ message: "Failed to query staged index jobs.", cause }),
+        (cause) => new SemanticSearchError({ message: "Failed to query index jobs.", cause }),
       ),
     );
 
 const queryChunksForJob = (
-  deps: StagedIndexCollections,
-  job: StagedIndexJob,
+  deps: IndexCollections,
+  job: IndexJob,
 ): Effect.Effect<
-  readonly { readonly key: string; readonly data: StagedIndexChunk }[],
+  readonly { readonly key: string; readonly data: IndexChunk }[],
   SemanticSearchError
 > =>
   deps.chunks
@@ -203,8 +202,7 @@ const queryChunksForJob = (
     .pipe(
       Effect.map((entries) => [...entries].sort((a, b) => a.data.chunkIndex - b.data.chunkIndex)),
       Effect.mapError(
-        (cause) =>
-          new SemanticSearchError({ message: "Failed to query staged index chunks.", cause }),
+        (cause) => new SemanticSearchError({ message: "Failed to query index chunks.", cause }),
       ),
     );
 
@@ -215,7 +213,7 @@ interface EmbedBudget {
   readonly maxEstimatedTokensPerText: number;
 }
 
-const resolveEmbedBudget = (input: StagedPageInput): EmbedBudget => ({
+const resolveEmbedBudget = (input: IndexPageInput): EmbedBudget => ({
   maxChunks: Math.max(1, Math.floor(input.maxChunks ?? DEFAULT_EMBED_MAX_CHUNKS)),
   maxEstimatedInputTokens: Math.max(
     1,
@@ -237,10 +235,10 @@ const estimateTokens = (text: string): number =>
 const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteLength;
 
 const payloadKey = (kind: "embedding-text" | "lexical-text", digest: string): string =>
-  `semantic-search/staged/${kind}/${digest}.txt`;
+  `semantic-search/index/${kind}/${digest}.txt`;
 
 const putPayloadText = (
-  deps: StagedIndexCollections,
+  deps: IndexCollections,
   kind: "embedding-text" | "lexical-text",
   text: string,
 ): Effect.Effect<string, SemanticSearchError> =>
@@ -251,7 +249,7 @@ const putPayloadText = (
       Effect.mapError(
         (cause) =>
           new SemanticSearchError({
-            message: `Failed to persist staged ${kind} payload "${key}".`,
+            message: `Failed to persist index ${kind} payload "${key}".`,
             cause,
           }),
       ),
@@ -260,17 +258,17 @@ const putPayloadText = (
   });
 
 const getPayloadText = (
-  deps: StagedIndexCollections,
+  deps: IndexCollections,
   key: string,
 ): Effect.Effect<string, SemanticSearchError> =>
   deps.blobs.get(key).pipe(
     Effect.mapError(
       (cause) =>
-        new SemanticSearchError({ message: `Failed to load staged payload "${key}".`, cause }),
+        new SemanticSearchError({ message: `Failed to load index payload "${key}".`, cause }),
     ),
     Effect.flatMap((text) =>
       text === null
-        ? Effect.fail(new SemanticSearchError({ message: `Staged payload "${key}" is missing.` }))
+        ? Effect.fail(new SemanticSearchError({ message: `Index payload "${key}" is missing.` }))
         : Effect.succeed(text),
     ),
   );
@@ -298,7 +296,7 @@ const wouldExceedEmbedBudget = (
   current.responseBytes + next.responseBytes > budget.maxEstimatedResponseBytes;
 
 const loadFingerprints = (
-  deps: StagedIndexCollections,
+  deps: IndexCollections,
   paths: readonly string[],
 ): Effect.Effect<ReadonlyMap<string, FingerprintRow>, SemanticSearchError> =>
   Effect.forEach(
@@ -307,7 +305,7 @@ const loadFingerprints = (
       deps.fingerprints
         .getForOwner({ owner: deps.owner, key: path })
         .pipe(Effect.map((entry) => [path, entry?.data ?? null] as const)),
-    { concurrency: STAGED_STORAGE_CONCURRENCY },
+    { concurrency: INDEX_STORAGE_CONCURRENCY },
   ).pipe(
     Effect.map(
       (pairs) =>
@@ -316,21 +314,18 @@ const loadFingerprints = (
     Effect.mapError(
       (cause) =>
         new SemanticSearchError({
-          message: "Failed to load staged fingerprint rows.",
+          message: "Failed to load index fingerprint rows.",
           cause,
         }),
     ),
   );
 
-const putJob = (
-  deps: StagedIndexCollections,
-  job: StagedIndexJob,
-): Effect.Effect<void, SemanticSearchError> =>
+const putJob = (deps: IndexCollections, job: IndexJob): Effect.Effect<void, SemanticSearchError> =>
   deps.jobs.put({ owner: deps.owner, key: jobKey(job.runId, job.path), data: job }).pipe(
     Effect.mapError(
       (cause) =>
         new SemanticSearchError({
-          message: `Failed to persist staged job "${job.path}".`,
+          message: `Failed to persist index job "${job.path}".`,
           cause,
         }),
     ),
@@ -338,8 +333,8 @@ const putJob = (
   );
 
 const removeChunksForJob = (
-  deps: StagedIndexCollections,
-  job: StagedIndexJob,
+  deps: IndexCollections,
+  job: IndexJob,
 ): Effect.Effect<void, SemanticSearchError> =>
   queryChunksForJob(deps, job).pipe(
     Effect.flatMap((entries) =>
@@ -350,18 +345,18 @@ const removeChunksForJob = (
             Effect.mapError(
               (cause) =>
                 new SemanticSearchError({
-                  message: `Failed to remove staged chunk "${entry.key}".`,
+                  message: `Failed to remove index chunk "${entry.key}".`,
                   cause,
                 }),
             ),
           ),
-        { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+        { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
       ),
     ),
   );
 
 export const startIndexRun = (
-  input: StagedIndexStores & StartIndexRunInput,
+  input: IndexStores & StartIndexRunInput,
 ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const partitionCount = Math.max(1, Math.floor(input.partitionCount));
@@ -384,8 +379,7 @@ export const startIndexRun = (
       })
       .pipe(
         Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({ message: "Failed to create staged index run.", cause }),
+          (cause) => new SemanticSearchError({ message: "Failed to create index run.", cause }),
         ),
       );
 
@@ -398,20 +392,19 @@ export const startIndexRun = (
   });
 
 export const seedIndexPartitionPage = (
-  input: StagedIndexStores & StagedPageInput,
+  input: IndexStores & IndexPageInput,
 ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
       .pipe(
         Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({ message: "Failed to load staged index run.", cause }),
+          (cause) => new SemanticSearchError({ message: "Failed to load index run.", cause }),
         ),
       );
     if (run === null) {
       return yield* new SemanticSearchError({
-        message: `Staged index run "${input.runId}" does not exist.`,
+        message: `Index run "${input.runId}" does not exist.`,
       });
     }
 
@@ -445,7 +438,7 @@ export const seedIndexPartitionPage = (
     yield* Effect.forEach(
       selected,
       ({ tool, ordinal, path }) => {
-        const job: StagedIndexJob = {
+        const job: IndexJob = {
           runId: input.runId,
           namespace: input.namespace,
           partition: input.partition,
@@ -476,7 +469,7 @@ export const seedIndexPartitionPage = (
   });
 
 export const diffIndexPartitionPage = (
-  input: StagedIndexStores & StagedPageInput,
+  input: IndexStores & IndexPageInput,
 ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const jobs = yield* queryJobs(input, {
@@ -516,7 +509,7 @@ export const diffIndexPartitionPage = (
         if (job === undefined) return Effect.void;
         const fingerprint = fingerprintTool(fp);
         const storedRow = stored.get(fp.path);
-        const next: StagedIndexJob =
+        const next: IndexJob =
           storedRow !== undefined && storedRow.fingerprint === fingerprint
             ? {
                 ...job,
@@ -538,7 +531,7 @@ export const diffIndexPartitionPage = (
         else changed++;
         return putJob(input, next);
       },
-      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
     );
 
     return {
@@ -551,7 +544,7 @@ export const diffIndexPartitionPage = (
   });
 
 export const materializeIndexPartitionPage = (
-  input: StagedIndexDeps & StagedPageInput,
+  input: IndexDeps & IndexPageInput,
 ): Effect.Effect<IndexMaterializePageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const jobs = yield* queryJobs(input, {
@@ -581,7 +574,7 @@ export const materializeIndexPartitionPage = (
           const lexicalTextKey = yield* putPayloadText(input, "lexical-text", lexicalText);
           yield* removeChunksForJob(input, job);
           yield* Effect.forEach(chunks, (chunk) => putChunk(input, job, chunk, updatedAt), {
-            concurrency: STAGED_STORAGE_CONCURRENCY,
+            concurrency: INDEX_STORAGE_CONCURRENCY,
             discard: true,
           });
           yield* putJob(input, {
@@ -606,8 +599,8 @@ export const materializeIndexPartitionPage = (
   });
 
 const putChunk = (
-  deps: StagedIndexCollections,
-  job: StagedIndexJob,
+  deps: IndexCollections,
+  job: IndexJob,
   chunk: ToolChunk,
   timestamp: string,
 ): Effect.Effect<void, SemanticSearchError> =>
@@ -644,7 +637,7 @@ const putChunk = (
   );
 
 export const embedIndexPartitionPage = (
-  input: StagedIndexDeps & StagedPageInput,
+  input: IndexDeps & IndexPageInput,
 ): Effect.Effect<IndexEmbedPageResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const budget = resolveEmbedBudget(input);
@@ -660,13 +653,13 @@ export const embedIndexPartitionPage = (
 
     const chunkEntriesByPath = new Map<
       string,
-      readonly { readonly key: string; readonly data: StagedIndexChunk }[]
+      readonly { readonly key: string; readonly data: IndexChunk }[]
     >();
     for (const jobEntry of jobs) {
       chunkEntriesByPath.set(jobEntry.data.path, yield* queryChunksForJob(input, jobEntry.data));
     }
 
-    const selectedChunks: { readonly key: string; readonly data: StagedIndexChunk }[] = [];
+    const selectedChunks: { readonly key: string; readonly data: IndexChunk }[] = [];
     const vectorResponseBytes = estimateEmbeddingResponseBytes(input.embedder.dimensions);
     let selectedInputTokens = 0;
     let selectedResponseBytes = 0;
@@ -681,7 +674,7 @@ export const embedIndexPartitionPage = (
         const inputTokens = entry.data.embeddingTextTokens;
         if (inputTokens > budget.maxEstimatedTokensPerText) {
           return yield* new SemanticSearchError({
-            message: `Staged index chunk "${entry.data.chunkId}" is estimated at ${inputTokens} tokens, above the per-text embedding budget of ${budget.maxEstimatedTokensPerText}. Lower the chunker facet budget or raise maxEstimatedTokensPerText.`,
+            message: `Index chunk "${entry.data.chunkId}" is estimated at ${inputTokens} tokens, above the per-text embedding budget of ${budget.maxEstimatedTokensPerText}. Lower the chunker facet budget or raise maxEstimatedTokensPerText.`,
           });
         }
 
@@ -720,7 +713,7 @@ export const embedIndexPartitionPage = (
     const selectedTexts = yield* Effect.forEach(
       selectedChunks,
       (entry) => getPayloadText(input, entry.data.embeddingTextKey),
-      { concurrency: STAGED_STORAGE_CONCURRENCY },
+      { concurrency: INDEX_STORAGE_CONCURRENCY },
     );
     const vectors = yield* input.embedder.embedDocuments(selectedTexts);
     const records: VectorInput[] = [];
@@ -770,7 +763,7 @@ export const embedIndexPartitionPage = (
                 }),
             ),
           ),
-      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
     );
 
     const affectedPaths = new Set(selectedChunks.map((entry) => entry.data.path));
@@ -796,10 +789,10 @@ export const embedIndexPartitionPage = (
   });
 
 const finalizeCompletedEmbedJobs = (
-  input: StagedIndexDeps,
-  jobs: readonly { readonly key: string; readonly data: StagedIndexJob }[],
+  input: IndexDeps,
+  jobs: readonly { readonly key: string; readonly data: IndexJob }[],
   preloadedChunks:
-    | ReadonlyMap<string, readonly { readonly key: string; readonly data: StagedIndexChunk }[]>
+    | ReadonlyMap<string, readonly { readonly key: string; readonly data: IndexChunk }[]>
     | undefined,
   updatedAt: string,
 ): Effect.Effect<number, SemanticSearchError> =>
@@ -817,7 +810,7 @@ const finalizeCompletedEmbedJobs = (
       const fingerprint = job.fingerprint;
       if (fingerprint === undefined) {
         return yield* new SemanticSearchError({
-          message: `Staged index job "${job.path}" reached embedding without a fingerprint.`,
+          message: `Index job "${job.path}" reached embedding without a fingerprint.`,
         });
       }
 
@@ -870,18 +863,17 @@ const finalizeCompletedEmbedJobs = (
   });
 
 export const indexRunStatus = (
-  input: StagedIndexCollections & { readonly namespace: string; readonly runId: string },
-): Effect.Effect<StagedIndexStatus, SemanticSearchError> =>
+  input: IndexCollections & { readonly namespace: string; readonly runId: string },
+): Effect.Effect<IndexStatus, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
       .pipe(
         Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({ message: "Failed to load staged index run.", cause }),
+          (cause) => new SemanticSearchError({ message: "Failed to load index run.", cause }),
         ),
       );
-    const count = (status: StagedIndexJob["status"]) =>
+    const count = (status: IndexJob["status"]) =>
       input.jobs
         .count({ where: { runId: input.runId, status } })
         .pipe(
@@ -900,7 +892,7 @@ export const indexRunStatus = (
           count("committed"),
           count("failed"),
         ],
-        { concurrency: STAGED_STORAGE_CONCURRENCY },
+        { concurrency: INDEX_STORAGE_CONCURRENCY },
       );
     return {
       runId: input.runId,
@@ -961,14 +953,14 @@ export const sweepRemoved = (input: {
             ),
           );
         }),
-      { concurrency: STAGED_STORAGE_CONCURRENCY, discard: true },
+      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
     );
 
     return { namespace: input.namespace, removed: removed.length };
   });
 
 export const completeIndexRun = (
-  input: StagedIndexDeps & { readonly runId: string },
+  input: IndexDeps & { readonly runId: string },
   sweep: Effect.Effect<{ readonly removed: number }, SemanticSearchError>,
 ): Effect.Effect<CompleteIndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
@@ -977,7 +969,7 @@ export const completeIndexRun = (
       Effect.mapError(
         (cause) =>
           new SemanticSearchError({
-            message: "Failed to load staged run for completion.",
+            message: "Failed to load index run for completion.",
             cause,
           }),
       ),
@@ -993,7 +985,7 @@ export const completeIndexRun = (
         .pipe(
           Effect.mapError(
             (cause) =>
-              new SemanticSearchError({ message: "Failed to mark staged run completed.", cause }),
+              new SemanticSearchError({ message: "Failed to mark index run completed.", cause }),
           ),
         );
     }
@@ -1001,7 +993,7 @@ export const completeIndexRun = (
   });
 
 export const runIndexRun = (
-  input: StagedIndexDeps & {
+  input: IndexDeps & {
     readonly runId: string;
     readonly partitionCount: number;
     readonly pageLimit?: number;

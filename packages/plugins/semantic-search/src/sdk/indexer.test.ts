@@ -11,12 +11,12 @@ import { Effect } from "effect";
 import { makeFacetChunker } from "./chunker";
 import {
   type FingerprintRow,
-  type StagedIndexChunk,
-  type StagedIndexJob,
-  type StagedIndexRun,
-  stagedIndexChunks,
-  stagedIndexJobs,
-  stagedIndexRuns,
+  type IndexChunk,
+  type IndexJob,
+  type IndexRun,
+  indexChunks,
+  indexJobs,
+  indexRuns,
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
@@ -137,14 +137,14 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
   return facade as unknown as TestCollection<T>;
 };
 
-describe("staged indexer", () => {
-  it.effect("diffs, materializes, embeds, and commits changed tools by staged phase", () =>
+describe("indexer", () => {
+  it.effect("diffs, materializes, embeds, and commits changed tools by index phase", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
-      const runs = makeCollection<StagedIndexRun>(stagedIndexRuns.name);
-      const jobs = makeCollection<StagedIndexJob>(stagedIndexJobs.name);
-      const chunks = makeCollection<StagedIndexChunk>(stagedIndexChunks.name);
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
       const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
       const blobs = makeBlobs();
       const upserted: VectorInput[] = [];
@@ -208,9 +208,9 @@ describe("staged indexer", () => {
 
   it.effect("embeds only the chunks that fit the page budget and commits the job later", () =>
     Effect.gen(function* () {
-      const runs = makeCollection<StagedIndexRun>(stagedIndexRuns.name);
-      const jobs = makeCollection<StagedIndexJob>(stagedIndexJobs.name);
-      const chunks = makeCollection<StagedIndexChunk>(stagedIndexChunks.name);
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
       const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
       const blobs = makeBlobs();
       const mutableEmbeddedGroups: string[][] = [];
@@ -233,7 +233,7 @@ describe("staged indexer", () => {
       };
 
       const createdAt = new Date(0).toISOString();
-      const job: StagedIndexJob = {
+      const job: IndexJob = {
         runId: "run-budget",
         namespace,
         partition: 0,
@@ -258,7 +258,7 @@ describe("staged indexer", () => {
         (chunkId, chunkIndex) =>
           Effect.gen(function* () {
             const embeddingText = `chunk text ${chunkIndex}`;
-            const chunk: StagedIndexChunk = {
+            const chunk: IndexChunk = {
               runId: job.runId,
               namespace,
               partition: 0,

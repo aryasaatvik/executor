@@ -28,26 +28,26 @@ export const toolFingerprints = definePluginStorageCollection("toolFingerprints"
   indexes: ["path"],
 });
 
-export const StagedIndexRunStatus = Schema.Literals(["running", "completed", "failed"]);
-export type StagedIndexRunStatus = typeof StagedIndexRunStatus.Type;
+export const IndexRunStatus = Schema.Literals(["running", "completed", "failed"]);
+export type IndexRunStatus = typeof IndexRunStatus.Type;
 
-export const StagedIndexRun = Schema.Struct({
+export const IndexRun = Schema.Struct({
   runId: Schema.String,
   namespace: Schema.String,
-  status: StagedIndexRunStatus,
+  status: IndexRunStatus,
   partitionCount: Schema.Number,
   total: Schema.Number,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
 });
-export type StagedIndexRun = typeof StagedIndexRun.Type;
+export type IndexRun = typeof IndexRun.Type;
 
-export const stagedIndexRuns = definePluginStorageCollection("stagedIndexRuns", StagedIndexRun, {
+export const indexRuns = definePluginStorageCollection("indexRuns", IndexRun, {
   indexes: ["runId", "namespace", "status"],
 });
 
-export const StagedIndexJobStatus = Schema.Literals([
+export const IndexJobStatus = Schema.Literals([
   "pendingDiff",
   "unchanged",
   "pendingMaterialize",
@@ -55,9 +55,9 @@ export const StagedIndexJobStatus = Schema.Literals([
   "committed",
   "failed",
 ]);
-export type StagedIndexJobStatus = typeof StagedIndexJobStatus.Type;
+export type IndexJobStatus = typeof IndexJobStatus.Type;
 
-export const StagedIndexJob = Schema.Struct({
+export const IndexJob = Schema.Struct({
   runId: Schema.String,
   namespace: Schema.String,
   partition: Schema.Number,
@@ -67,7 +67,7 @@ export const StagedIndexJob = Schema.Struct({
   name: Schema.String,
   integration: Schema.String,
   description: Schema.String,
-  status: StagedIndexJobStatus,
+  status: IndexJobStatus,
   fingerprint: Schema.optional(Schema.String),
   oldChunkIds: Schema.Array(Schema.String),
   chunkIds: Schema.Array(Schema.String),
@@ -76,16 +76,16 @@ export const StagedIndexJob = Schema.Struct({
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
 });
-export type StagedIndexJob = typeof StagedIndexJob.Type;
+export type IndexJob = typeof IndexJob.Type;
 
-export const stagedIndexJobs = definePluginStorageCollection("stagedIndexJobs", StagedIndexJob, {
+export const indexJobs = definePluginStorageCollection("indexJobs", IndexJob, {
   indexes: ["runId", "namespace", "partition", "status", "path", "ordinal"],
 });
 
-export const StagedIndexChunkStatus = Schema.Literals(["pendingEmbed", "committed", "failed"]);
-export type StagedIndexChunkStatus = typeof StagedIndexChunkStatus.Type;
+export const IndexChunkStatus = Schema.Literals(["pendingEmbed", "committed", "failed"]);
+export type IndexChunkStatus = typeof IndexChunkStatus.Type;
 
-export const StagedIndexChunk = Schema.Struct({
+export const IndexChunk = Schema.Struct({
   runId: Schema.String,
   namespace: Schema.String,
   partition: Schema.Number,
@@ -99,17 +99,13 @@ export const StagedIndexChunk = Schema.Struct({
   name: Schema.String,
   integration: Schema.String,
   description: Schema.String,
-  status: StagedIndexChunkStatus,
+  status: IndexChunkStatus,
   createdAt: Schema.String,
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
 });
-export type StagedIndexChunk = typeof StagedIndexChunk.Type;
+export type IndexChunk = typeof IndexChunk.Type;
 
-export const stagedIndexChunks = definePluginStorageCollection(
-  "stagedIndexChunks",
-  StagedIndexChunk,
-  {
-    indexes: ["runId", "namespace", "partition", "status", "path"],
-  },
-);
+export const indexChunks = definePluginStorageCollection("indexChunks", IndexChunk, {
+  indexes: ["runId", "namespace", "partition", "status", "path"],
+});

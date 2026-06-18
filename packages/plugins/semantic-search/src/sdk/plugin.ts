@@ -7,12 +7,7 @@ import {
 import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
-import {
-  stagedIndexChunks,
-  stagedIndexJobs,
-  stagedIndexRuns,
-  toolFingerprints,
-} from "./collections";
+import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
 import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
@@ -31,7 +26,7 @@ import {
   type IndexEmbedPageResult,
   type IndexMaterializePageResult,
   type IndexRunResult,
-  type StagedIndexStatus,
+  type IndexStatus,
   type StartIndexRunResult,
 } from "./indexer";
 import { makeVectorToolDiscoveryProvider } from "./provider";
@@ -122,9 +117,9 @@ const makeSemanticSearchExtension = (deps: {
   readonly store: VectorStore | undefined;
   readonly chunker: Chunker;
   readonly fingerprints: Parameters<typeof startIndexRun>[0]["fingerprints"] | undefined;
-  readonly stagedRuns: Parameters<typeof startIndexRun>[0]["runs"] | undefined;
-  readonly stagedJobs: Parameters<typeof startIndexRun>[0]["jobs"] | undefined;
-  readonly stagedChunks: Parameters<typeof startIndexRun>[0]["chunks"] | undefined;
+  readonly indexRuns: Parameters<typeof startIndexRun>[0]["runs"] | undefined;
+  readonly indexJobs: Parameters<typeof startIndexRun>[0]["jobs"] | undefined;
+  readonly indexChunks: Parameters<typeof startIndexRun>[0]["chunks"] | undefined;
   readonly blobs: Parameters<typeof startIndexRun>[0]["blobs"] | undefined;
   readonly owner: Parameters<typeof startIndexRun>[0]["owner"] | undefined;
   readonly lexicalStore: FtsLexicalStore | undefined;
@@ -134,9 +129,9 @@ const makeSemanticSearchExtension = (deps: {
     deps.embedder &&
     deps.store &&
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? runIndexRun({
@@ -145,9 +140,9 @@ const makeSemanticSearchExtension = (deps: {
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -162,17 +157,17 @@ const makeSemanticSearchExtension = (deps: {
     input: { readonly runId: string; readonly partitionCount: number },
   ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? startIndexRun({
           namespace: deps.namespace,
           executor,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -187,17 +182,17 @@ const makeSemanticSearchExtension = (deps: {
     input: { readonly runId: string; readonly partition: number; readonly limit?: number },
   ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? diffIndexPartitionPage({
           namespace: deps.namespace,
           executor,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -213,17 +208,17 @@ const makeSemanticSearchExtension = (deps: {
     input: { readonly runId: string; readonly partition: number; readonly limit?: number },
   ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? seedIndexPartitionPage({
           namespace: deps.namespace,
           executor,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -246,9 +241,9 @@ const makeSemanticSearchExtension = (deps: {
     deps.embedder &&
     deps.store &&
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? materializeIndexPartitionPage({
@@ -257,9 +252,9 @@ const makeSemanticSearchExtension = (deps: {
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -286,9 +281,9 @@ const makeSemanticSearchExtension = (deps: {
     deps.embedder &&
     deps.store &&
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? embedIndexPartitionPage({
@@ -297,9 +292,9 @@ const makeSemanticSearchExtension = (deps: {
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -321,9 +316,9 @@ const makeSemanticSearchExtension = (deps: {
     deps.embedder &&
     deps.store &&
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? completeIndexRun(
@@ -333,9 +328,9 @@ const makeSemanticSearchExtension = (deps: {
             embedder: deps.embedder,
             store: deps.store,
             chunker: deps.chunker,
-            runs: deps.stagedRuns,
-            jobs: deps.stagedJobs,
-            chunks: deps.stagedChunks,
+            runs: deps.indexRuns,
+            jobs: deps.indexJobs,
+            chunks: deps.indexChunks,
             fingerprints: deps.fingerprints,
             blobs: deps.blobs,
             owner: deps.owner,
@@ -355,18 +350,18 @@ const makeSemanticSearchExtension = (deps: {
 
   indexRunStatus: (input: {
     readonly runId: string;
-  }): Effect.Effect<StagedIndexStatus, SemanticSearchError> =>
+  }): Effect.Effect<IndexStatus, SemanticSearchError> =>
     deps.fingerprints &&
-    deps.stagedRuns &&
-    deps.stagedJobs &&
-    deps.stagedChunks &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
     deps.blobs &&
     deps.owner
       ? indexRunStatus({
           namespace: deps.namespace,
-          runs: deps.stagedRuns,
-          jobs: deps.stagedJobs,
-          chunks: deps.stagedChunks,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
           blobs: deps.blobs,
           owner: deps.owner,
@@ -494,13 +489,13 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   return {
     id: "semanticSearch" as const,
     packageName: "@executor-js/plugin-semantic-search",
-    pluginStorage: { toolFingerprints, stagedIndexRuns, stagedIndexJobs, stagedIndexChunks },
+    pluginStorage: { toolFingerprints, indexRuns, indexJobs, indexChunks },
     storage: (deps) => ({
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
-      stagedRuns: deps.pluginStorage.collection(stagedIndexRuns),
-      stagedJobs: deps.pluginStorage.collection(stagedIndexJobs),
-      stagedChunks: deps.pluginStorage.collection(stagedIndexChunks),
-      stagedBlobs: deps.blobs,
+      indexRuns: deps.pluginStorage.collection(indexRuns),
+      indexJobs: deps.pluginStorage.collection(indexJobs),
+      indexChunks: deps.pluginStorage.collection(indexChunks),
+      indexBlobs: deps.blobs,
       // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
       // org-scoped. Scoping by the triggering principal (user vs cron) would
       // split the fingerprint store into disjoint partitions, so each reindex
@@ -514,10 +509,10 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
         store,
         chunker,
         fingerprints: ctx.storage.fingerprints,
-        stagedRuns: ctx.storage.stagedRuns,
-        stagedJobs: ctx.storage.stagedJobs,
-        stagedChunks: ctx.storage.stagedChunks,
-        blobs: ctx.storage.stagedBlobs,
+        indexRuns: ctx.storage.indexRuns,
+        indexJobs: ctx.storage.indexJobs,
+        indexChunks: ctx.storage.indexChunks,
+        blobs: ctx.storage.indexBlobs,
         owner: ctx.storage.owner,
         lexicalStore,
         provider,

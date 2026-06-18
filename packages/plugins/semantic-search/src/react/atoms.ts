@@ -24,5 +24,5 @@ export const statusAtom = SemanticSearchClient.query("semanticSearch", "status",
   reactivityKeys: [],
 });
 
-// Explicit index run (staged fingerprint/materialize/embed pipeline).
+// Explicit index run (index fingerprint/materialize/embed pipeline).
 export const reindexMutation = SemanticSearchClient.mutation("semanticSearch", "reindex");

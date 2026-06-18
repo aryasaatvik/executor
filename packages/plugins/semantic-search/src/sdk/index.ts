@@ -24,13 +24,13 @@ export {
   sweepRemoved,
   type StartIndexRunInput,
   type StartIndexRunResult,
-  type StagedPageInput,
+  type IndexPageInput,
   type IndexDiffPageResult,
   type IndexMaterializePageResult,
   type IndexEmbedPageResult,
   type CompleteIndexRunResult,
   type IndexRunResult,
-  type StagedIndexStatus,
+  type IndexStatus,
 } from "./indexer";
 export { SemanticSearchError } from "./errors";
 
@@ -55,13 +55,13 @@ export { fingerprintTool, type FingerprintInput } from "./fingerprint";
 // Collections (plugin storage)
 export {
   toolFingerprints,
-  stagedIndexRuns,
-  stagedIndexJobs,
-  stagedIndexChunks,
+  indexRuns,
+  indexJobs,
+  indexChunks,
   FingerprintRow,
-  StagedIndexRun,
-  StagedIndexJob,
-  StagedIndexChunk,
+  IndexRun,
+  IndexJob,
+  IndexChunk,
 } from "./collections";
 
 // Store limit decorator

@@ -11,7 +11,7 @@ import { InternalError } from "@executor-js/api";
 // owner-scoped at the host edge, so there is no `:scopeId` segment.
 //
 //   - reindex (POST) indexes the whole tool catalog for the scoped tenant
-//     through the same staged fingerprint/materialize/embed pipeline.
+//     through the same index fingerprint/materialize/embed pipeline.
 //   - search (GET) runs a live `tools.search` through the SAME provider the
 //     engine uses, so the operator console sees what the agent would.
 //   - status (GET) reports index population (vector fingerprints + lexical docs).
