@@ -1,7 +1,8 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { HttpEffect, HttpRouter } from "effect/unstable/http";
 
 import { dbProviderLayer, ExecutorApp, textFailureStrategy } from "@executor-js/api/server";
+import { layerCloudflareKeyValueStore } from "@executor-js/cloudflare/key-value-store";
 
 import { loadConfig, type CloudflareEnv } from "./config";
 import { makeCloudflarePlugins } from "./plugins";
@@ -55,6 +56,10 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   // mapped to. The API, agent MCP, approval handler, and account surface share it.
   const aliasLookup = makeServiceTokenAliasLookup(dbHandle, config.organizationId);
   const identityLayer = cloudflareAccessIdentityLayer(config, aliasLookup);
+  const bootLayer =
+    env.CACHE === undefined
+      ? identityLayer
+      : Layer.mergeAll(identityLayer, layerCloudflareKeyValueStore(env.CACHE));
   const mcpAgentHandler = makeCloudflareMcpAgentHandler(config, aliasLookup);
   const approvalHandler = makeCloudflareApprovalHandler(config, env, aliasLookup);
 
@@ -83,7 +88,7 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
       ],
     },
     config: { mountPrefix: "/api", failure: textFailureStrategy },
-    boot: identityLayer,
+    boot: bootLayer,
   });
 
   return { appLayer, toWebHandler, mcpAgentHandler };
