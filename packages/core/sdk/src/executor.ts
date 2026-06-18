@@ -46,7 +46,14 @@ import {
   type FumaTables,
   type StorageFailure,
 } from "./fuma-runtime";
-import { makeFumaBlobStore, pluginBlobStore, type BlobStore, type OwnerPartitions } from "./blob";
+import {
+  makeFumaBlobStore,
+  pluginBlobStore,
+  sha256Hex,
+  type BlobStore,
+  type OwnerPartitions,
+} from "./blob";
+import { cacheKeyPayload } from "./cache-key";
 import { makePendingApprovalStore, type PendingApprovalStore } from "./pending-approval";
 import { coreToolsPlugin } from "./core-tools";
 import type {
@@ -75,6 +82,7 @@ import {
   type CoreSchema,
   type IntegrationRow,
   type OAuthClientRow,
+  type ToolSchemaManifestRow,
   type ToolInvocationRow,
   type ToolRow,
   type ToolPolicyRow,
@@ -214,7 +222,7 @@ import {
   ORG_SUBJECT,
   type ExecutorOwnerPolicyContext,
 } from "./owner-policy";
-import { ToolSchemaView, type IntegrationDetectionResult } from "./types";
+import { ToolSchemaManifest, ToolSchemaView, type IntegrationDetectionResult } from "./types";
 import { type Tool, type ToolAnnotations, type ToolDef, type ToolListFilter } from "./tool";
 import { buildToolTypeScriptPreview, type ToolTypeScriptPreview } from "./schema-types";
 import { collectReferencedDefinitions } from "./schema-refs";
@@ -224,6 +232,12 @@ import {
   ToolTypeScriptPreviewCacheEntry,
   toolTypeScriptPreviewCacheKey,
 } from "./tool-typescript-preview-cache";
+import {
+  TOOL_SCHEMA_VIEW_CACHE_VERSION,
+  ToolSchemaViewCacheEntry,
+  toolSchemaViewCacheKey,
+  toolSchemaViewManifestCacheKey,
+} from "./tool-schema-view-cache";
 import {
   refreshAccessToken,
   exchangeClientCredentials,
@@ -489,6 +503,9 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
 
   readonly tools: {
     readonly list: (filter?: ToolListFilter) => Effect.Effect<readonly Tool[], StorageFailure>;
+    readonly manifest: (
+      filter?: ToolListFilter,
+    ) => Effect.Effect<readonly ToolSchemaManifest[], StorageFailure>;
     readonly schema: (address: ToolAddress) => Effect.Effect<ToolSchemaView | null, StorageFailure>;
   };
 
@@ -561,6 +578,13 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
    *  machinery (e.g. execution observers) can attribute work to an owner
    *  without re-threading identity through every call site. */
   readonly owner: OwnerBinding;
+
+  /** The host-provided key/value cache primitive (Cloudflare KV in prod, an
+   *  in-memory fallback otherwise). Plugins reach durable cache storage through
+   *  this without re-threading a binding — wrap it with
+   *  `KeyValueStore.toSchemaStore` for typed entries (mirrors the internal
+   *  `tools.list` / schema-view caches). */
+  readonly cache: KeyValueStore.KeyValueStore;
 } & PluginExtensions<TPlugins>;
 
 // ---------------------------------------------------------------------------
@@ -730,12 +754,11 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
    */
   readonly blobs?: BlobStore;
   /**
-   * Durable key/value store for derived executor artifacts. Defaults to an
-   * isolate-local in-memory store; hosts can provide Effect's
-   * `KeyValueStore.KeyValueStore` backed by platform storage such as
+   * Cache storage for derived executor artifacts. Defaults to an in-memory
+   * Effect `KeyValueStore`; hosts can provide platform storage such as
    * Cloudflare KV.
    */
-  readonly keyValueStore?: KeyValueStore.KeyValueStore;
+  readonly cache?: KeyValueStore.KeyValueStore;
   readonly plugins?: TPlugins;
   /** Config-level credential providers, merged with every
    *  `plugin.credentialProviders`. Config providers register first, so the
@@ -929,6 +952,58 @@ const validateExecutorDbTables = (required: FumaTables, actual: FumaTables): voi
 
 const storageFailureFromUnknown = (message: string, cause: unknown): StorageFailure =>
   isStorageFailure(cause) ? cause : new StorageError({ message, cause });
+
+const MEMORY_CACHE_CAPACITY = 2_048;
+const MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const makeMemoryCacheStore = (): KeyValueStore.KeyValueStore => {
+  const rows = new Map<string, { readonly value: string; readonly expiresAt: number }>();
+  const evictExpired = (now: number): void => {
+    for (const [key, entry] of rows) {
+      if (entry.expiresAt <= now) rows.delete(key);
+    }
+  };
+  const evictCapacity = (): void => {
+    while (rows.size > MEMORY_CACHE_CAPACITY) {
+      const oldest = rows.keys().next().value;
+      if (oldest === undefined) break;
+      rows.delete(oldest);
+    }
+  };
+  return KeyValueStore.makeStringOnly({
+    get: (key) =>
+      Effect.sync(() => {
+        const now = Date.now();
+        const entry = rows.get(key);
+        if (entry === undefined) return undefined;
+        if (entry.expiresAt <= now) {
+          rows.delete(key);
+          return undefined;
+        }
+        rows.delete(key);
+        rows.set(key, entry);
+        return entry.value;
+      }),
+    set: (key, value) =>
+      Effect.sync(() => {
+        const now = Date.now();
+        evictExpired(now);
+        rows.set(key, { value, expiresAt: now + MEMORY_CACHE_TTL_MS });
+        evictCapacity();
+      }),
+    remove: (key) =>
+      Effect.sync(() => {
+        rows.delete(key);
+      }),
+    clear: Effect.sync(() => {
+      rows.clear();
+    }),
+    size: Effect.sync(() => {
+      evictExpired(Date.now());
+      return rows.size;
+    }),
+  });
+};
 
 const pluginStorageFailure = (pluginId: string, hook: string, cause: unknown): StorageFailure =>
   storageFailureFromUnknown(`${hook} failed for plugin ${pluginId}`, cause);
@@ -1251,6 +1326,139 @@ const rowToTool = (
     annotations: annotations ?? (decodeJsonColumn(row.annotations) as ToolAnnotations | undefined),
   };
 };
+
+const TOOL_SCHEMA_MANIFEST_FINGERPRINT_VERSION = "tool-schema-manifest/v1";
+
+const toolManifestPath = (address: string): string =>
+  address.startsWith(`${ADDRESS_PREFIX}.`) ? address.slice(ADDRESS_PREFIX.length + 1) : address;
+
+const hashManifestValue = (value: unknown): Effect.Effect<string> =>
+  sha256Hex(cacheKeyPayload(value));
+
+interface ToolManifestInput {
+  readonly address?: ToolAddress;
+  readonly owner: Owner;
+  readonly integration: IntegrationSlug;
+  readonly connection: ConnectionName;
+  readonly pluginId: string;
+  readonly name: ToolName;
+  readonly description: string;
+  readonly inputSchema?: unknown;
+  readonly outputSchema?: unknown;
+  readonly definitions: ReadonlyMap<string, unknown>;
+  readonly sourceRevision?: string;
+}
+
+const buildToolSchemaManifest = (input: ToolManifestInput): Effect.Effect<ToolSchemaManifest> =>
+  Effect.gen(function* () {
+    const address =
+      input.address ?? toolAddress(input.owner, input.integration, input.connection, input.name);
+    const path = toolManifestPath(String(address));
+    const referencedDefinitions = collectReferencedDefinitions(
+      [input.inputSchema, input.outputSchema],
+      input.definitions,
+    );
+    const [descriptorHash, inputSchemaHash, outputSchemaHash, definitionSetHash, indexFingerprint] =
+      yield* Effect.all(
+        [
+          hashManifestValue({
+            path,
+            name: String(input.name),
+            description: input.description,
+            integration: String(input.integration),
+            connection: String(input.connection),
+            pluginId: input.pluginId,
+          }),
+          hashManifestValue(input.inputSchema),
+          hashManifestValue(input.outputSchema),
+          hashManifestValue(referencedDefinitions),
+          hashManifestValue({
+            path,
+            name: String(input.name),
+            description: input.description,
+            inputSchema: input.inputSchema,
+            outputSchema: input.outputSchema,
+            schemaDefinitions: referencedDefinitions,
+          }),
+        ],
+        { concurrency: 5 },
+      );
+
+    return ToolSchemaManifest.make({
+      address,
+      path,
+      owner: input.owner,
+      integration: String(input.integration),
+      connection: String(input.connection),
+      pluginId: input.pluginId,
+      name: String(input.name),
+      description: input.description,
+      descriptorHash,
+      inputSchemaHash,
+      outputSchemaHash,
+      definitionSetHash,
+      indexFingerprint,
+      fingerprintVersion: TOOL_SCHEMA_MANIFEST_FINGERPRINT_VERSION,
+      sourceRevision: input.sourceRevision,
+    });
+  });
+
+const rowToToolSchemaManifest = (row: ToolSchemaManifestRow): ToolSchemaManifest => {
+  const owner = row.owner as Owner;
+  const integration = IntegrationSlug.make(row.integration);
+  const connection = ConnectionName.make(row.connection);
+  const name = ToolName.make(row.name);
+  return ToolSchemaManifest.make({
+    address: toolAddress(owner, integration, connection, name),
+    path: row.path,
+    owner,
+    integration: row.integration,
+    connection: row.connection,
+    pluginId: row.plugin_id,
+    name: row.name,
+    description: row.description,
+    descriptorHash: row.descriptor_hash,
+    inputSchemaHash: row.input_schema_hash,
+    outputSchemaHash: row.output_schema_hash,
+    definitionSetHash: row.definition_set_hash,
+    indexFingerprint: row.index_fingerprint,
+    fingerprintVersion: row.fingerprint_version,
+    sourceRevision: row.source_revision ?? undefined,
+  });
+};
+
+const manifestToPolicyTool = (manifest: ToolSchemaManifest): Tool => ({
+  address: manifest.address,
+  owner: manifest.owner as Owner,
+  integration: IntegrationSlug.make(manifest.integration),
+  connection: ConnectionName.make(manifest.connection),
+  name: ToolName.make(manifest.name),
+  pluginId: manifest.pluginId,
+  description: manifest.description,
+});
+
+const connectionToolSourceRevision = (
+  integrationRow: IntegrationRow,
+  connectionRow: ConnectionRow | null,
+): Effect.Effect<string> =>
+  hashManifestValue({
+    integration: integrationRow.slug,
+    pluginId: integrationRow.plugin_id,
+    config: decodeJsonColumn(integrationRow.config),
+    connection:
+      connectionRow === null
+        ? null
+        : {
+            integration: connectionRow.integration,
+            name: connectionRow.name,
+            template: connectionRow.template,
+            provider: connectionRow.provider,
+            itemIds: decodeJsonColumn(connectionRow.item_ids),
+            oauthClient: connectionRow.oauth_client,
+            oauthClientOwner: connectionRow.oauth_client_owner,
+            oauthScope: connectionRow.oauth_scope,
+          },
+  });
 
 // ---------------------------------------------------------------------------
 // Condition builders
@@ -1786,12 +1994,74 @@ const makePluginStorageFacade = (input: {
       Effect.map((row) => (row ? pluginStorageEntryFromRow<T>(row) : null)),
     );
 
+  const getManyVisible = <T>(collection: string, keys: readonly string[]) =>
+    Effect.gen(function* () {
+      const entries = new Map<string, PluginStorageEntry<T>>();
+      const uniqueKeys = [...new Set(keys)];
+      for (
+        let offset = 0;
+        offset < uniqueKeys.length;
+        offset += PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE
+      ) {
+        const batchKeys = uniqueKeys.slice(offset, offset + PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE);
+        const rows = yield* input.core.findMany("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("plugin_id", "=", input.pluginId),
+              b("collection", "=", collection),
+              b("key", "in", batchKeys),
+            ),
+        });
+        for (const row of sortByOwnerPrecedence(rows)) {
+          if (!entries.has(row.key)) entries.set(row.key, pluginStorageEntryFromRow<T>(row));
+        }
+      }
+      return new Map(
+        uniqueKeys.flatMap((key) => {
+          const entry = entries.get(key);
+          return entry === undefined ? [] : [[key, entry] as const];
+        }),
+      );
+    });
+
   const getForOwnerImpl = <T>(owner: Owner, collection: string, key: string) =>
     input.core
       .findFirst("plugin_storage", {
         where: whereOwner(owner, collection, key),
       })
       .pipe(Effect.map((row) => (row ? pluginStorageEntryFromRow<T>(row) : null)));
+
+  const getManyForOwnerImpl = <T>(owner: Owner, collection: string, keys: readonly string[]) =>
+    Effect.gen(function* () {
+      const entries = new Map<string, PluginStorageEntry<T>>();
+      const uniqueKeys = [...new Set(keys)];
+      const os = ownerSubject(owner);
+      const subject = os ? os.subject : ORG_SUBJECT;
+      for (
+        let offset = 0;
+        offset < uniqueKeys.length;
+        offset += PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE
+      ) {
+        const batchKeys = uniqueKeys.slice(offset, offset + PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE);
+        const rows = yield* input.core.findMany("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("plugin_id", "=", input.pluginId),
+              b("collection", "=", collection),
+              b("key", "in", batchKeys),
+              b("owner", "=", owner),
+              b("subject", "=", subject),
+            ),
+        });
+        for (const row of rows) entries.set(row.key, pluginStorageEntryFromRow<T>(row));
+      }
+      return new Map(
+        uniqueKeys.flatMap((key) => {
+          const entry = entries.get(key);
+          return entry === undefined ? [] : [[key, entry] as const];
+        }),
+      );
+    });
 
   const putImpl = <T>(owner: Owner, collection: string, key: string, data: unknown) =>
     Effect.gen(function* () {
@@ -2015,9 +2285,23 @@ const makePluginStorageFacade = (input: {
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>> | null,
           StorageFailure
         >,
+      getMany: (storageInput) =>
+        getManyVisible(definition.name, storageInput.keys) as Effect.Effect<
+          ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<typeof definition>>>,
+          StorageFailure
+        >,
       getForOwner: (storageInput) =>
         getForOwnerImpl(storageInput.owner, definition.name, storageInput.key) as Effect.Effect<
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>> | null,
+          StorageFailure
+        >,
+      getManyForOwner: (storageInput) =>
+        getManyForOwnerImpl(
+          storageInput.owner,
+          definition.name,
+          storageInput.keys,
+        ) as Effect.Effect<
+          ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<typeof definition>>>,
           StorageFailure
         >,
       list: (storageInput) => queryCollection(definition, { keyPrefix: storageInput?.keyPrefix }),
@@ -2031,6 +2315,15 @@ const makePluginStorageFacade = (input: {
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>>,
           StorageFailure
         >,
+      putMany: (storageInput) =>
+        putManyImpl(
+          storageInput.owner,
+          storageInput.entries.map((entry) => ({
+            collection: definition.name,
+            key: entry.key,
+            data: entry.data,
+          })),
+        ),
       query: (storageInput) => queryCollection(definition, storageInput),
       count: (storageInput) =>
         queryCollection(definition, storageInput).pipe(Effect.map((rows) => rows.length)),
@@ -2149,10 +2442,18 @@ const makePluginStorageFacade = (input: {
           }),
       },
       remove: (storageInput) => removeImpl(storageInput.owner, definition.name, storageInput.key),
+      removeMany: (storageInput) =>
+        removeManyImpl(
+          storageInput.owner,
+          storageInput.keys.map((key) => ({ collection: definition.name, key })),
+        ),
     }),
     get: (storageInput) => getVisible(storageInput.collection, storageInput.key),
+    getMany: (storageInput) => getManyVisible(storageInput.collection, storageInput.keys),
     getForOwner: (storageInput) =>
       getForOwnerImpl(storageInput.owner, storageInput.collection, storageInput.key),
+    getManyForOwner: (storageInput) =>
+      getManyForOwnerImpl(storageInput.owner, storageInput.collection, storageInput.keys),
     list: (storageInput) =>
       Effect.gen(function* () {
         const rows = yield* input.core.findMany("plugin_storage", {
@@ -2350,25 +2651,12 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     const fuma = makeFumaClient(rootDb);
     const core = makeCoreDb(fuma);
     const blobs = config.blobs ?? makeFumaBlobStore(fuma);
-    const typeScriptPreviewStore =
-      config.keyValueStore === undefined
-        ? undefined
-        : KeyValueStore.toSchemaStore(config.keyValueStore, ToolTypeScriptPreviewCacheEntry);
-    const typeScriptPreviewCache = yield* Cache.make({
-      capacity: 2_048,
-      timeToLive: Duration.minutes(10),
-      lookup: (key: string) =>
-        Effect.gen(function* () {
-          if (typeScriptPreviewStore === undefined) return null;
-
-          const entry = yield* typeScriptPreviewStore
-            .get(key)
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isNone(entry)) return null;
-
-          return entry.value.preview;
-        }),
-    });
+    const cacheStore = config.cache ?? makeMemoryCacheStore();
+    const typeScriptPreviewStore = KeyValueStore.toSchemaStore(
+      cacheStore,
+      ToolTypeScriptPreviewCacheEntry,
+    );
+    const toolSchemaViewStore = KeyValueStore.toSchemaStore(cacheStore, ToolSchemaViewCacheEntry);
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
 
     // Runtime-observed output shapes ("muscle memory"): learned on the
@@ -2419,8 +2707,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           outputSchema: input.outputSchema,
           definitions,
         });
-        const cached = yield* Cache.get(typeScriptPreviewCache, key);
-        if (cached !== null) return cached;
+        const cached = yield* typeScriptPreviewStore
+          .get(key)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        if (Option.isSome(cached)) return cached.value.preview;
 
         const preview = yield* Effect.tryPromise({
           try: () =>
@@ -2432,16 +2722,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           catch: (cause) =>
             storageFailureFromUnknown("Failed to build tool TypeScript preview", cause),
         });
-        yield* Cache.set(typeScriptPreviewCache, key, preview);
-        if (typeScriptPreviewStore !== undefined) {
-          yield* typeScriptPreviewStore
-            .set(key, {
-              version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-              compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-              preview,
-            })
-            .pipe(Effect.ignore);
-        }
+        yield* typeScriptPreviewStore
+          .set(key, {
+            version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+            compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+            preview,
+          })
+          .pipe(Effect.ignore);
         return preview;
       });
 
@@ -2549,6 +2836,30 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       }
       return Object.assign(Object.create(provider) as CredentialProvider, bounded);
     };
+
+    const buildStaticToolSchemaManifest = (
+      entry: StaticTools,
+    ): Effect.Effect<ToolSchemaManifest> => {
+      const tool = staticToolToTool(entry);
+      return buildToolSchemaManifest({
+        address: tool.address,
+        owner: tool.owner,
+        integration: tool.integration,
+        connection: tool.connection,
+        pluginId: tool.pluginId,
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: tool.outputSchema,
+        definitions: new Map(),
+      });
+    };
+
+    const staticToolManifestCache = yield* Cache.make({
+      capacity: 2_048,
+      timeToLive: Duration.minutes(10),
+      lookup: buildStaticToolSchemaManifest,
+    });
 
     const registerCredentialProvider = (
       provider: CredentialProvider,
@@ -3761,6 +4072,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           const where = (b: AnyCb) => b("integration", "=", String(slug));
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
+          yield* core.deleteMany("tool_schema_manifest", { where });
           yield* core.deleteMany("connection", { where });
           yield* core.deleteMany("integration", {
             where: (b: AnyCb) => b("slug", "=", String(slug)),
@@ -3989,6 +4301,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Effect.gen(function* () {
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
+              yield* core.deleteMany("tool_schema_manifest", { where });
               yield* stampSynced(existingRow);
             }),
           );
@@ -4001,6 +4314,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Effect.gen(function* () {
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
+              yield* core.deleteMany("tool_schema_manifest", { where });
               yield* stampSynced(existingRow);
             }),
           );
@@ -4090,13 +4404,55 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           schema,
           created_at: now,
         }));
+        const definitionMap = new Map(Object.entries(result.definitions ?? {}));
+        const sourceRevision = yield* connectionToolSourceRevision(integrationRow, existingRow);
+        const manifestRows = yield* Effect.forEach(
+          result.tools,
+          (tool: ToolDef) =>
+            buildToolSchemaManifest({
+              owner,
+              integration: ref.integration,
+              connection: ref.name,
+              pluginId: integrationRow.plugin_id,
+              name: tool.name,
+              description: tool.description ?? "",
+              inputSchema: tool.inputSchema,
+              outputSchema: tool.outputSchema,
+              definitions: definitionMap,
+              sourceRevision,
+            }).pipe(
+              Effect.map((manifest) => ({
+                tenant: keys.tenant,
+                owner: keys.owner,
+                subject: keys.subject,
+                integration: String(ref.integration),
+                connection: String(ref.name),
+                plugin_id: integrationRow.plugin_id,
+                name: String(tool.name),
+                path: manifest.path,
+                description: manifest.description,
+                descriptor_hash: manifest.descriptorHash,
+                input_schema_hash: manifest.inputSchemaHash,
+                output_schema_hash: manifest.outputSchemaHash,
+                definition_set_hash: manifest.definitionSetHash,
+                index_fingerprint: manifest.indexFingerprint,
+                fingerprint_version: manifest.fingerprintVersion,
+                source_revision: manifest.sourceRevision ?? null,
+                created_at: now,
+                updated_at: now,
+              })),
+            ),
+          { concurrency: 16 },
+        );
 
         yield* persistCatalog(
           Effect.gen(function* () {
             yield* core.deleteMany("tool", { where });
             yield* core.deleteMany("definition", { where });
+            yield* core.deleteMany("tool_schema_manifest", { where });
             yield* core.createMany("tool", toolRows);
             yield* core.createMany("definition", definitionRows);
+            yield* core.createMany("tool_schema_manifest", manifestRows);
             yield* stampSynced(existingRow);
           }),
         );
@@ -5158,6 +5514,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             );
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
+          yield* core.deleteMany("tool_schema_manifest", { where });
           yield* core.deleteMany("connection", {
             where: (b: AnyCb) =>
               b.and(
@@ -6037,6 +6394,52 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         return tools;
       });
 
+    const toolsManifest = (
+      filter?: ToolListFilter,
+    ): Effect.Effect<readonly ToolSchemaManifest[], StorageFailure> =>
+      Effect.gen(function* () {
+        const rows = yield* core.findMany("tool_schema_manifest", {
+          where: (b: AnyCb) =>
+            b.and(
+              filter?.integration === undefined
+                ? true
+                : b("integration", "=", String(filter.integration)),
+              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
+              filter?.connection === undefined
+                ? true
+                : b("connection", "=", String(filter.connection)),
+            ),
+        });
+        const manifests = rows.map(rowToToolSchemaManifest);
+
+        const staticManifests = yield* Effect.forEach(
+          [...staticTools.values()],
+          (entry) => {
+            return Cache.get(staticToolManifestCache, entry);
+          },
+          { concurrency: 16 },
+        );
+
+        const includeBlocked = filter?.includeBlocked ?? false;
+        const policyRows = yield* core.findMany("tool_policy", {});
+        const visible: ToolSchemaManifest[] = [];
+        for (const manifest of [...manifests, ...staticManifests]) {
+          const tool = manifestToPolicyTool(manifest);
+          if (!matchesToolFilter(tool, filter)) continue;
+          if (!includeBlocked) {
+            const effective = resolveEffectivePolicy(
+              normalizedPolicyId(tool),
+              policyRows,
+              ownerRankForRow,
+            );
+            if (effective.action === "block") continue;
+          }
+          visible.push(manifest);
+        }
+
+        return visible.sort((a, b) => String(a.address).localeCompare(String(b.address)));
+      });
+
     const toolSchema = (
       address: ToolAddress,
     ): Effect.Effect<ToolSchemaView | null, StorageFailure> =>
@@ -6051,21 +6454,44 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             tool.annotations?.requiresApproval,
           );
           if (effective.action === "block") return null;
-          const preview = yield* buildCachedToolTypeScriptPreview({
+          const key = yield* toolSchemaViewCacheKey({
+            address: String(address),
+            name: String(tool.name),
+            description: tool.description,
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
-            defs: new Map(),
-          }).pipe(Effect.option);
-          return ToolSchemaView.make({
+            definitions: {},
+          });
+          const cached = yield* toolSchemaViewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
+          const preview = Option.getOrUndefined(
+            yield* buildCachedToolTypeScriptPreview({
+              inputSchema: tool.inputSchema,
+              outputSchema: tool.outputSchema,
+              defs: new Map(),
+            }).pipe(Effect.option),
+          );
+          const view = ToolSchemaView.make({
             address,
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
-            inputTypeScript: Option.getOrUndefined(preview)?.inputTypeScript,
-            outputTypeScript: Option.getOrUndefined(preview)?.outputTypeScript,
-            typeScriptDefinitions: Option.getOrUndefined(preview)?.typeScriptDefinitions,
+            inputTypeScript: preview?.inputTypeScript,
+            outputTypeScript: preview?.outputTypeScript,
+            typeScriptDefinitions: preview?.typeScriptDefinitions,
           });
+          yield* toolSchemaViewStore
+            .set(key, {
+              version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+              typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+              typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+              view,
+            })
+            .pipe(Effect.ignore);
+          return view;
         }
 
         const parsed = parseToolAddress(String(address));
@@ -6137,17 +6563,30 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         });
         const defs = new Map<string, unknown>();
         for (const def of definitionRows) defs.set(def.name, decodeJsonColumn(def.schema));
-
         const referenced = collectReferencedDefinitions([inputSchema, effectiveOutputSchema], defs);
         const referencedDefs = new Map<string, unknown>(Object.entries(referenced));
-        const preview = yield* buildCachedToolTypeScriptPreview({
+        const key = yield* toolSchemaViewCacheKey({
+          address: String(address),
+          name: String(tool.name),
+          description: tool.description,
           inputSchema,
           outputSchema: effectiveOutputSchema,
-          defs: referencedDefs,
-        }).pipe(Effect.option);
+          definitions: referenced,
+        });
+        const cached = yield* toolSchemaViewStore
+          .get(key)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        if (Option.isSome(cached)) return cached.value.view;
 
-        const view = preview;
-        return ToolSchemaView.make({
+        const preview = Option.getOrUndefined(
+          yield* buildCachedToolTypeScriptPreview({
+            inputSchema,
+            outputSchema: effectiveOutputSchema,
+            defs: referencedDefs,
+          }).pipe(Effect.option),
+        );
+
+        const view = ToolSchemaView.make({
           address,
           name: tool.name,
           description: tool.description,
@@ -6163,10 +6602,19 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Object.keys(referenced).length > 0
               ? (referenced as Record<string, unknown>)
               : undefined,
-          inputTypeScript: Option.getOrUndefined(view)?.inputTypeScript,
-          outputTypeScript: Option.getOrUndefined(view)?.outputTypeScript,
-          typeScriptDefinitions: Option.getOrUndefined(view)?.typeScriptDefinitions,
+          inputTypeScript: preview?.inputTypeScript,
+          outputTypeScript: preview?.outputTypeScript,
+          typeScriptDefinitions: preview?.typeScriptDefinitions,
         });
+        yield* toolSchemaViewStore
+          .set(key, {
+            version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+            typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+            typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+            view,
+          })
+          .pipe(Effect.ignore);
+        return view;
       });
 
     // ------------------------------------------------------------------
@@ -7466,6 +7914,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       oauth,
       tools: {
         list: toolsList,
+        manifest: toolsManifest,
         schema: toolSchema,
       },
       providers: {
@@ -7492,6 +7941,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       execute,
       close,
       owner: ownerBinding,
+      cache: cacheStore,
     };
 
     const toExecutor = (value: unknown): Executor<TPlugins> => value as Executor<TPlugins>;

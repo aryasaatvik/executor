@@ -68,7 +68,7 @@ export function SearchPage() {
     const exit = await doReindex({ reactivityKeys: [] });
     setReindexing(false);
     if (Exit.isFailure(exit)) {
-      setNotice("Reindex failed — a full-catalog reconcile can exceed the Worker CPU limit.");
+      setNotice("Reindex failed — a full-catalog index run can exceed the Worker CPU limit.");
       return;
     }
     setNotice("Reindex complete.");

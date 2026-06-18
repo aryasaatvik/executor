@@ -28,7 +28,7 @@ interface OpenAiEmbeddingsResponse {
   readonly data?: readonly { readonly embedding?: readonly number[] }[];
 }
 
-const chunk = <A>(items: readonly A[], size: number): readonly (readonly A[])[] => {
+const chunk = <A>(items: readonly A[], size: number): A[][] => {
   const safe = Math.max(1, Math.floor(size));
   const out: A[][] = [];
   for (let i = 0; i < items.length; i += safe) out.push(items.slice(i, i + safe));
@@ -42,7 +42,7 @@ export const makeOpenAiCompatibleEmbedder = (
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
 
   const embedBatch = (
-    texts: readonly string[],
+    texts: string[],
   ): Effect.Effect<readonly (readonly number[])[], SemanticSearchError> => {
     if (texts.length === 0) return Effect.succeed([]);
     return Effect.gen(function* () {
@@ -57,7 +57,7 @@ export const makeOpenAiCompatibleEmbedder = (
             // `dimensions` is honored by OpenAI + most compatible servers; ignored otherwise.
             body: JSON.stringify({
               model: options.model,
-              input: [...texts],
+              input: texts,
               dimensions: options.dimensions,
             }),
           }),

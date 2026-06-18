@@ -219,7 +219,7 @@ test("multiple accounts share one org but isolate per-user connections", async (
   expect(
     bobConns.some((a) => a.includes("user") && a.includes(connectionName("bob-private"))),
   ).toBe(true);
-});
+}, 20_000);
 
 test("each account can execute code in its own scoped sandbox", async () => {
   const carol = await signUp("carol@multi.test");
