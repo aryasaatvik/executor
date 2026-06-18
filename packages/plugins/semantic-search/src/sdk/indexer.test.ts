@@ -206,6 +206,70 @@ describe("indexer", () => {
     }),
   );
 
+  it.effect("limits seeded tools when maxTools is provided", () =>
+    Effect.gen(function* () {
+      const executor = {
+        tools: {
+          list: () =>
+            Effect.succeed([
+              {
+                address: "tools.github.repos.get" as never,
+                name: "repos.get" as never,
+                integration: "github" as never,
+                description: "Get a repository",
+                owner,
+                connection: "default" as never,
+                pluginId: "test",
+              },
+              {
+                address: "tools.stripe.customers.list" as never,
+                name: "customers.list" as never,
+                integration: "stripe" as never,
+                description: "List customers",
+                owner,
+                connection: "default" as never,
+                pluginId: "test",
+              },
+              {
+                address: "tools.slack.chat.postMessage" as never,
+                name: "chat.postMessage" as never,
+                integration: "slack" as never,
+                description: "Post a message",
+                owner,
+                connection: "default" as never,
+                pluginId: "test",
+              },
+            ]),
+          schema: () => Effect.succeed(null),
+        },
+      } as unknown as Executor;
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
+      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const blobs = makeBlobs();
+      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+
+      const started = yield* startIndexRun({
+        ...base,
+        runId: "run-limited",
+        partitionCount: 1,
+        maxTools: 2,
+      });
+      const seeded = yield* seedIndexPartitionPage({
+        ...base,
+        runId: "run-limited",
+        partition: 0,
+        limit: 10,
+        maxTools: 2,
+      });
+
+      expect(started.total).toBe(2);
+      expect(seeded).toMatchObject({ processed: 2, changed: 0, unchanged: 0 });
+      expect(jobs.data.size).toBe(2);
+    }),
+  );
+
   it.effect("embeds only the chunks that fit the page budget and commits the job later", () =>
     Effect.gen(function* () {
       const runs = makeCollection<IndexRun>(indexRuns.name);

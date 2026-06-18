@@ -154,7 +154,7 @@ const makeSemanticSearchExtension = (deps: {
 
   startIndexRun: (
     executor: Executor,
-    input: { readonly runId: string; readonly partitionCount: number },
+    input: { readonly runId: string; readonly partitionCount: number; readonly maxTools?: number },
   ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
     deps.fingerprints &&
     deps.indexRuns &&
@@ -174,6 +174,7 @@ const makeSemanticSearchExtension = (deps: {
           lexicalStore: deps.lexicalStore,
           runId: input.runId,
           partitionCount: input.partitionCount,
+          maxTools: input.maxTools,
         })
       : notConfigured(),
 
@@ -205,7 +206,12 @@ const makeSemanticSearchExtension = (deps: {
 
   seedIndexPartitionPage: (
     executor: Executor,
-    input: { readonly runId: string; readonly partition: number; readonly limit?: number },
+    input: {
+      readonly runId: string;
+      readonly partition: number;
+      readonly limit?: number;
+      readonly maxTools?: number;
+    },
   ): Effect.Effect<IndexDiffPageResult, SemanticSearchError> =>
     deps.fingerprints &&
     deps.indexRuns &&
@@ -226,6 +232,7 @@ const makeSemanticSearchExtension = (deps: {
           runId: input.runId,
           partition: input.partition,
           limit: input.limit,
+          maxTools: input.maxTools,
         })
       : notConfigured(),
 

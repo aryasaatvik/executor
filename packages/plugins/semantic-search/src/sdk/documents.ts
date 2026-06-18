@@ -3,7 +3,7 @@ import { Effect } from "effect";
 
 import type { ToolDocumentInput } from "./chunker";
 import { SemanticSearchError } from "./errors";
-import type { FingerprintInput } from "./fingerprint";
+import { cyrb53, type FingerprintInput } from "./fingerprint";
 
 const ADDRESS_PREFIX = "tools.";
 
@@ -78,6 +78,29 @@ export const buildLexicalText = (doc: ToolDocumentInput): string => {
 export const addressToPath = (address: string): string =>
   address.startsWith(ADDRESS_PREFIX) ? address.slice(ADDRESS_PREFIX.length) : address;
 
+export interface ListToolDescriptorsOptions {
+  readonly maxTools?: number;
+}
+
+const selectToolDescriptors = (
+  tools: readonly Tool[],
+  options?: ListToolDescriptorsOptions,
+): readonly Tool[] => {
+  const sorted = [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
+  const maxTools = options?.maxTools;
+  if (maxTools === undefined) return sorted;
+  const limit = Math.max(0, Math.floor(maxTools));
+  if (limit >= sorted.length) return sorted;
+  return [...sorted]
+    .sort((a, b) => {
+      const left = cyrb53(addressToPath(String(a.address)));
+      const right = cyrb53(addressToPath(String(b.address)));
+      return left === right ? String(a.address).localeCompare(String(b.address)) : left - right;
+    })
+    .slice(0, limit)
+    .sort((a, b) => String(a.address).localeCompare(String(b.address)));
+};
+
 /** List the live tool descriptors, stably sorted by address.
  *
  *  Cheap — descriptors only, NO per-tool schema fetch — so it is safe to call
@@ -86,14 +109,13 @@ export const addressToPath = (address: string): string =>
  *  even though `tools.list` has no native pagination. */
 export const listToolDescriptors = (
   executor: Executor,
+  options?: ListToolDescriptorsOptions,
 ): Effect.Effect<readonly Tool[], SemanticSearchError> =>
   executor.tools.list({ includeAnnotations: false }).pipe(
     Effect.mapError(
       (cause) => new SemanticSearchError({ message: "Failed to list tools for indexing.", cause }),
     ),
-    Effect.map((tools) =>
-      [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address))),
-    ),
+    Effect.map((tools) => selectToolDescriptors(tools, options)),
   );
 
 /** Collect `ToolDocumentInput` for a single tool descriptor.

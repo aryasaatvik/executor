@@ -55,6 +55,7 @@ interface IndexDeps extends IndexStores {
 export interface StartIndexRunInput {
   readonly runId: string;
   readonly partitionCount: number;
+  readonly maxTools?: number;
 }
 
 export interface StartIndexRunResult {
@@ -68,6 +69,7 @@ export interface IndexPageInput {
   readonly runId: string;
   readonly partition: number;
   readonly limit?: number;
+  readonly maxTools?: number;
   readonly materializeConcurrency?: number;
   readonly maxChunks?: number;
   readonly maxEstimatedInputTokens?: number;
@@ -347,7 +349,7 @@ export const startIndexRun = (
 ): Effect.Effect<StartIndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const partitionCount = Math.max(1, Math.floor(input.partitionCount));
-    const descriptors = yield* listToolDescriptors(input.executor);
+    const descriptors = yield* listToolDescriptors(input.executor, { maxTools: input.maxTools });
     const createdAt = nowIso();
 
     yield* input.runs
@@ -395,7 +397,7 @@ export const seedIndexPartitionPage = (
       });
     }
 
-    const descriptors = yield* listToolDescriptors(input.executor);
+    const descriptors = yield* listToolDescriptors(input.executor, { maxTools: input.maxTools });
     const partitionDescriptors = descriptors
       .map((tool, ordinal) => ({ tool, ordinal, path: addressToPath(String(tool.address)) }))
       .filter(({ path }) => partitionForPath(path, run.data.partitionCount) === input.partition);
@@ -981,6 +983,7 @@ export const runIndexRun = (
     readonly runId: string;
     readonly partitionCount: number;
     readonly pageLimit?: number;
+    readonly maxTools?: number;
   },
 ): Effect.Effect<IndexRunResult, SemanticSearchError> =>
   Effect.gen(function* () {
