@@ -69,6 +69,9 @@ describe("toolSchemaViewCacheKey", () => {
           inputSchema: { type: "object", properties: { pet: { type: "string" } } },
         }),
       ).not.toBe(sameKey);
+      expect(yield* toolSchemaViewCacheKey({ ...base, includeTypeScript: false })).not.toBe(
+        sameKey,
+      );
     }),
   );
 });
