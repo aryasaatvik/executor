@@ -91,6 +91,9 @@ const MCP_STREAM_REQUEST_IDS_KEY_PREFIX = "__mcp_stream_reqs__:";
 const STORAGE_DELETE_CHUNK_SIZE = 128;
 const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
 
+const isStandaloneSseGet = (request: Request): boolean =>
+  request.method === "GET" && (request.headers.get("accept") ?? "").includes("text/event-stream");
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -344,6 +347,45 @@ export abstract class McpSessionDOBase<
     }
   }
 
+  private requestAttrs(request: Request): Record<string, unknown> {
+    return {
+      "mcp.request.method": request.method,
+      "mcp.request.session_id_present": !!request.headers.get("mcp-session-id"),
+      "mcp.request.accept": request.headers.get("accept") ?? "",
+      "mcp.request.content_type": request.headers.get("content-type") ?? "",
+      "mcp.request.content_length": request.headers.get("content-length") ?? "",
+      "mcp.request.last_event_id_present": !!request.headers.get("last-event-id"),
+      "mcp.request.standalone_sse_get": isStandaloneSseGet(request),
+    };
+  }
+
+  private logRequestCompleted(input: {
+    readonly request: Request;
+    readonly response: Response;
+    readonly startedAt: number;
+  }): void {
+    console.info(
+      JSON.stringify({
+        event: "mcp_session_request",
+        sessionId: this.sessionId,
+        method: input.request.method,
+        accept: input.request.headers.get("accept") ?? "",
+        contentType: input.request.headers.get("content-type") ?? "",
+        contentLength: input.request.headers.get("content-length") ?? "",
+        sessionIdPresent: !!input.request.headers.get("mcp-session-id"),
+        lastEventIdPresent: !!input.request.headers.get("last-event-id"),
+        standaloneSseGet: isStandaloneSseGet(input.request),
+        responseStatus: input.response.status,
+        responseContentType: input.response.headers.get("content-type") ?? "",
+        eventStoreEnabled: true,
+        enableJsonResponse: this.transportJsonResponseMode ?? false,
+        initialized: this.initialized,
+        hasTransport: !!this.transport,
+        responseInitMs: Date.now() - input.startedAt,
+      }),
+    );
+  }
+
   private clearSessionState(): Effect.Effect<void> {
     return Effect.promise(async () => {
       this.sessionMeta = null;
@@ -523,10 +565,7 @@ export abstract class McpSessionDOBase<
       return "restored" as const;
     }).pipe(
       Effect.withSpan("McpSessionDO.restoreRuntime", {
-        attributes: {
-          "mcp.request.method": request.method,
-          "mcp.request.session_id_present": !!request.headers.get("mcp-session-id"),
-        },
+        attributes: self.requestAttrs(request),
       }),
       // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: cold DO restore is re-entered from Promise-only Durable Object method
       Effect.orDie,
@@ -674,6 +713,7 @@ export abstract class McpSessionDOBase<
 
   async handleRequest(request: Request): Promise<Response> {
     const methodEnteredAt = Date.now();
+    const startedAt = methodEnteredAt;
     // Wrap the dispatch in an Effect span so every DO request — not just
     // the rare new-session `init()` — shows up in Axiom. Basic attributes
     // only (method, session-id presence, response status); rich client
@@ -697,10 +737,20 @@ export abstract class McpSessionDOBase<
 
       return yield* self.dispatchRequest(request).pipe(
         Effect.tap((response) =>
-          Effect.annotateCurrentSpan({
-            "mcp.response.status_code": response.status,
-            "mcp.response.content_type": response.headers.get("content-type") ?? "",
-            "mcp.transport.enable_json_response": self.transportJsonResponseMode ?? false,
+          Effect.gen(function* () {
+            yield* Effect.annotateCurrentSpan({
+              "mcp.response.status_code": response.status,
+              "mcp.response.content_type": response.headers.get("content-type") ?? "",
+              "mcp.transport.enable_json_response": self.transportJsonResponseMode ?? false,
+              "mcp.transport.event_store_enabled": true,
+            });
+            yield* Effect.sync(() =>
+              self.logRequestCompleted({
+                request,
+                response,
+                startedAt,
+              }),
+            );
           }),
         ),
         Effect.ensuring(
@@ -716,10 +766,7 @@ export abstract class McpSessionDOBase<
       // it ends so the flushed span names the frame.
       Effect.tapCause((cause) => self.recordCauseOnSpan(cause)),
       Effect.withSpan("McpSessionDO.handleRequest", {
-        attributes: {
-          "mcp.request.method": request.method,
-          "mcp.request.session_id_present": !!request.headers.get("mcp-session-id"),
-        },
+        attributes: self.requestAttrs(request),
       }),
       (eff) => this.withTelemetry(eff, incoming),
       (eff) => self.withSpanFlush(eff),
@@ -877,17 +924,14 @@ export abstract class McpSessionDOBase<
       );
       const response = yield* transport.handleRequest(request).pipe(
         Effect.withSpan("McpSessionDO.transport.handleRequest", {
-          attributes: {
-            "mcp.request.method": request.method,
-            "mcp.request.content_type": request.headers.get("content-type") ?? "",
-            "mcp.request.content_length": request.headers.get("content-length") ?? "",
-          },
+          attributes: self.requestAttrs(request),
         }),
       );
       yield* Effect.annotateCurrentSpan({
         "mcp.response.status_code": response.status,
         "mcp.response.content_type": response.headers.get("content-type") ?? "",
         "mcp.transport.enable_json_response": self.transportJsonResponseMode ?? false,
+        "mcp.transport.event_store_enabled": true,
       });
       if (request.method === "DELETE") {
         yield* Effect.promise(() => self.cleanup()).pipe(Effect.withSpan("mcp.session.cleanup"));
