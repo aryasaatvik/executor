@@ -32,6 +32,7 @@
 // ---------------------------------------------------------------------------
 
 import { Context, Effect, Option } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 
 import {
   createExecutor,
@@ -205,6 +206,7 @@ export const makeScopedExecutor = <
     const { db, blobs } = yield* DbProvider;
     const { plugins: pluginsFactory } = yield* PluginsProvider;
     const config = yield* HostConfig;
+    const keyValueStore = yield* Effect.serviceOption(KeyValueStore.KeyValueStore);
     // Explicit config wins; otherwise fall back to the request origin if a host
     // provided one (HTTP middleware / MCP session DO). Stays `undefined` for
     // non-request callers — `coreTools.webBaseUrl` is optional and only the
@@ -253,6 +255,10 @@ export const makeScopedExecutor = <
       subject: Subject.make(accountId),
       db,
       blobs,
+      ...Option.match(keyValueStore, {
+        onNone: () => ({}),
+        onSome: (store) => ({ keyValueStore: store }),
+      }),
       plugins,
       httpClientLayer,
       onElicitation: "accept-all",

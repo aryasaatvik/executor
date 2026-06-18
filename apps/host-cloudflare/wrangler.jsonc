@@ -33,6 +33,12 @@
       "bucket_name": "executor-blobs",
     },
   ],
+  // Optional durable cache for derived executor artifacts. Create with
+  // `wrangler kv namespace create executor-cache`
+  // and paste the returned id here.
+  // "kv_namespaces": [
+  //   { "binding": "CACHE", "id": "..." },
+  // ],
   // Workers Analytics Engine — the opt-in sink for execution metrics. Uncomment
   // to enable: each finished execution/tool call writes a data point (queryable
   // via Cloudflare's GraphQL Analytics API). The plugin is inert until this
