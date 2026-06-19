@@ -1,9 +1,9 @@
-import type { Executor, Tool } from "@executor-js/sdk/core";
+import type { Executor, Tool, ToolSchemaManifest } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import type { ToolDocumentInput } from "./chunker";
 import { SemanticSearchError } from "./errors";
-import { cyrb53, type FingerprintInput } from "./fingerprint";
+import { cyrb53 } from "./fingerprint";
 
 const ADDRESS_PREFIX = "tools.";
 
@@ -86,12 +86,15 @@ const selectToolDescriptors = (
   tools: readonly Tool[],
   options?: ListToolDescriptorsOptions,
 ): readonly Tool[] => {
-  const sorted = [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
   const maxTools = options?.maxTools;
-  if (maxTools === undefined) return sorted;
+  if (maxTools === undefined) {
+    return [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
+  }
   const limit = Math.max(0, Math.floor(maxTools));
-  if (limit >= sorted.length) return sorted;
-  return [...sorted]
+  if (limit >= tools.length) {
+    return [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
+  }
+  return [...tools]
     .sort((a, b) => {
       const left = cyrb53(addressToPath(String(a.address)));
       const right = cyrb53(addressToPath(String(b.address)));
@@ -99,6 +102,28 @@ const selectToolDescriptors = (
     })
     .slice(0, limit)
     .sort((a, b) => String(a.address).localeCompare(String(b.address)));
+};
+
+const selectToolManifests = (
+  manifests: readonly ToolSchemaManifest[],
+  options?: ListToolDescriptorsOptions,
+): readonly ToolSchemaManifest[] => {
+  const maxTools = options?.maxTools;
+  if (maxTools === undefined) {
+    return [...manifests].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  const limit = Math.max(0, Math.floor(maxTools));
+  if (limit >= manifests.length) {
+    return [...manifests].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return [...manifests]
+    .sort((a, b) => {
+      const left = cyrb53(a.path);
+      const right = cyrb53(b.path);
+      return left === right ? a.path.localeCompare(b.path) : left - right;
+    })
+    .slice(0, limit)
+    .sort((a, b) => a.path.localeCompare(b.path));
 };
 
 /** List the live tool descriptors, stably sorted by address.
@@ -116,6 +141,23 @@ export const listToolDescriptors = (
       (cause) => new SemanticSearchError({ message: "Failed to list tools for indexing.", cause }),
     ),
     Effect.map((tools) => selectToolDescriptors(tools, options)),
+  );
+
+/** List live tool schema manifests, stably sorted by indexed path.
+ *
+ *  This is the manifest tier for indexing: it carries precomputed raw-schema
+ *  fingerprints from source refresh, so scan/diff can avoid per-tool
+ *  `tools.schema(includeTypeScript: false)` reads entirely. */
+export const listToolManifests = (
+  executor: Executor,
+  options?: ListToolDescriptorsOptions,
+): Effect.Effect<readonly ToolSchemaManifest[], SemanticSearchError> =>
+  executor.tools.manifest().pipe(
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({ message: "Failed to list tool manifests for indexing.", cause }),
+    ),
+    Effect.map((manifests) => selectToolManifests(manifests, options)),
   );
 
 /** Collect `ToolDocumentInput` for a single tool descriptor.
@@ -172,63 +214,9 @@ export const collectDocsForTools = (
 ): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
   Effect.forEach(tools, (tool) => collectDocForTool(executor, tool), { concurrency: 16 });
 
-/** A tool paired with the raw-schema fingerprint input the diff hashes. */
-export interface ToolFingerprintInput {
-  readonly tool: IndexableToolDescriptor;
-  readonly input: FingerprintInput;
-}
-
-/** Collect the cheap fingerprint inputs for a set of tools — the raw JSON schema
- *  (roots + referenced `$defs`), NO TypeScript codegen.
- *
- *  This is the cheap tier the incremental reindex diffs on: it fetches each
- *  tool's schema with `includeTypeScript: false`, so the CPU-heavy
- *  `tools.schema` codegen is skipped entirely. Only tools whose fingerprint
- *  changed go on to pay the codegen (via `collectDocsForTools`). On any per-tool
- *  schema-fetch failure we degrade to an identity-only fingerprint (path + name
- *  + description), which simply re-classifies the tool as "changed" and lets the
- *  full pass retry it — never failing the whole batch for one tool.
- *
- *  Bounded concurrency (16) keeps the walk fast while avoiding unbounded fan-out. */
-export const collectFingerprintInputs = (
-  executor: Executor,
-  tools: readonly IndexableToolDescriptor[],
-): Effect.Effect<readonly ToolFingerprintInput[], SemanticSearchError> =>
-  Effect.forEach(
-    tools,
-    (tool) => {
-      const base: FingerprintInput = {
-        path: addressToPath(String(tool.address)),
-        name: String(tool.name),
-        description: stripHtml(String(tool.description ?? "")),
-      };
-      return executor.tools
-        .schema(tool.address as Tool["address"], { includeTypeScript: false })
-        .pipe(
-          Effect.map((view): ToolFingerprintInput => {
-            if (view === null) return { tool, input: base };
-            return {
-              tool,
-              input: {
-                ...base,
-                ...(view.inputSchema !== undefined ? { inputSchema: view.inputSchema } : {}),
-                ...(view.outputSchema !== undefined ? { outputSchema: view.outputSchema } : {}),
-                ...(view.schemaDefinitions !== undefined
-                  ? { schemaDefinitions: view.schemaDefinitions }
-                  : {}),
-              },
-            };
-          }),
-          // Degrade: schema fetch failed — fall back to an identity-only fingerprint.
-          Effect.catch(() => Effect.succeed<ToolFingerprintInput>({ tool, input: base })),
-        );
-    },
-    { concurrency: 16 },
-  );
-
 /** Collect the full `ToolDocumentInput` set from the live catalog (list + schema).
- *  Convenience for non-paged callers; paged reindex uses `listToolDescriptors`
- *  to slice, then `collectDocsForTools` on each slice. */
+ *  Convenience for non-paged callers; the queued indexer uses manifests for
+ *  scan/diff and only calls `collectDocForTool` for changed jobs. */
 export const collectToolDocumentInputs = (
   executor: Executor,
 ): Effect.Effect<readonly ToolDocumentInput[], SemanticSearchError> =>
