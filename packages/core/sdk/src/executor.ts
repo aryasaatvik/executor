@@ -726,7 +726,6 @@ const connectionToolSourceRevision = (
             oauthClient: connectionRow.oauth_client,
             oauthClientOwner: connectionRow.oauth_client_owner,
             oauthScope: connectionRow.oauth_scope,
-            providerState: decodeJsonColumn(connectionRow.provider_state),
           },
   });
 
@@ -1886,6 +1885,30 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       static: true,
     });
 
+    const buildStaticToolSchemaManifest = (
+      entry: StaticTools,
+    ): Effect.Effect<ToolSchemaManifest> => {
+      const tool = staticToolToTool(entry);
+      return buildToolSchemaManifest({
+        address: tool.address,
+        owner: tool.owner,
+        integration: tool.integration,
+        connection: tool.connection,
+        pluginId: tool.pluginId,
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        outputSchema: tool.outputSchema,
+        definitions: new Map(),
+      });
+    };
+
+    const staticToolManifestCache = yield* Cache.make({
+      capacity: 2_048,
+      timeToLive: Duration.minutes(10),
+      lookup: buildStaticToolSchemaManifest,
+    });
+
     const registerCredentialProvider = (
       provider: CredentialProvider,
       sourceLabel: string,
@@ -3034,19 +3057,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const staticManifests = yield* Effect.forEach(
           [...staticTools.values()],
           (entry) => {
-            const tool = staticToolToTool(entry);
-            return buildToolSchemaManifest({
-              address: tool.address,
-              owner: tool.owner,
-              integration: tool.integration,
-              connection: tool.connection,
-              pluginId: tool.pluginId,
-              name: tool.name,
-              description: tool.description,
-              inputSchema: tool.inputSchema,
-              outputSchema: tool.outputSchema,
-              definitions: new Map(),
-            });
+            return Cache.get(staticToolManifestCache, entry);
           },
           { concurrency: 16 },
         );
