@@ -6,8 +6,14 @@ const base = {
   path: "github.repos.get",
   name: "repos.get",
   description: "Get a GitHub repository by owner and name.",
-  inputTypeScript: "{ owner: string; repo: string }",
-  outputTypeScript: "{ id: number; full_name: string }",
+  inputSchema: {
+    type: "object",
+    properties: { owner: { type: "string" }, repo: { type: "string" } },
+  },
+  outputSchema: {
+    type: "object",
+    properties: { id: { type: "number" }, full_name: { type: "string" } },
+  },
 } as const;
 
 describe("fingerprintTool", () => {
@@ -23,22 +29,59 @@ describe("fingerprintTool", () => {
     expect(changed).not.toBe(original);
   });
 
-  it("changes when inputTypeScript changes", () => {
+  it("changes when inputSchema changes", () => {
     const original = fingerprintTool(base);
     const changed = fingerprintTool({
       ...base,
-      inputTypeScript: "{ owner: string; repo: string; ref?: string }",
+      inputSchema: {
+        type: "object",
+        properties: {
+          owner: { type: "string" },
+          repo: { type: "string" },
+          ref: { type: "string" },
+        },
+      },
     });
     expect(changed).not.toBe(original);
   });
 
-  it("changes when outputTypeScript changes", () => {
+  it("changes when outputSchema changes", () => {
     const original = fingerprintTool(base);
     const changed = fingerprintTool({
       ...base,
-      outputTypeScript: "{ id: number; full_name: string; private: boolean }",
+      outputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "number" },
+          full_name: { type: "string" },
+          private: { type: "boolean" },
+        },
+      },
     });
     expect(changed).not.toBe(original);
+  });
+
+  it("changes when a referenced $def changes (def-only change)", () => {
+    const withDef = fingerprintTool({
+      ...base,
+      schemaDefinitions: { Repo: { type: "object", properties: { id: { type: "number" } } } },
+    });
+    const changedDef = fingerprintTool({
+      ...base,
+      schemaDefinitions: { Repo: { type: "object", properties: { id: { type: "string" } } } },
+    });
+    expect(changedDef).not.toBe(withDef);
+  });
+
+  it("is canonical — schema key order does not change the hash", () => {
+    const reordered = fingerprintTool({
+      ...base,
+      inputSchema: {
+        properties: { repo: { type: "string" }, owner: { type: "string" } },
+        type: "object",
+      },
+    });
+    expect(reordered).toBe(fingerprintTool(base));
   });
 
   it("changes when path changes", () => {
@@ -59,8 +102,8 @@ describe("fingerprintTool", () => {
       path: "github.issues.create",
       name: "issues.create",
       description: "Create an issue in a repository.",
-      inputTypeScript: "{ title: string; body?: string }",
-      outputTypeScript: "{ id: number; number: number }",
+      inputSchema: { type: "object", properties: { title: { type: "string" } } },
+      outputSchema: { type: "object", properties: { id: { type: "number" } } },
     });
     expect(tool1).not.toBe(tool2);
   });
@@ -73,13 +116,11 @@ describe("fingerprintTool", () => {
     expect(a).not.toBe(b);
   });
 
-  it("treats absent optional fields the same as empty strings", () => {
+  it("treats absent optional fields the same as empty content", () => {
     const withEmpty = fingerprintTool({
       path: "x.y",
       name: "y",
       description: "",
-      inputTypeScript: "",
-      outputTypeScript: "",
     });
     const withAbsent = fingerprintTool({
       path: "x.y",

@@ -24,5 +24,5 @@ export const statusAtom = SemanticSearchClient.query("semanticSearch", "status",
   reactivityKeys: [],
 });
 
-// Explicit reindex (reconcile the whole catalog into the vector + lexical index).
+// Explicit index run (index fingerprint/materialize/embed pipeline).
 export const reindexMutation = SemanticSearchClient.mutation("semanticSearch", "reindex");

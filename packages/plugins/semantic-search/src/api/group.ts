@@ -4,14 +4,14 @@ import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { InternalError } from "@executor-js/api";
 
 // ---------------------------------------------------------------------------
-// HTTP surface for the Semantic search plugin: reindex + operator search/status.
+// HTTP surface for the Semantic search plugin: index + operator search/status.
 //
 // Routes are flat and plugin-id-prefixed (`/semantic-search/...`), matching the
 // execution-history/graphql convention — the per-request executor is already
 // owner-scoped at the host edge, so there is no `:scopeId` segment.
 //
-//   - reindex (POST) reconciles the whole tool catalog for the scoped tenant
-//     against Vectorize + the lexical store (incremental fingerprint diff).
+//   - reindex (POST) indexes the whole tool catalog for the scoped tenant
+//     through the same index refresh/chunk/embed pipeline.
 //   - search (GET) runs a live `tools.search` through the SAME provider the
 //     engine uses, so the operator console sees what the agent would.
 //   - status (GET) reports index population (vector fingerprints + lexical docs).
@@ -20,12 +20,12 @@ import { InternalError } from "@executor-js/api";
 // `capture` downgrades it to `InternalError`.
 // ---------------------------------------------------------------------------
 
-/** Result of a reindex reconcile: counts for each category of tool processed. */
+/** Result of an index run: counts for each category of tool processed. */
 export const ReindexResponse = Schema.Struct({
   namespace: Schema.String,
   total: Schema.Number,
-  reembedded: Schema.Number,
-  unchanged: Schema.Number,
+  indexed: Schema.Number,
+  skipped: Schema.Number,
   removed: Schema.Number,
 });
 
