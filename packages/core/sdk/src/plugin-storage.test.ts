@@ -65,21 +65,20 @@ const executionHistoryPlugin = definePlugin(() => ({
       owner: Owner,
       rows: readonly { readonly key: string; readonly data: ToolCall }[],
     ) =>
-      ctx.pluginStorage.putMany({
+      ctx.storage.toolCalls.putMany({
         owner,
-        entries: rows.map((row) => ({
-          collection: toolCalls.name,
-          key: row.key,
-          data: row.data,
-        })),
+        entries: rows,
       }),
     removeMany: (owner: Owner, keys: readonly string[]) =>
-      ctx.pluginStorage.removeMany({
+      ctx.storage.toolCalls.removeMany({
         owner,
-        entries: keys.map((key) => ({ collection: toolCalls.name, key })),
+        keys,
       }),
     get: (key: string) => ctx.storage.toolCalls.get({ key }),
+    getMany: (keys: readonly string[]) => ctx.storage.toolCalls.getMany({ keys }),
     getForOwner: (owner: Owner, key: string) => ctx.storage.toolCalls.getForOwner({ owner, key }),
+    getManyForOwner: (owner: Owner, keys: readonly string[]) =>
+      ctx.storage.toolCalls.getManyForOwner({ owner, keys }),
     query: (input?: PluginStorageCollectionQueryInput<typeof toolCalls>) =>
       ctx.storage.toolCalls.query(input),
     count: (
@@ -213,6 +212,15 @@ describe("plugin storage collections", () => {
       expect(stored[0]?.key).toBe("call-000");
       expect(stored[0]?.data.status).toBe("failed");
 
+      const selected = yield* executor.executionHistory.getManyForOwner("org", [
+        "call-000",
+        "call-001",
+        "missing",
+      ]);
+      expect([...selected.keys()]).toEqual(["call-000", "call-001"]);
+      expect(selected.get("call-000")?.data.status).toBe("failed");
+      expect(selected.get("call-001")?.data.toolId).toBe("shell");
+
       yield* executor.executionHistory.removeMany(
         "org",
         rows.map((row) => row.key),
@@ -255,6 +263,15 @@ describe("plugin storage collections", () => {
       const visibleShared = yield* executor.executionHistory.get("shared");
       expect(visibleShared?.owner).toBe("user");
       expect(visibleShared?.data.toolId).toBe("browser");
+
+      const visibleRows = yield* executor.executionHistory.getMany(["shared", "missing"]);
+      expect([...visibleRows.keys()]).toEqual(["shared"]);
+      expect(visibleRows.get("shared")?.owner).toBe("user");
+      expect(visibleRows.get("shared")?.data.toolId).toBe("browser");
+
+      const orgRows = yield* executor.executionHistory.getManyForOwner("org", ["shared"]);
+      expect(orgRows.get("shared")?.owner).toBe("org");
+      expect(orgRows.get("shared")?.data.toolId).toBe("shell");
 
       const scopedRows = yield* executor.executionHistory.query({
         where: { runId: "run-scope" },

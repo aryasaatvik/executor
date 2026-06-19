@@ -104,6 +104,15 @@ export interface PluginStorageScopedKeyInput extends PluginStorageKeyInput {
   readonly owner: Owner;
 }
 
+export interface PluginStorageKeysInput {
+  readonly collection: string;
+  readonly keys: readonly string[];
+}
+
+export interface PluginStorageScopedKeysInput extends PluginStorageKeysInput {
+  readonly owner: Owner;
+}
+
 export interface PluginStorageListInput {
   readonly collection: string;
   readonly keyPrefix?: string;
@@ -135,6 +144,14 @@ export interface PluginStorageCollectionScopedKeyInput extends PluginStorageColl
   readonly owner: Owner;
 }
 
+export interface PluginStorageCollectionKeysInput {
+  readonly keys: readonly string[];
+}
+
+export interface PluginStorageCollectionScopedKeysInput extends PluginStorageCollectionKeysInput {
+  readonly owner: Owner;
+}
+
 export interface PluginStorageCollectionListInput {
   readonly keyPrefix?: string;
 }
@@ -143,6 +160,21 @@ export interface PluginStorageCollectionPutInput<
   TData extends object,
 > extends PluginStorageCollectionScopedKeyInput {
   readonly data: TData;
+}
+
+export interface PluginStorageCollectionPutManyEntry<TData extends object> {
+  readonly key: string;
+  readonly data: TData;
+}
+
+export interface PluginStorageCollectionPutManyInput<TData extends object> {
+  readonly owner: Owner;
+  readonly entries: readonly PluginStorageCollectionPutManyEntry<TData>[];
+}
+
+export interface PluginStorageCollectionRemoveManyInput {
+  readonly owner: Owner;
+  readonly keys: readonly string[];
 }
 
 export interface PluginStorageCollectionQueryInput<TDefinition> {
@@ -270,10 +302,22 @@ export interface PluginStorageCollectionFacade<
     PluginStorageEntry<PluginStorageCollectionData<TDefinition>> | null,
     StorageFailure
   >;
+  readonly getMany: (
+    input: PluginStorageCollectionKeysInput,
+  ) => Effect.Effect<
+    ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<TDefinition>>>,
+    StorageFailure
+  >;
   readonly getForOwner: (
     input: PluginStorageCollectionScopedKeyInput,
   ) => Effect.Effect<
     PluginStorageEntry<PluginStorageCollectionData<TDefinition>> | null,
+    StorageFailure
+  >;
+  readonly getManyForOwner: (
+    input: PluginStorageCollectionScopedKeysInput,
+  ) => Effect.Effect<
+    ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<TDefinition>>>,
     StorageFailure
   >;
   readonly list: (
@@ -285,6 +329,9 @@ export interface PluginStorageCollectionFacade<
   readonly put: (
     input: PluginStorageCollectionPutInput<PluginStorageCollectionData<TDefinition>>,
   ) => Effect.Effect<PluginStorageEntry<PluginStorageCollectionData<TDefinition>>, StorageFailure>;
+  readonly putMany: (
+    input: PluginStorageCollectionPutManyInput<PluginStorageCollectionData<TDefinition>>,
+  ) => Effect.Effect<void, StorageFailure>;
   readonly query: (
     input?: PluginStorageCollectionQueryInput<TDefinition>,
   ) => Effect.Effect<
@@ -306,6 +353,9 @@ export interface PluginStorageCollectionFacade<
   readonly remove: (
     input: PluginStorageCollectionScopedKeyInput,
   ) => Effect.Effect<void, StorageFailure>;
+  readonly removeMany: (
+    input: PluginStorageCollectionRemoveManyInput,
+  ) => Effect.Effect<void, StorageFailure>;
 }
 
 export interface PluginStorageFacade {
@@ -315,9 +365,15 @@ export interface PluginStorageFacade {
   readonly get: <T = unknown>(
     input: PluginStorageKeyInput,
   ) => Effect.Effect<PluginStorageEntry<T> | null, StorageFailure>;
+  readonly getMany: <T = unknown>(
+    input: PluginStorageKeysInput,
+  ) => Effect.Effect<ReadonlyMap<string, PluginStorageEntry<T>>, StorageFailure>;
   readonly getForOwner: <T = unknown>(
     input: PluginStorageScopedKeyInput,
   ) => Effect.Effect<PluginStorageEntry<T> | null, StorageFailure>;
+  readonly getManyForOwner: <T = unknown>(
+    input: PluginStorageScopedKeysInput,
+  ) => Effect.Effect<ReadonlyMap<string, PluginStorageEntry<T>>, StorageFailure>;
   readonly list: <T = unknown>(
     input: PluginStorageListInput,
   ) => Effect.Effect<readonly PluginStorageEntry<T>[], StorageFailure>;
