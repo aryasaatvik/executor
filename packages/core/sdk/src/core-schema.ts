@@ -269,6 +269,31 @@ export const coreTables = defineTables({
     ["tenant", "owner", "subject", "integration", "connection", "name"],
   ),
 
+  // Compact source-refresh-written manifest for tool schema invalidation. This
+  // lets indexing and other change-detection paths compare hashes without
+  // loading every tool's raw schema and definition graph.
+  tool_schema_manifest: ownedExecutorTable(
+    "tool_schema_manifest",
+    {
+      integration: keyColumn("integration"),
+      connection: keyColumn("connection"),
+      plugin_id: textColumn("plugin_id"),
+      name: keyColumn("name"),
+      path: keyColumn("path"),
+      description: textColumn("description"),
+      descriptor_hash: textColumn("descriptor_hash"),
+      input_schema_hash: textColumn("input_schema_hash"),
+      output_schema_hash: textColumn("output_schema_hash"),
+      definition_set_hash: textColumn("definition_set_hash"),
+      index_fingerprint: textColumn("index_fingerprint"),
+      fingerprint_version: textColumn("fingerprint_version"),
+      source_revision: nullableTextColumn("source_revision"),
+      created_at: dateColumn("created_at"),
+      updated_at: dateColumn("updated_at"),
+    },
+    ["tenant", "owner", "subject", "integration", "connection", "name"],
+  ),
+
   // User-authored tool policies (approve / require_approval / block).
   tool_policy: ownedExecutorTable(
     "tool_policy",
@@ -334,6 +359,7 @@ export const TOOL_INVOCATION_COLUMNS = [
   "updated_at",
 ] as const satisfies readonly (keyof ToolRow)[];
 export type DefinitionRow = FumaRow<CoreSchema["definition"]>;
+export type ToolSchemaManifestRow = FumaRow<CoreSchema["tool_schema_manifest"]>;
 export type ToolPolicyRow = FumaRow<CoreSchema["tool_policy"]>;
 export type PluginStorageRow = FumaRow<CoreSchema["plugin_storage"]>;
 export type BlobRow = FumaRow<CoreSchema["blob"]>;

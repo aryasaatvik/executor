@@ -44,7 +44,7 @@ export type {
   RemoveToolPolicyInput,
   UpdateToolPolicyInput,
 } from "./policies";
-export { ToolSchemaView, IntegrationDetectionResult } from "./types";
+export { ToolSchemaManifest, ToolSchemaView, IntegrationDetectionResult } from "./types";
 export type { ToolSchemaOptions } from "./types";
 export type { Tool, ToolDef, ToolListFilter, ToolAnnotations } from "./tool";
 export type { AnyPlugin, PluginExtensions } from "./plugin";
