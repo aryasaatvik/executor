@@ -98,7 +98,7 @@ export type { Tool, ToolDef, ToolListFilter, ToolAnnotations } from "./tool";
 export type { CredentialProvider, ProviderEntry } from "./provider";
 
 // Public projections / detection.
-export { ToolSchemaView, IntegrationDetectionResult } from "./types";
+export { ToolSchemaManifest, ToolSchemaView, IntegrationDetectionResult } from "./types";
 export type { ToolSchemaOptions } from "./types";
 
 // Core schema.
@@ -125,6 +125,7 @@ export {
   type ToolRow,
   type ToolInvocationRow,
   type DefinitionRow,
+  type ToolSchemaManifestRow,
   type ToolPolicyRow,
   type PluginStorageRow,
   type BlobRow,

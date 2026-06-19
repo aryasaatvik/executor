@@ -30,7 +30,14 @@ import {
   type FumaTables,
   type StorageFailure,
 } from "./fuma-runtime";
-import { makeFumaBlobStore, pluginBlobStore, type BlobStore, type OwnerPartitions } from "./blob";
+import {
+  makeFumaBlobStore,
+  pluginBlobStore,
+  sha256Hex,
+  type BlobStore,
+  type OwnerPartitions,
+} from "./blob";
+import { cacheKeyPayload } from "./cache-key";
 import { coreToolsPlugin } from "./core-tools";
 import type {
   Connection,
@@ -47,6 +54,7 @@ import {
   type CoreSchema,
   type IntegrationRow,
   type OAuthClientRow,
+  type ToolSchemaManifestRow,
   type ToolInvocationRow,
   type ToolRow,
   type ToolPolicyRow,
@@ -142,7 +150,12 @@ import {
   ORG_SUBJECT,
   type ExecutorOwnerPolicyContext,
 } from "./owner-policy";
-import { ToolSchemaView, type IntegrationDetectionResult, type ToolSchemaOptions } from "./types";
+import {
+  ToolSchemaManifest,
+  ToolSchemaView,
+  type IntegrationDetectionResult,
+  type ToolSchemaOptions,
+} from "./types";
 import { type Tool, type ToolAnnotations, type ToolDef, type ToolListFilter } from "./tool";
 import { buildToolTypeScriptPreview, type ToolTypeScriptPreview } from "./schema-types";
 import { collectReferencedDefinitions } from "./schema-refs";
@@ -312,6 +325,9 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
 
   readonly tools: {
     readonly list: (filter?: ToolListFilter) => Effect.Effect<readonly Tool[], StorageFailure>;
+    readonly manifest: (
+      filter?: ToolListFilter,
+    ) => Effect.Effect<readonly ToolSchemaManifest[], StorageFailure>;
     readonly schema: (
       address: ToolAddress,
       options?: ToolSchemaOptions,
@@ -579,6 +595,147 @@ const rowToTool = (
     annotations: annotations ?? (decodeJsonColumn(row.annotations) as ToolAnnotations | undefined),
   };
 };
+
+const TOOL_SCHEMA_MANIFEST_FINGERPRINT_VERSION = "tool-schema-manifest/v1";
+
+const toolManifestPath = (address: string): string =>
+  address.startsWith(`${ADDRESS_PREFIX}.`) ? address.slice(ADDRESS_PREFIX.length + 1) : address;
+
+const hashManifestValue = (value: unknown): Effect.Effect<string> =>
+  sha256Hex(cacheKeyPayload(value));
+
+interface ToolManifestInput {
+  readonly address?: ToolAddress;
+  readonly owner: Owner;
+  readonly integration: IntegrationSlug;
+  readonly connection: ConnectionName;
+  readonly pluginId: string;
+  readonly name: ToolName;
+  readonly description: string;
+  readonly inputSchema?: unknown;
+  readonly outputSchema?: unknown;
+  readonly definitions: ReadonlyMap<string, unknown>;
+  readonly sourceRevision?: string;
+}
+
+const buildToolSchemaManifest = (
+  input: ToolManifestInput,
+): Effect.Effect<ToolSchemaManifest> =>
+  Effect.gen(function* () {
+    const address =
+      input.address ?? toolAddress(input.owner, input.integration, input.connection, input.name);
+    const path = toolManifestPath(String(address));
+    const referencedDefinitions = collectReferencedDefinitions(
+      [input.inputSchema, input.outputSchema],
+      input.definitions,
+    );
+    const [
+      descriptorHash,
+      inputSchemaHash,
+      outputSchemaHash,
+      definitionSetHash,
+      indexFingerprint,
+    ] = yield* Effect.all(
+      [
+        hashManifestValue({
+          path,
+          name: String(input.name),
+          description: input.description,
+          integration: String(input.integration),
+          connection: String(input.connection),
+          pluginId: input.pluginId,
+        }),
+        hashManifestValue(input.inputSchema),
+        hashManifestValue(input.outputSchema),
+        hashManifestValue(referencedDefinitions),
+        hashManifestValue({
+          path,
+          name: String(input.name),
+          description: input.description,
+          inputSchema: input.inputSchema,
+          outputSchema: input.outputSchema,
+          schemaDefinitions: referencedDefinitions,
+        }),
+      ],
+      { concurrency: 5 },
+    );
+
+    return ToolSchemaManifest.make({
+      address,
+      path,
+      owner: input.owner,
+      integration: String(input.integration),
+      connection: String(input.connection),
+      pluginId: input.pluginId,
+      name: String(input.name),
+      description: input.description,
+      descriptorHash,
+      inputSchemaHash,
+      outputSchemaHash,
+      definitionSetHash,
+      indexFingerprint,
+      fingerprintVersion: TOOL_SCHEMA_MANIFEST_FINGERPRINT_VERSION,
+      sourceRevision: input.sourceRevision,
+    });
+  });
+
+const rowToToolSchemaManifest = (row: ToolSchemaManifestRow): ToolSchemaManifest => {
+  const owner = row.owner as Owner;
+  const integration = IntegrationSlug.make(row.integration);
+  const connection = ConnectionName.make(row.connection);
+  const name = ToolName.make(row.name);
+  return ToolSchemaManifest.make({
+    address: toolAddress(owner, integration, connection, name),
+    path: row.path,
+    owner,
+    integration: row.integration,
+    connection: row.connection,
+    pluginId: row.plugin_id,
+    name: row.name,
+    description: row.description,
+    descriptorHash: row.descriptor_hash,
+    inputSchemaHash: row.input_schema_hash,
+    outputSchemaHash: row.output_schema_hash,
+    definitionSetHash: row.definition_set_hash,
+    indexFingerprint: row.index_fingerprint,
+    fingerprintVersion: row.fingerprint_version,
+    sourceRevision: row.source_revision ?? undefined,
+  });
+};
+
+const manifestToPolicyTool = (manifest: ToolSchemaManifest): Tool => ({
+  address: manifest.address,
+  owner: manifest.owner as Owner,
+  integration: IntegrationSlug.make(manifest.integration),
+  connection: ConnectionName.make(manifest.connection),
+  name: ToolName.make(manifest.name),
+  pluginId: manifest.pluginId,
+  description: manifest.description,
+});
+
+const connectionToolSourceRevision = (
+  integrationRow: IntegrationRow,
+  connectionRow: ConnectionRow | null,
+): Effect.Effect<string> =>
+  hashManifestValue({
+    integration: integrationRow.slug,
+    pluginId: integrationRow.plugin_id,
+    config: decodeJsonColumn(integrationRow.config),
+    connection:
+      connectionRow === null
+        ? null
+        : {
+            integration: connectionRow.integration,
+            name: connectionRow.name,
+            template: connectionRow.template,
+            provider: connectionRow.provider,
+            itemIds: decodeJsonColumn(connectionRow.item_ids),
+            oauthClient: connectionRow.oauth_client,
+            oauthClientOwner: connectionRow.oauth_client_owner,
+            oauthScope: connectionRow.oauth_scope,
+            providerState: decodeJsonColumn(connectionRow.provider_state),
+          },
+  });
 
 // ---------------------------------------------------------------------------
 // Condition builders
@@ -2214,6 +2371,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           const where = (b: AnyCb) => b("integration", "=", String(slug));
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
+          yield* core.deleteMany("tool_schema_manifest", { where });
           yield* core.deleteMany("connection", { where });
           yield* core.deleteMany("integration", {
             where: (b: AnyCb) => b("slug", "=", String(slug)),
@@ -2279,6 +2437,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Effect.gen(function* () {
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
+              yield* core.deleteMany("tool_schema_manifest", { where });
             }),
           );
           return [];
@@ -2290,6 +2449,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             Effect.gen(function* () {
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
+              yield* core.deleteMany("tool_schema_manifest", { where });
             }),
           );
           return [];
@@ -2339,13 +2499,55 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           schema,
           created_at: now,
         }));
+        const definitionMap = new Map(Object.entries(result.definitions ?? {}));
+        const sourceRevision = yield* connectionToolSourceRevision(integrationRow, existingRow);
+        const manifestRows = yield* Effect.forEach(
+          result.tools,
+          (tool: ToolDef) =>
+            buildToolSchemaManifest({
+              owner,
+              integration: ref.integration,
+              connection: ref.name,
+              pluginId: integrationRow.plugin_id,
+              name: tool.name,
+              description: tool.description ?? "",
+              inputSchema: tool.inputSchema,
+              outputSchema: tool.outputSchema,
+              definitions: definitionMap,
+              sourceRevision,
+            }).pipe(
+              Effect.map((manifest) => ({
+                tenant: keys.tenant,
+                owner: keys.owner,
+                subject: keys.subject,
+                integration: String(ref.integration),
+                connection: String(ref.name),
+                plugin_id: integrationRow.plugin_id,
+                name: String(tool.name),
+                path: manifest.path,
+                description: manifest.description,
+                descriptor_hash: manifest.descriptorHash,
+                input_schema_hash: manifest.inputSchemaHash,
+                output_schema_hash: manifest.outputSchemaHash,
+                definition_set_hash: manifest.definitionSetHash,
+                index_fingerprint: manifest.indexFingerprint,
+                fingerprint_version: manifest.fingerprintVersion,
+                source_revision: manifest.sourceRevision ?? null,
+                created_at: now,
+                updated_at: now,
+              })),
+            ),
+          { concurrency: 16 },
+        );
 
         yield* transaction(
           Effect.gen(function* () {
             yield* core.deleteMany("tool", { where });
             yield* core.deleteMany("definition", { where });
+            yield* core.deleteMany("tool_schema_manifest", { where });
             yield* core.createMany("tool", toolRows);
             yield* core.createMany("definition", definitionRows);
+            yield* core.createMany("tool_schema_manifest", manifestRows);
           }),
         );
 
@@ -2715,6 +2917,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             );
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
+          yield* core.deleteMany("tool_schema_manifest", { where });
           yield* core.deleteMany("connection", {
             where: (b: AnyCb) =>
               b.and(
@@ -2815,6 +3018,64 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           tools.push(tool);
         }
         return tools;
+      });
+
+    const toolsManifest = (
+      filter?: ToolListFilter,
+    ): Effect.Effect<readonly ToolSchemaManifest[], StorageFailure> =>
+      Effect.gen(function* () {
+        const rows = yield* core.findMany("tool_schema_manifest", {
+          where: (b: AnyCb) =>
+            b.and(
+              filter?.integration === undefined
+                ? true
+                : b("integration", "=", String(filter.integration)),
+              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
+              filter?.connection === undefined
+                ? true
+                : b("connection", "=", String(filter.connection)),
+            ),
+        });
+        const manifests = rows.map(rowToToolSchemaManifest);
+
+        const staticManifests = yield* Effect.forEach(
+          [...staticTools.values()],
+          (entry) => {
+            const tool = staticToolToTool(entry);
+            return buildToolSchemaManifest({
+              address: tool.address,
+              owner: tool.owner,
+              integration: tool.integration,
+              connection: tool.connection,
+              pluginId: tool.pluginId,
+              name: tool.name,
+              description: tool.description,
+              inputSchema: tool.inputSchema,
+              outputSchema: tool.outputSchema,
+              definitions: new Map(),
+            });
+          },
+          { concurrency: 16 },
+        );
+
+        const includeBlocked = filter?.includeBlocked ?? false;
+        const policyRows = yield* core.findMany("tool_policy", {});
+        const visible: ToolSchemaManifest[] = [];
+        for (const manifest of [...manifests, ...staticManifests]) {
+          const tool = manifestToPolicyTool(manifest);
+          if (!matchesToolFilter(tool, filter)) continue;
+          if (!includeBlocked) {
+            const effective = resolveEffectivePolicy(
+              normalizedPolicyId(tool),
+              policyRows,
+              ownerRankForRow,
+            );
+            if (effective.action === "block") continue;
+          }
+          visible.push(manifest);
+        }
+
+        return visible.sort((a, b) => String(a.address).localeCompare(String(b.address)));
       });
 
     const toolSchema = (
@@ -3607,6 +3868,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       oauth,
       tools: {
         list: toolsList,
+        manifest: toolsManifest,
         schema: toolSchema,
       },
       providers: {

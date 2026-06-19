@@ -452,6 +452,140 @@ describe("createExecutor", () => {
     }),
   );
 
+  it.effect("tools.manifest returns refresh-written schema fingerprints", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        plugins: [demoPlugin] as const,
+      });
+      yield* executor.demo.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: {
+          provider: ProviderKey.make("memory"),
+          id: ProviderItemId.make("v"),
+        },
+      });
+
+      const manifests = yield* executor.tools.manifest({
+        integration: INTEG,
+        includeBlocked: true,
+      });
+      expect(manifests.map((manifest) => manifest.path).sort()).toEqual([
+        `${INTEG}.org.${CONN}.inspect`,
+        `${INTEG}.org.${CONN}.run`,
+      ]);
+      const inspect = manifests.find((manifest) => manifest.name === "inspect");
+      expect(inspect).toMatchObject({
+        address: addr("inspect"),
+        integration: String(INTEG),
+        connection: String(CONN),
+        pluginId: "demo",
+        fingerprintVersion: "tool-schema-manifest/v1",
+      });
+      expect(inspect?.inputSchemaHash).toHaveLength(64);
+      expect(inspect?.outputSchemaHash).toHaveLength(64);
+      expect(inspect?.definitionSetHash).toHaveLength(64);
+      expect(inspect?.indexFingerprint).toHaveLength(64);
+
+      const schema = yield* executor.tools.schema(addr("inspect"), { includeTypeScript: false });
+      expect(schema?.schemaDefinitions).not.toHaveProperty("Unused");
+    }),
+  );
+
+  it.effect("tools.manifest includes static tools", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        coreTools: { webBaseUrl: "http://localhost:3000" },
+      });
+      const manifests = yield* executor.tools.manifest({
+        integration: IntegrationSlug.make("executor"),
+        includeBlocked: true,
+      });
+      expect(manifests.map((manifest) => manifest.address)).toContain(
+        ToolAddress.make("executor.coreTools.integrations.list"),
+      );
+      const listed = manifests.find(
+        (manifest) => manifest.address === ToolAddress.make("executor.coreTools.integrations.list"),
+      );
+      expect(listed).toMatchObject({
+        path: "executor.coreTools.integrations.list",
+        integration: "executor",
+        connection: "coreTools",
+        fingerprintVersion: "tool-schema-manifest/v1",
+      });
+    }),
+  );
+
+  it.effect("connections.refresh replaces stale tool manifest rows", () =>
+    Effect.gen(function* () {
+      let includeInspect = true;
+      const dynamicPlugin = definePlugin(() => ({
+        id: "dynamicManifest" as const,
+        credentialProviders: [memoryProvider()],
+        storage: () => ({}),
+        resolveTools: () =>
+          Effect.succeed({
+            tools: [
+              ...(includeInspect
+                ? [
+                    {
+                      name: ToolName.make("inspect"),
+                      description: "inspect",
+                      inputSchema: { type: "object" },
+                    },
+                  ]
+                : []),
+              { name: ToolName.make("run"), description: "run" },
+            ],
+            definitions: {},
+          }),
+        invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+        extension: (ctx) => ({
+          seed: () =>
+            ctx.core.integrations.register({
+              slug: INTEG,
+              description: "Dynamic",
+              config: {},
+            }),
+        }),
+      }))();
+
+      const executor = yield* makeTestExecutor({
+        plugins: [dynamicPlugin] as const,
+      });
+      yield* executor.dynamicManifest.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: {
+          provider: ProviderKey.make("memory"),
+          id: ProviderItemId.make("v"),
+        },
+      });
+
+      expect((yield* executor.tools.manifest({ integration: INTEG })).map((m) => m.name)).toEqual([
+        "inspect",
+        "run",
+      ]);
+
+      includeInspect = false;
+      yield* executor.connections.refresh({
+        owner: "org",
+        integration: INTEG,
+        name: CONN,
+      });
+
+      expect((yield* executor.tools.manifest({ integration: INTEG })).map((m) => m.name)).toEqual([
+        "run",
+      ]);
+    }),
+  );
+
   it.effect("execute dispatches a connection-produced tool to the owning plugin", () =>
     Effect.gen(function* () {
       const executor = yield* makeTestExecutor({
