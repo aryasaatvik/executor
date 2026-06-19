@@ -28,6 +28,32 @@ export const ToolSchemaView = Schema.Struct({
 });
 export type ToolSchemaView = typeof ToolSchemaView.Type;
 
+// ---------------------------------------------------------------------------
+// ToolSchemaManifest — the compact change-detection read model for tools.
+// Source refresh writes persisted manifest rows beside tool/definition rows;
+// callers that only need invalidation metadata can scan this surface without
+// loading full schema JSON or shared definitions.
+// ---------------------------------------------------------------------------
+
+export const ToolSchemaManifest = Schema.Struct({
+  address: ToolAddress,
+  path: Schema.String,
+  owner: Schema.String,
+  integration: Schema.String,
+  connection: Schema.String,
+  pluginId: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+  descriptorHash: Schema.String,
+  inputSchemaHash: Schema.String,
+  outputSchemaHash: Schema.String,
+  definitionSetHash: Schema.String,
+  indexFingerprint: Schema.String,
+  fingerprintVersion: Schema.String,
+  sourceRevision: Schema.optional(Schema.String),
+});
+export type ToolSchemaManifest = typeof ToolSchemaManifest.Type;
+
 /** Options for `executor.tools.schema`. */
 export interface ToolSchemaOptions {
   /** Generate the TypeScript preview strings (`inputTypeScript` /
