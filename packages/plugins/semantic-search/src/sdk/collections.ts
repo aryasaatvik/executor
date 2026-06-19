@@ -27,3 +27,85 @@ export type FingerprintRow = typeof FingerprintRow.Type;
 export const toolFingerprints = definePluginStorageCollection("toolFingerprints", FingerprintRow, {
   indexes: ["path"],
 });
+
+export const IndexRunStatus = Schema.Literals(["running", "completed", "failed"]);
+export type IndexRunStatus = typeof IndexRunStatus.Type;
+
+export const IndexRun = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  status: IndexRunStatus,
+  partitionCount: Schema.Number,
+  total: Schema.Number,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type IndexRun = typeof IndexRun.Type;
+
+export const indexRuns = definePluginStorageCollection("indexRuns", IndexRun, {
+  indexes: ["runId", "namespace", "status"],
+});
+
+export const IndexJobStatus = Schema.Literals([
+  "pendingScan",
+  "skipped",
+  "pendingChunk",
+  "pendingEmbedding",
+  "indexed",
+  "failed",
+]);
+export type IndexJobStatus = typeof IndexJobStatus.Type;
+
+export const IndexJob = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  partition: Schema.Number,
+  ordinal: Schema.Number,
+  address: Schema.String,
+  path: Schema.String,
+  name: Schema.String,
+  integration: Schema.String,
+  description: Schema.String,
+  status: IndexJobStatus,
+  fingerprint: Schema.optional(Schema.String),
+  oldChunkIds: Schema.Array(Schema.String),
+  chunkIds: Schema.Array(Schema.String),
+  lexicalTextKey: Schema.optional(Schema.String),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type IndexJob = typeof IndexJob.Type;
+
+export const indexJobs = definePluginStorageCollection("indexJobs", IndexJob, {
+  indexes: ["runId", "namespace", "partition", "status", "path", "ordinal"],
+});
+
+export const IndexChunkStatus = Schema.Literals(["pendingEmbedding", "indexed", "failed"]);
+export type IndexChunkStatus = typeof IndexChunkStatus.Type;
+
+export const IndexChunk = Schema.Struct({
+  runId: Schema.String,
+  namespace: Schema.String,
+  partition: Schema.Number,
+  path: Schema.String,
+  chunkId: Schema.String,
+  facet: Schema.String,
+  chunkIndex: Schema.Number,
+  embeddingTextKey: Schema.String,
+  embeddingTextBytes: Schema.Number,
+  embeddingTextTokens: Schema.Number,
+  name: Schema.String,
+  integration: Schema.String,
+  description: Schema.String,
+  status: IndexChunkStatus,
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  error: Schema.optional(Schema.String),
+});
+export type IndexChunk = typeof IndexChunk.Type;
+
+export const indexChunks = definePluginStorageCollection("indexChunks", IndexChunk, {
+  indexes: ["runId", "namespace", "partition", "status", "path"],
+});

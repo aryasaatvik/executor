@@ -119,6 +119,7 @@ export { ARTIFACT_PREVIEW_MARKUP_LIMIT } from "./artifact-preview";
 
 // Schema-side views + onboarding autodetect.
 export { ToolSchemaView, IntegrationDetectionResult } from "./types";
+export type { ToolSchemaOptions } from "./types";
 
 export {
   decodeOAuthCallbackState,

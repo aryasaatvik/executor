@@ -106,6 +106,7 @@ export type { CredentialProvider, ProviderEntry } from "./provider";
 
 // Public projections / detection.
 export { ToolSchemaView, IntegrationDetectionResult } from "./types";
+export type { ToolSchemaOptions } from "./types";
 
 // Health-check vocabulary (pure Schema + helpers).
 export {
