@@ -28,6 +28,13 @@ interface ToolSchemaViewCacheKeyInput {
   readonly includeTypeScript?: boolean;
 }
 
+interface ToolSchemaViewManifestCacheKeyInput {
+  readonly address: string;
+  readonly indexFingerprint: string;
+  readonly fingerprintVersion: string;
+  readonly includeTypeScript?: boolean;
+}
+
 const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
   cacheKeyPayload({
     version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
@@ -42,9 +49,30 @@ const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
     includeTypeScript: input.includeTypeScript ?? true,
   });
 
+const manifestCachePayload = (input: ToolSchemaViewManifestCacheKeyInput): string =>
+  cacheKeyPayload({
+    version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+    typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+    typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+    address: input.address,
+    indexFingerprint: input.indexFingerprint,
+    fingerprintVersion: input.fingerprintVersion,
+    includeTypeScript: input.includeTypeScript ?? true,
+  });
+
 export const toolSchemaViewCacheKey = (input: ToolSchemaViewCacheKeyInput): Effect.Effect<string> =>
   sha256Hex(cachePayload(input)).pipe(
     Effect.map(
       (hash) => `${TOOL_SCHEMA_VIEW_CACHE_PREFIX}${TOOL_SCHEMA_VIEW_CACHE_VERSION}/${hash}`,
+    ),
+  );
+
+export const toolSchemaViewManifestCacheKey = (
+  input: ToolSchemaViewManifestCacheKeyInput,
+): Effect.Effect<string> =>
+  sha256Hex(manifestCachePayload(input)).pipe(
+    Effect.map(
+      (hash) =>
+        `${TOOL_SCHEMA_VIEW_CACHE_PREFIX}${TOOL_SCHEMA_VIEW_CACHE_VERSION}/manifest/${hash}`,
     ),
   );
