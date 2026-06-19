@@ -5,7 +5,7 @@ import type {
   PluginStorageCollectionFacade,
 } from "@executor-js/sdk/core";
 import { sha256Hex } from "@executor-js/sdk/core";
-import { Context, Effect } from "effect";
+import { Context, Effect, Predicate } from "effect";
 
 import type { Chunker, ToolChunk } from "./chunker";
 import {
@@ -1296,7 +1296,7 @@ export const status = (
       counts.latestJobUpdatedAt,
       counts.latestChunkUpdatedAt,
     ]
-      .filter((value): value is string => value !== undefined)
+      .filter(Predicate.isNotUndefined)
       .sort()
       .at(-1);
     return {
