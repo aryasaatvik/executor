@@ -1,3 +1,5 @@
+import { Schema } from "effect";
+
 // ---------------------------------------------------------------------------
 // Facet-aware chunker (P1). A tool becomes one OR MORE chunks, each targeting
 // a distinct semantic facet: identity (header + description lead), description
@@ -34,23 +36,23 @@ const cyrb53 = (str: string): string => {
 // ---------------------------------------------------------------------------
 
 /** The input representation of a tool used by the chunker — richer than the
- *  core Tool contract, because it includes the schema strings produced by
- *  tools.schema(). */
-export interface ToolDocumentInput {
-  readonly path: string;
-  readonly name: string;
-  readonly integration: string;
-  readonly description: string;
-  readonly inputTypeScript?: string;
-  readonly outputTypeScript?: string;
-  readonly typeScriptDefinitions?: Record<string, string>;
+ *  core Tool contract, because it includes compact schema facet text. */
+export const ToolDocumentInput = Schema.Struct({
+  path: Schema.String,
+  name: Schema.String,
+  integration: Schema.String,
+  description: Schema.String,
+  inputSchemaText: Schema.optional(Schema.String),
+  outputSchemaText: Schema.optional(Schema.String),
+  schemaDefinitionText: Schema.optional(Schema.String),
   /**
    * Broad single-string representation of the tool for FTS indexing.
    * Populated by the projector (`buildLexicalText` in documents.ts); absent
    * when the input comes from a source that does not populate it.
    */
-  readonly lexicalText?: string;
-}
+  lexicalText: Schema.optional(Schema.String),
+});
+export type ToolDocumentInput = typeof ToolDocumentInput.Type;
 
 /** Which semantic facet a chunk represents. */
 export type ChunkFacet = "identity" | "description" | "input" | "output";
@@ -259,8 +261,8 @@ export const makeFacetChunker = (options?: FacetChunkerOptions): Chunker => {
       // -----------------------------------------------------------------------
       // Input facet
       // -----------------------------------------------------------------------
-      if (!isTrivialSchema(doc.inputTypeScript)) {
-        const text = `${integration} ${path} input\n${doc.inputTypeScript}`;
+      if (!isTrivialSchema(doc.inputSchemaText)) {
+        const text = `${integration} ${path} input\n${doc.inputSchemaText}`;
         // If the schema exceeds the budget, keep the structural head (entire
         // text is preferable; hard-slicing is safer than silently losing it).
         const embeddingText = text.length <= budget ? text : text.slice(0, budget);
@@ -279,8 +281,8 @@ export const makeFacetChunker = (options?: FacetChunkerOptions): Chunker => {
       // -----------------------------------------------------------------------
       // Output facet
       // -----------------------------------------------------------------------
-      if (!isTrivialSchema(doc.outputTypeScript)) {
-        const text = `${integration} ${path} output\n${doc.outputTypeScript}`;
+      if (!isTrivialSchema(doc.outputSchemaText)) {
+        const text = `${integration} ${path} output\n${doc.outputSchemaText}`;
         const embeddingText = text.length <= budget ? text : text.slice(0, budget);
         chunks.push({
           id: makeId(namespace, path, "output", globalIndex),

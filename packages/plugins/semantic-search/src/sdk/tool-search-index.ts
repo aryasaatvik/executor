@@ -5,9 +5,9 @@ import type {
   PluginStorageCollectionFacade,
 } from "@executor-js/sdk/core";
 import { sha256Hex } from "@executor-js/sdk/core";
-import { Context, Effect, Predicate } from "effect";
+import { Context, Effect, Predicate, Schema } from "effect";
 
-import type { Chunker, ToolChunk } from "./chunker";
+import { type Chunker, type ToolChunk, ToolDocumentInput } from "./chunker";
 import {
   type FingerprintRow,
   type IndexChunk,
@@ -124,13 +124,14 @@ export declare namespace ToolSearchIndex {
 
   export interface CommitInput {
     readonly runId: string;
-    readonly path: string;
+    readonly paths: readonly string[];
   }
 
   export interface CommitResult {
     readonly runId: string;
-    readonly path: string;
-    readonly committed: boolean;
+    readonly processed: number;
+    readonly committed: number;
+    readonly paths: readonly string[];
   }
 
   export interface CompleteInput {
@@ -334,6 +335,11 @@ const utf8Bytes = (text: string): number => new TextEncoder().encode(text).byteL
 const payloadKey = (kind: "embedding-text" | "lexical-text", digest: string): string =>
   `semantic-search/index/${kind}/${digest}.txt`;
 
+const indexDocumentKey = (fingerprint: string): string =>
+  `semantic-search/index/document/v1/${fingerprint}.json`;
+
+const decodeToolDocument = Schema.decodeUnknownEffect(Schema.fromJsonString(ToolDocumentInput));
+
 const putPayloadText = (
   deps: IndexCollections,
   kind: "embedding-text" | "lexical-text",
@@ -367,6 +373,46 @@ const getPayloadText = (
       text === null
         ? Effect.fail(new SemanticSearchError({ message: `Index payload "${key}" is missing.` }))
         : Effect.succeed(text),
+    ),
+  );
+
+const getCachedToolDocument = (
+  deps: IndexCollections,
+  fingerprint: string,
+): Effect.Effect<ToolDocumentInput | undefined, SemanticSearchError> => {
+  const key = indexDocumentKey(fingerprint);
+  return deps.blobs.get(key).pipe(
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({ message: `Failed to load index document "${key}".`, cause }),
+    ),
+    Effect.flatMap((text) => {
+      if (text === null) return Effect.sync((): ToolDocumentInput | undefined => undefined);
+      return decodeToolDocument(text).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({
+              message: `Failed to decode index document "${key}".`,
+              cause,
+            }),
+        ),
+      );
+    }),
+  );
+};
+
+const putCachedToolDocument = (
+  deps: IndexCollections,
+  fingerprint: string,
+  doc: ToolDocumentInput,
+): Effect.Effect<void, SemanticSearchError> =>
+  deps.blobs.put(indexDocumentKey(fingerprint), JSON.stringify(doc), { owner: deps.owner }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({
+          message: `Failed to persist index document for fingerprint "${fingerprint}".`,
+          cause,
+        }),
     ),
   );
 
@@ -996,7 +1042,17 @@ export const chunk = (
       (entry) =>
         Effect.gen(function* () {
           const job = entry.data;
-          const doc = yield* collectDocForTool(input.executor, jobToDescriptor(job));
+          const doc = yield* Effect.gen(function* () {
+            const fingerprint = job.fingerprint;
+            if (fingerprint === undefined) {
+              return yield* collectDocForTool(input.executor, jobToDescriptor(job));
+            }
+            const cached = yield* getCachedToolDocument(input, fingerprint);
+            if (cached !== undefined) return cached;
+            const next = yield* collectDocForTool(input.executor, jobToDescriptor(job));
+            yield* putCachedToolDocument(input, fingerprint, next);
+            return next;
+          });
           const chunks = input.chunker.chunk(input.namespace, doc);
           const lexicalText = doc.lexicalText ?? buildLexicalText(doc);
           const lexicalTextKey = yield* putPayloadText(input, "lexical-text", lexicalText);
@@ -1208,23 +1264,22 @@ export const commit = (
   input: IndexDeps & ToolSearchIndex.CommitInput,
 ): Effect.Effect<ToolSearchIndex.CommitResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const entry = yield* input.jobs
-      .getForOwner({ owner: input.owner, key: jobKey(input.runId, input.path) })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: `Failed to load index job "${input.path}" for commit.`,
-              cause,
-            }),
-        ),
-      );
-    if (entry === null || entry.data.status !== "pendingEmbedding") {
-      return { runId: input.runId, path: input.path, committed: false };
+    const entries = yield* getJobsByPaths(input, {
+      runId: input.runId,
+      status: "pendingEmbedding",
+      paths: input.paths,
+    });
+    if (entries.length === 0) {
+      return { runId: input.runId, processed: 0, committed: 0, paths: [] };
     }
 
-    const committed = yield* finalizeCompletedEmbedJobs(input, [entry], undefined, nowIso());
-    return { runId: input.runId, path: input.path, committed: committed > 0 };
+    const committed = yield* finalizeCompletedEmbedJobs(input, entries, undefined, nowIso());
+    return {
+      runId: input.runId,
+      processed: entries.length,
+      committed,
+      paths: entries.map((entry) => entry.data.path),
+    };
   });
 
 const finalizeCompletedEmbedJobs = (
@@ -1478,8 +1533,8 @@ export const run = (
             limit: input.pageLimit,
           });
           let pendingChunks = [...chunked.chunkRefs];
-          for (const path of chunked.commitPaths) {
-            yield* commit({ ...input, runId: input.runId, path });
+          if (chunked.commitPaths.length > 0) {
+            yield* commit({ ...input, runId: input.runId, paths: chunked.commitPaths });
           }
           while (pendingChunks.length > 0) {
             const embedded = yield* embed({
@@ -1494,8 +1549,8 @@ export const run = (
             pendingChunks = pendingChunks.filter(
               (ref) => !embeddedKeys.has(`${ref.path}:${ref.chunkId}`),
             );
-            for (const path of embedded.paths) {
-              yield* commit({ ...input, runId: input.runId, path });
+            if (embedded.paths.length > 0) {
+              yield* commit({ ...input, runId: input.runId, paths: embedded.paths });
             }
           }
         }

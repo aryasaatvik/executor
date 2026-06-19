@@ -56,16 +56,14 @@ export const stripHtml = (s: string): string =>
 export const buildLexicalText = (doc: ToolDocumentInput): string => {
   const parts: string[] = [doc.integration, doc.path, doc.name, stripHtml(doc.description)];
 
-  if (doc.inputTypeScript !== undefined) {
-    parts.push(doc.inputTypeScript);
+  if (doc.inputSchemaText !== undefined) {
+    parts.push(doc.inputSchemaText);
   }
-  if (doc.outputTypeScript !== undefined) {
-    parts.push(doc.outputTypeScript);
+  if (doc.outputSchemaText !== undefined) {
+    parts.push(doc.outputSchemaText);
   }
-  if (doc.typeScriptDefinitions !== undefined) {
-    for (const def of Object.values(doc.typeScriptDefinitions)) {
-      parts.push(def);
-    }
+  if (doc.schemaDefinitionText !== undefined) {
+    parts.push(doc.schemaDefinitionText);
   }
 
   return parts.join(" · ");
@@ -160,11 +158,70 @@ export const listToolManifests = (
     Effect.map((manifests) => selectToolManifests(manifests, options)),
   );
 
+const isPlainRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const collectSchemaTerms = (value: unknown, terms: Set<string>, depth = 0): void => {
+  if (depth > 12 || terms.size >= 500) return;
+  if (Array.isArray(value)) {
+    for (const item of value) collectSchemaTerms(item, terms, depth + 1);
+    return;
+  }
+  if (!isPlainRecord(value)) return;
+
+  for (const [key, entry] of Object.entries(value)) {
+    if (terms.size >= 500) return;
+    if (key === "properties" && isPlainRecord(entry)) {
+      for (const property of Object.keys(entry)) terms.add(property);
+      collectSchemaTerms(entry, terms, depth + 1);
+      continue;
+    }
+    if (key === "required" && Array.isArray(entry)) {
+      for (const required of entry) {
+        if (typeof required === "string") terms.add(`required ${required}`);
+      }
+      continue;
+    }
+    if ((key === "type" || key === "format" || key === "title") && typeof entry === "string") {
+      terms.add(`${key} ${entry}`);
+      continue;
+    }
+    if (key === "enum" && Array.isArray(entry)) {
+      for (const item of entry) {
+        if (typeof item === "string" && item.length <= 80) terms.add(item);
+      }
+      continue;
+    }
+    if (key === "description" && typeof entry === "string") {
+      const description = stripHtml(entry);
+      if (description.length > 0) terms.add(description.slice(0, 240));
+      continue;
+    }
+    collectSchemaTerms(entry, terms, depth + 1);
+  }
+};
+
+const schemaFacetText = (label: string, schema: unknown): string | undefined => {
+  const terms = new Set<string>();
+  collectSchemaTerms(schema, terms);
+  if (terms.size === 0) return undefined;
+  return `${label} ${Array.from(terms).join(" ")}`;
+};
+
+const schemaDefinitionsFacetText = (
+  definitions: Readonly<Record<string, unknown>> | undefined,
+): string | undefined => {
+  if (definitions === undefined || Object.keys(definitions).length === 0) return undefined;
+  const terms = new Set<string>(Object.keys(definitions));
+  for (const definition of Object.values(definitions)) collectSchemaTerms(definition, terms);
+  return terms.size === 0 ? undefined : `definitions ${Array.from(terms).join(" ")}`;
+};
+
 /** Collect `ToolDocumentInput` for a single tool descriptor.
  *
- *  Attempts to fetch its schema via `tools.schema(address)` to populate the
- *  TypeScript facets; on failure it degrades gracefully to an identity-only
- *  document.
+ *  Attempts to fetch raw schema via `tools.schema(address, { includeTypeScript:
+ *  false })` to populate compact schema facets; on failure it degrades
+ *  gracefully to an identity-only document.
  */
 export const collectDocForTool = (
   executor: Executor,
@@ -177,23 +234,19 @@ export const collectDocForTool = (
     integration: String(tool.integration),
     description: stripHtml(String(tool.description ?? "")),
   };
-  return executor.tools.schema(tool.address as Tool["address"]).pipe(
+  return executor.tools.schema(tool.address as Tool["address"], { includeTypeScript: false }).pipe(
     Effect.map((view): ToolDocumentInput => {
-      const doc: ToolDocumentInput =
-        view === null
-          ? base
-          : {
-              ...base,
-              ...(view.inputTypeScript !== undefined
-                ? { inputTypeScript: view.inputTypeScript }
-                : {}),
-              ...(view.outputTypeScript !== undefined
-                ? { outputTypeScript: view.outputTypeScript }
-                : {}),
-              ...(view.typeScriptDefinitions !== undefined
-                ? { typeScriptDefinitions: view.typeScriptDefinitions }
-                : {}),
-            };
+      if (view === null) return { ...base, lexicalText: buildLexicalText(base) };
+
+      const inputSchemaText = schemaFacetText("input", view.inputSchema);
+      const outputSchemaText = schemaFacetText("output", view.outputSchema);
+      const schemaDefinitionText = schemaDefinitionsFacetText(view.schemaDefinitions);
+      const doc: ToolDocumentInput = {
+        ...base,
+        ...(inputSchemaText !== undefined ? { inputSchemaText } : {}),
+        ...(outputSchemaText !== undefined ? { outputSchemaText } : {}),
+        ...(schemaDefinitionText !== undefined ? { schemaDefinitionText } : {}),
+      };
       return { ...doc, lexicalText: buildLexicalText(doc) };
     }),
     // Degrade: schema fetch failed — use identity-only document.

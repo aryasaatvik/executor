@@ -204,14 +204,14 @@ describe("ToolSearchIndex", () => {
         runId: "run-1",
         chunkRefs: chunked.chunkRefs,
       });
-      for (const path of embedded.paths) {
+      if (embedded.paths.length > 0) {
         yield* commit({
           ...base,
           embedder,
           store,
           chunker: makeFacetChunker(),
           runId: "run-1",
-          path,
+          paths: embedded.paths,
         });
       }
 
@@ -219,7 +219,7 @@ describe("ToolSearchIndex", () => {
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
       expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
-      expect(counters).toEqual({ raw: 0, codegen: 1 });
+      expect(counters).toEqual({ raw: 1, codegen: 0 });
       expect(upserted).toHaveLength(chunked.chunks);
       for (const vector of upserted) {
         expect(
@@ -370,7 +370,7 @@ describe("ToolSearchIndex", () => {
         expect(first.chunkRefs.length).toBeGreaterThan(0);
         expect(retry.chunkRefs).toEqual(first.chunkRefs);
         expect(retry.commitPaths).toEqual([]);
-        expect(counters.codegen).toBe(1);
+        expect(counters).toEqual({ raw: 1, codegen: 0 });
       }),
   );
 
@@ -557,7 +557,7 @@ describe("ToolSearchIndex", () => {
         chunkRefs: job.chunkIds.map((chunkId) => ({ path: job.path, chunkId })),
         maxChunks: 10,
       });
-      const committed = yield* commit({ ...base, runId: job.runId, path: job.path });
+      const committed = yield* commit({ ...base, runId: job.runId, paths: [job.path] });
       const afterCommitJob = jobs.data.get(`${job.runId}:${job.path}`);
 
       expect(first).toMatchObject({ processed: 2, chunks: 2 });
@@ -565,7 +565,7 @@ describe("ToolSearchIndex", () => {
       expect(firstChunkStatuses.filter((status) => status === "indexed")).toHaveLength(2);
       expect(firstChunkStatuses.filter((status) => status === "pendingEmbedding")).toHaveLength(1);
       expect(second).toMatchObject({ processed: 1, chunks: 1 });
-      expect(committed.committed).toBe(true);
+      expect(committed.committed).toBe(1);
       expect(afterCommitJob?.status).toBe("indexed");
       expect(mutableEmbeddedGroups.map((group) => group.length)).toEqual([2, 1]);
       expect(upserted).toHaveLength(3);
@@ -670,11 +670,11 @@ describe("ToolSearchIndex", () => {
           runId: job.runId,
           chunkRefs: [{ path: job.path, chunkId: "chunk-0" }],
         });
-        const committed = yield* commit({ ...base, runId: job.runId, path: job.path });
+        const committed = yield* commit({ ...base, runId: job.runId, paths: [job.path] });
 
         expect(first).toMatchObject({ processed: 1, chunks: 1, paths: [job.path] });
         expect(retry).toMatchObject({ processed: 0, chunks: 0, paths: [job.path] });
-        expect(committed.committed).toBe(true);
+        expect(committed.committed).toBe(1);
         expect(embedCalls).toBe(1);
         expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
       }),
@@ -733,10 +733,10 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: job.runId,
-        path: job.path,
+        paths: [job.path],
       });
 
-      expect(result).toMatchObject({ committed: true });
+      expect(result).toMatchObject({ committed: 1 });
       expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
       expect(fingerprints.data.get(job.path)).toMatchObject({
         path: job.path,
