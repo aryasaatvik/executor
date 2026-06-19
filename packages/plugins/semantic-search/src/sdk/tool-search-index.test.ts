@@ -102,21 +102,52 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
   });
   const matches = (value: T, where: Record<string, unknown> | undefined): boolean => {
     if (!where) return true;
-    return Object.entries(where).every(
-      ([key, expected]) => (value as Record<string, unknown>)[key] === expected,
-    );
+    return Object.entries(where).every(([key, expected]) => {
+      const actual = (value as Record<string, unknown>)[key];
+      if (
+        typeof expected === "object" &&
+        expected !== null &&
+        "in" in expected &&
+        Array.isArray((expected as { readonly in?: unknown }).in)
+      ) {
+        return (expected as { readonly in: readonly unknown[] }).in.includes(actual);
+      }
+      return actual === expected;
+    });
   };
   const facade = {
     data,
     get: ({ key }: { key: string }) =>
       Effect.succeed(data.has(key) ? entry(key, data.get(key)!) : null),
+    getMany: ({ keys }: { keys: readonly string[] }) =>
+      Effect.succeed(
+        new Map(
+          keys.flatMap((key) => {
+            const value = data.get(key);
+            return value === undefined ? [] : [[key, entry(key, value)] as const];
+          }),
+        ),
+      ),
     getForOwner: ({ key }: { key: string }) =>
       Effect.succeed(data.has(key) ? entry(key, data.get(key)!) : null),
+    getManyForOwner: ({ keys }: { keys: readonly string[] }) =>
+      Effect.succeed(
+        new Map(
+          keys.flatMap((key) => {
+            const value = data.get(key);
+            return value === undefined ? [] : [[key, entry(key, value)] as const];
+          }),
+        ),
+      ),
     list: () => Effect.succeed([...data.entries()].map(([key, value]) => entry(key, value))),
     put: ({ key, data: value }: { key: string; data: T }) =>
       Effect.sync(() => {
         data.set(key, value);
         return entry(key, value);
+      }),
+    putMany: ({ entries }: { entries: readonly { readonly key: string; readonly data: T }[] }) =>
+      Effect.sync(() => {
+        for (const item of entries) data.set(item.key, item.data);
       }),
     query: (input?: {
       where?: Record<string, unknown>;
@@ -150,6 +181,10 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
       stats: () => Effect.succeed({ count: 0, min: null, max: null, percentiles: [] }),
     },
     remove: ({ key }: { key: string }) => Effect.sync(() => data.delete(key)),
+    removeMany: ({ keys }: { keys: readonly string[] }) =>
+      Effect.sync(() => {
+        for (const key of keys) data.delete(key);
+      }),
   };
   // oxlint-disable-next-line executor/no-double-cast -- test fixture implements the storage facade methods exercised by these indexer tests
   return facade as unknown as TestCollection<T>;
