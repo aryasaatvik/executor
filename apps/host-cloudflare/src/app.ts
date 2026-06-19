@@ -15,7 +15,7 @@ import {
 } from "./execution";
 import { ErrorCaptureLive } from "./observability";
 import { cloudflareAccountMiddleware } from "./account/account-provider";
-import { makeCloudflareMcpSeams } from "./mcp";
+import { makeCloudflareMcpAgentHandler } from "./mcp/agent-handler";
 import { preloadQuickJs } from "./quickjs";
 
 // ===========================================================================
@@ -60,10 +60,9 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
     env.CACHE === undefined
       ? identityLayer
       : Layer.mergeAll(identityLayer, layerCloudflareKeyValueStore(env.CACHE));
-  // MCP runs through the `MCP_SESSION` Durable Object (cross-isolate sessions);
-  // each session DO opens its own D1 handle, so it takes `env`, not `dbHandle`.
-  // The `/mcp` GATE auth runs in the Worker, so it shares the alias lookup.
-  const mcp = makeCloudflareMcpSeams(config, env, aliasLookup);
+  // `/mcp` is mounted in worker.ts through the Agents Streamable HTTP bridge
+  // because it needs the Cloudflare ExecutionContext.
+  const mcpAgentHandler = makeCloudflareMcpAgentHandler(config, aliasLookup);
 
   const { appLayer, toWebHandler } = ExecutorApp.make({
     plugins,
@@ -80,13 +79,10 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
       // auth context; `me` reflects the Access principal. Members/keys are
       // Access-managed, so the rest of the surface is stubbed.
       account: cloudflareAccountMiddleware(config, aliasLookup),
-      // The MCP serving envelope: Access-JWT auth + the shared in-process session
-      // store over the QuickJS engine.
-      mcp: { auth: mcp.auth, sessions: mcp.sessions, reporter: mcp.reporter },
     },
     config: { mountPrefix: "/api", failure: textFailureStrategy },
     boot: bootLayer,
   });
 
-  return { appLayer, toWebHandler };
+  return { appLayer, toWebHandler, mcpAgentHandler };
 };
