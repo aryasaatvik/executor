@@ -232,18 +232,18 @@ const VECTOR_METADATA_DESCRIPTION_BYTES = 2_048;
 const nowIso = (): string => new Date().toISOString();
 
 const truncateUtf8 = (value: string, maxBytes: number): string => {
+  if (maxBytes <= 0) return "";
   const encoder = new TextEncoder();
-  if (encoder.encode(value).length <= maxBytes) return value;
-
+  const scratch = new Uint8Array(4);
   let bytes = 0;
-  let result = "";
+  const chars: string[] = [];
   for (const char of value) {
-    const size = encoder.encode(char).length;
-    if (bytes + size > maxBytes) break;
-    result += char;
-    bytes += size;
+    const { written } = encoder.encodeInto(char, scratch);
+    if (bytes + written > maxBytes) break;
+    chars.push(char);
+    bytes += written;
   }
-  return result;
+  return chars.length === value.length ? value : chars.join("");
 };
 
 const partitionForPath = (path: string, partitionCount: number): number =>
@@ -415,6 +415,14 @@ const putCachedToolDocument = (
         }),
     ),
   );
+
+const deleteCachedToolDocument = (
+  deps: Pick<IndexCollections, "blobs" | "owner">,
+  fingerprint: string | undefined,
+): Effect.Effect<void> =>
+  fingerprint === undefined
+    ? Effect.void
+    : deps.blobs.delete(indexDocumentKey(fingerprint), { owner: deps.owner }).pipe(Effect.ignore);
 
 const estimateEmbeddingResponseBytes = (dimensions: number): number =>
   Math.max(
@@ -939,6 +947,7 @@ export const scan = (
                 description: manifest.description,
                 status: "skipped",
                 fingerprint: manifest.indexFingerprint,
+                oldFingerprint: storedRow.fingerprint,
                 oldChunkIds: storedRow.chunkIds,
                 chunkIds: storedRow.chunkIds,
                 updatedAt,
@@ -956,6 +965,7 @@ export const scan = (
                 description: manifest.description,
                 status: "pendingChunk",
                 fingerprint: manifest.indexFingerprint,
+                oldFingerprint: storedRow?.fingerprint,
                 oldChunkIds: storedRow?.chunkIds ?? [],
                 chunkIds: [],
                 updatedAt,
@@ -1329,6 +1339,9 @@ const finalizeCompletedEmbedJobs = (
       if (job.oldChunkIds.length > 0) {
         yield* input.store.deleteByIds(job.oldChunkIds);
       }
+      if (job.oldFingerprint !== undefined && job.oldFingerprint !== fingerprint) {
+        yield* deleteCachedToolDocument(input, job.oldFingerprint);
+      }
 
       if (input.lexicalStore) {
         const lexicalText =
@@ -1424,6 +1437,7 @@ export const sweepRemoved = (input: {
   readonly executor: Executor;
   readonly store: VectorStore;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
+  readonly blobs: PluginBlobStore;
   readonly owner: Owner;
   readonly lexicalStore?: FtsLexicalStore;
 }): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
@@ -1453,6 +1467,7 @@ export const sweepRemoved = (input: {
           if (input.lexicalStore) {
             yield* input.lexicalStore.deleteByIds([`${input.namespace}:${entry.key}`]);
           }
+          yield* deleteCachedToolDocument(input, entry.data.fingerprint);
           yield* input.fingerprints.remove({ owner: input.owner, key: entry.key }).pipe(
             Effect.mapError(
               (cause) =>
@@ -1478,6 +1493,7 @@ export const complete = (
       executor: input.executor,
       store: input.store,
       fingerprints: input.fingerprints,
+      blobs: input.blobs,
       owner: input.owner,
       lexicalStore: input.lexicalStore,
     });

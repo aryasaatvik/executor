@@ -185,12 +185,13 @@ const makeSemanticSearchExtension = (deps: {
       { readonly namespace: string; readonly removed: number },
       SemanticSearchError
     > =>
-      deps.store && deps.fingerprints && deps.owner
+      deps.store && deps.fingerprints && deps.blobs && deps.owner
         ? sweepRemoved({
             namespace: deps.namespace,
             executor,
             store: deps.store,
             fingerprints: deps.fingerprints,
+            blobs: deps.blobs,
             owner: deps.owner,
             lexicalStore: deps.lexicalStore,
           })

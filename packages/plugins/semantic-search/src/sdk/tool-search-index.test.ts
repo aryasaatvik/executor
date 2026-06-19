@@ -165,12 +165,36 @@ describe("ToolSearchIndex", () => {
       const chunks = makeCollection<IndexChunk>(indexChunks.name);
       const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
       const blobs = makeBlobs();
+      const path = "github.repos.get";
+      const oldFingerprint = "fingerprint:old";
+      const nextFingerprint = "fingerprint:tools.github.repos.get";
+      yield* fingerprints.put({
+        owner,
+        key: path,
+        data: {
+          path,
+          integration: "github",
+          fingerprint: oldFingerprint,
+          chunkIds: ["old-chunk"],
+        },
+      });
+      yield* blobs.put(
+        `semantic-search/index/document/v1/${oldFingerprint}.json`,
+        JSON.stringify({
+          path,
+          name: "repos.get",
+          integration: "github",
+          description: "old",
+        }),
+        { owner },
+      );
       const upserted: VectorInput[] = [];
+      const deleted: string[][] = [];
       const store: VectorStore = {
         maxTopK: 100,
         query: () => Effect.succeed([]),
         upsert: (vectors) => Effect.sync(() => void upserted.push(...vectors)),
-        deleteByIds: () => Effect.void,
+        deleteByIds: (ids) => Effect.sync(() => void deleted.push([...ids])),
       };
       const embedder: ToolEmbedder = {
         model: "test",
@@ -227,6 +251,14 @@ describe("ToolSearchIndex", () => {
         ).toBeLessThanOrEqual(2_048);
       }
       expect([...fingerprints.data.values()]).toHaveLength(1);
+      expect(fingerprints.data.get(path)?.fingerprint).toBe(nextFingerprint);
+      expect(yield* blobs.has(`semantic-search/index/document/v1/${oldFingerprint}.json`)).toBe(
+        false,
+      );
+      expect(yield* blobs.has(`semantic-search/index/document/v1/${nextFingerprint}.json`)).toBe(
+        true,
+      );
+      expect(deleted).toEqual([["old-chunk"]]);
       expect([...jobs.data.values()][0]?.status).toBe("indexed");
     }),
   );

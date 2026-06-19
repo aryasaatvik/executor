@@ -458,13 +458,43 @@ const validateExecutorDbTables = (required: FumaTables, actual: FumaTables): voi
 const storageFailureFromUnknown = (message: string, cause: unknown): StorageFailure =>
   isStorageFailure(cause) ? cause : new StorageError({ message, cause });
 
+const MEMORY_CACHE_CAPACITY = 2_048;
+const MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
+
 const makeMemoryCacheStore = (): KeyValueStore.KeyValueStore => {
-  const rows = new Map<string, string>();
+  const rows = new Map<string, { readonly value: string; readonly expiresAt: number }>();
+  const evictExpired = (now: number): void => {
+    for (const [key, entry] of rows) {
+      if (entry.expiresAt <= now) rows.delete(key);
+    }
+  };
+  const evictCapacity = (): void => {
+    while (rows.size > MEMORY_CACHE_CAPACITY) {
+      const oldest = rows.keys().next().value;
+      if (oldest === undefined) break;
+      rows.delete(oldest);
+    }
+  };
   return KeyValueStore.makeStringOnly({
-    get: (key) => Effect.sync(() => rows.get(key)),
+    get: (key) =>
+      Effect.sync(() => {
+        const now = Date.now();
+        const entry = rows.get(key);
+        if (entry === undefined) return undefined;
+        if (entry.expiresAt <= now) {
+          rows.delete(key);
+          return undefined;
+        }
+        rows.delete(key);
+        rows.set(key, entry);
+        return entry.value;
+      }),
     set: (key, value) =>
       Effect.sync(() => {
-        rows.set(key, value);
+        const now = Date.now();
+        evictExpired(now);
+        rows.set(key, { value, expiresAt: now + MEMORY_CACHE_TTL_MS });
+        evictCapacity();
       }),
     remove: (key) =>
       Effect.sync(() => {
@@ -473,7 +503,10 @@ const makeMemoryCacheStore = (): KeyValueStore.KeyValueStore => {
     clear: Effect.sync(() => {
       rows.clear();
     }),
-    size: Effect.sync(() => rows.size),
+    size: Effect.sync(() => {
+      evictExpired(Date.now());
+      return rows.size;
+    }),
   });
 };
 

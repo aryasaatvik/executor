@@ -32,7 +32,7 @@ const utf8ByteLength = (value: string): number => new TextEncoder().encode(value
 
 const metadataByteLength = (value: Record<string, unknown> | undefined): number => {
   if (value === undefined) return 0;
-  return utf8ByteLength(JSON.stringify(value) ?? "null");
+  return utf8ByteLength(JSON.stringify(value));
 };
 
 /** Wraps `inner` with Cloudflare Vectorize runtime-limit validation. Any call
