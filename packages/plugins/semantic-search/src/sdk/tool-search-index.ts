@@ -556,9 +556,10 @@ const getJobsByPaths = (
     .pipe(
       Effect.map((entries) =>
         input.paths
-          .map((path) => entries.get(jobKey(input.runId, path)) ?? null)
-          .filter((entry) => entry?.data.status === input.status)
-          .flatMap((entry) => (entry === null ? [] : [entry]))
+          .flatMap((path) => {
+            const entry = entries.get(jobKey(input.runId, path));
+            return entry !== undefined && entry.data.status === input.status ? [entry] : [];
+          })
           .slice(0, input.limit ?? input.paths.length),
       ),
       Effect.mapError(
