@@ -4,6 +4,8 @@ import type {
   Owner,
   PluginStorageCollectionFacade,
   PluginStorageEntry,
+  Tool,
+  ToolSchemaManifest,
 } from "@executor-js/sdk/core";
 import { makeInMemoryBlobStore, pluginBlobStore } from "@executor-js/sdk/core";
 import { Effect } from "effect";
@@ -29,21 +31,37 @@ const namespace = "test-ns";
 const makeBlobs = () =>
   pluginBlobStore(makeInMemoryBlobStore(), { org: "test-org", user: null }, "semanticSearch");
 
+const manifestForTool = (tool: Tool): ToolSchemaManifest => ({
+  address: tool.address,
+  path: String(tool.address).replace(/^tools\./, ""),
+  owner,
+  integration: String(tool.integration),
+  connection: String(tool.connection),
+  pluginId: tool.pluginId,
+  name: String(tool.name),
+  description: tool.description ?? "",
+  descriptorHash: `descriptor:${String(tool.address)}`,
+  inputSchemaHash: `input:${String(tool.address)}`,
+  outputSchemaHash: `output:${String(tool.address)}`,
+  definitionSetHash: `definitions:${String(tool.address)}`,
+  indexFingerprint: `fingerprint:${String(tool.address)}`,
+  fingerprintVersion: "tool-schema-manifest/v1",
+});
+
 const makeExecutor = (counters: { raw: number; codegen: number }): Executor => {
+  const tool: Tool = {
+    address: "tools.github.repos.get" as never,
+    name: "repos.get" as never,
+    integration: "github" as never,
+    description: "Get a repository",
+    owner,
+    connection: "default" as never,
+    pluginId: "test",
+  };
   const executor: Pick<Executor, "tools"> = {
     tools: {
-      list: () =>
-        Effect.succeed([
-          {
-            address: "tools.github.repos.get" as never,
-            name: "repos.get" as never,
-            integration: "github" as never,
-            description: "Get a repository",
-            owner,
-            connection: "default" as never,
-            pluginId: "test",
-          },
-        ]),
+      list: () => Effect.succeed([tool]),
+      manifest: () => Effect.succeed([manifestForTool(tool)]),
       schema: (address, options) => {
         const includeTypeScript = options?.includeTypeScript ?? true;
         if (includeTypeScript) counters.codegen++;
@@ -289,38 +307,39 @@ describe("ToolSearchIndex", () => {
 
   it.effect("limits seeded tools when maxTools is provided", () =>
     Effect.gen(function* () {
+      const tools: readonly Tool[] = [
+        {
+          address: "tools.github.repos.get" as never,
+          name: "repos.get" as never,
+          integration: "github" as never,
+          description: "Get a repository",
+          owner,
+          connection: "default" as never,
+          pluginId: "test",
+        },
+        {
+          address: "tools.stripe.customers.list" as never,
+          name: "customers.list" as never,
+          integration: "stripe" as never,
+          description: "List customers",
+          owner,
+          connection: "default" as never,
+          pluginId: "test",
+        },
+        {
+          address: "tools.slack.chat.postMessage" as never,
+          name: "chat.postMessage" as never,
+          integration: "slack" as never,
+          description: "Post a message",
+          owner,
+          connection: "default" as never,
+          pluginId: "test",
+        },
+      ];
       const executor: Pick<Executor, "tools"> = {
         tools: {
-          list: () =>
-            Effect.succeed([
-              {
-                address: "tools.github.repos.get" as never,
-                name: "repos.get" as never,
-                integration: "github" as never,
-                description: "Get a repository",
-                owner,
-                connection: "default" as never,
-                pluginId: "test",
-              },
-              {
-                address: "tools.stripe.customers.list" as never,
-                name: "customers.list" as never,
-                integration: "stripe" as never,
-                description: "List customers",
-                owner,
-                connection: "default" as never,
-                pluginId: "test",
-              },
-              {
-                address: "tools.slack.chat.postMessage" as never,
-                name: "chat.postMessage" as never,
-                integration: "slack" as never,
-                description: "Post a message",
-                owner,
-                connection: "default" as never,
-                pluginId: "test",
-              },
-            ]),
+          list: () => Effect.succeed(tools),
+          manifest: () => Effect.succeed(tools.map((tool) => manifestForTool(tool))),
           schema: () => Effect.succeed(null),
         },
       };
