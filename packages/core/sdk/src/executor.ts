@@ -169,6 +169,7 @@ import {
   TOOL_SCHEMA_VIEW_CACHE_VERSION,
   ToolSchemaViewCacheEntry,
   toolSchemaViewCacheKey,
+  toolSchemaViewManifestCacheKey,
 } from "./tool-schema-view-cache";
 import {
   refreshAccessToken,
@@ -3159,6 +3160,32 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
 
         const parsed = parseToolAddress(String(address));
         if (!parsed) return null;
+        const manifestRow = yield* core.findFirst("tool_schema_manifest", {
+          where: (b: AnyCb) =>
+            b.and(
+              byOwner(parsed.owner)(b),
+              b("integration", "=", String(parsed.integration)),
+              b("connection", "=", String(parsed.connection)),
+              b("name", "=", String(parsed.tool)),
+            ),
+        });
+        const manifest = manifestRow === null ? null : rowToToolSchemaManifest(manifestRow);
+        const manifestCacheKey =
+          manifest === null
+            ? null
+            : yield* toolSchemaViewManifestCacheKey({
+                address: String(address),
+                indexFingerprint: manifest.indexFingerprint,
+                fingerprintVersion: manifest.fingerprintVersion,
+                includeTypeScript,
+              });
+        if (manifestCacheKey !== null) {
+          const cached = yield* toolSchemaViewStore
+            .get(manifestCacheKey)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
+        }
+
         const row = yield* core.findFirst("tool", {
           where: (b: AnyCb) =>
             b.and(
@@ -3182,19 +3209,23 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const defs = new Map<string, unknown>();
         for (const def of definitionRows) defs.set(def.name, decodeJsonColumn(def.schema));
         const definitions = Object.fromEntries(defs);
-        const key = yield* toolSchemaViewCacheKey({
-          address: String(address),
-          name: String(tool.name),
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          outputSchema: tool.outputSchema,
-          definitions,
-          includeTypeScript,
-        });
-        const cached = yield* toolSchemaViewStore
-          .get(key)
-          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-        if (Option.isSome(cached)) return cached.value.view;
+        const key =
+          manifestCacheKey ??
+          (yield* toolSchemaViewCacheKey({
+            address: String(address),
+            name: String(tool.name),
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            definitions,
+            includeTypeScript,
+          }));
+        if (manifestCacheKey === null) {
+          const cached = yield* toolSchemaViewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
+        }
 
         const referenced = collectReferencedDefinitions(
           [tool.inputSchema, tool.outputSchema],

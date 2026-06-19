@@ -18,7 +18,7 @@ import type { CredentialProvider } from "./provider";
 import { IntegrationDetectionResult } from "./types";
 import { makeTestExecutor } from "./testing";
 import { serveOAuthTestServer } from "./testing/oauth-test-server";
-import { toolSchemaViewCacheKey } from "./tool-schema-view-cache";
+import { toolSchemaViewManifestCacheKey } from "./tool-schema-view-cache";
 import { toolTypeScriptPreviewCacheKey } from "./tool-typescript-preview-cache";
 
 // removed: v1 secret browser-handoff, source.configure, case-insensitive tool-id
@@ -439,13 +439,15 @@ describe("createExecutor", () => {
       const cached = yield* cache.get(cacheKey);
       expect(cached).toContain("preview");
 
-      const schemaViewCacheKey = yield* toolSchemaViewCacheKey({
+      const manifest = (yield* executor.tools.manifest({ integration: INTEG })).find(
+        (entry) => entry.address === addr("inspect"),
+      );
+      expect(manifest).toBeDefined();
+      if (manifest === undefined) return;
+      const schemaViewCacheKey = yield* toolSchemaViewManifestCacheKey({
         address: String(addr("inspect")),
-        name: schema?.name,
-        description: schema?.description,
-        inputSchema: schema?.inputSchema,
-        outputSchema: schema?.outputSchema,
-        definitions: demoDefinitions,
+        indexFingerprint: manifest.indexFingerprint,
+        fingerprintVersion: manifest.fingerprintVersion,
       });
       const cachedSchemaView = yield* cache.get(schemaViewCacheKey);
       expect(cachedSchemaView).toContain("view");
