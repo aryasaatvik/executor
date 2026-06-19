@@ -392,7 +392,7 @@ describe("createExecutor", () => {
   it.effect("tools.schema returns roots with shared reachable definitions", () =>
     Effect.gen(function* () {
       const cacheRows = new Map<string, string>();
-      const keyValueStore = KeyValueStore.makeStringOnly({
+      const cache = KeyValueStore.makeStringOnly({
         get: (key) => Effect.sync(() => cacheRows.get(key)),
         set: (key, value) =>
           Effect.sync(() => {
@@ -409,7 +409,7 @@ describe("createExecutor", () => {
       });
       const executor = yield* makeTestExecutor({
         plugins: [demoPlugin] as const,
-        keyValueStore,
+        cache,
       });
       yield* executor.demo.seed();
       yield* executor.connections.create({
@@ -436,7 +436,7 @@ describe("createExecutor", () => {
         outputSchema: schema?.outputSchema,
         definitions: defs,
       });
-      const cached = yield* keyValueStore.get(cacheKey);
+      const cached = yield* cache.get(cacheKey);
       expect(cached).toContain("preview");
 
       const schemaViewCacheKey = yield* toolSchemaViewCacheKey({
@@ -447,7 +447,7 @@ describe("createExecutor", () => {
         outputSchema: schema?.outputSchema,
         definitions: demoDefinitions,
       });
-      const cachedSchemaView = yield* keyValueStore.get(schemaViewCacheKey);
+      const cachedSchemaView = yield* cache.get(schemaViewCacheKey);
       expect(cachedSchemaView).toContain("view");
     }),
   );

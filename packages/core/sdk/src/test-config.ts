@@ -124,7 +124,7 @@ export type TestConfigOptions<TPlugins extends readonly AnyPlugin[] = readonly [
   readonly backend?: TestDatabaseBackend;
   readonly dataDir?: string;
   readonly coreTools?: ExecutorConfig<TPlugins>["coreTools"];
-  readonly keyValueStore?: KeyValueStore.KeyValueStore;
+  readonly cache?: KeyValueStore.KeyValueStore;
   /** Override the OAuth callback URL. Pass `null` to construct an executor with
    *  no OAuth callback (exercises the fail-loud redirect path). */
   readonly redirectUri?: string | null;
@@ -162,7 +162,7 @@ export const makeTestConfig = <const TPlugins extends readonly AnyPlugin[] = rea
     db,
     plugins: options?.plugins,
     coreTools: options?.coreTools,
-    keyValueStore: options?.keyValueStore,
+    cache: options?.cache,
     testDb,
     // Tests default to auto-accepting elicitation prompts.
     onElicitation: "accept-all",
