@@ -7,18 +7,16 @@ import {
 import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
-import { toolFingerprints } from "./collections";
+import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
 import { makeGeminiEmbedder, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import {
-  reconcileToolCatalog,
-  reconcileToolCatalogPage,
+  make as makeToolSearchIndex,
+  run as runToolSearchIndex,
   sweepRemoved,
-  type ReconcilePageResult,
-  type ReconcileResult,
-  type SweepResult,
-} from "./indexer";
+  type ToolSearchIndex,
+} from "./tool-search-index";
 import { makeVectorToolDiscoveryProvider } from "./provider";
 import type { VectorStore } from "./store";
 import { type FtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
@@ -40,6 +38,13 @@ export interface SemanticSearchPluginOptions {
   readonly model?: string;
   /** Embedding dimensionality — MUST equal the vector index's dimensions. */
   readonly dimensions?: number;
+  /** Gemini embedding batch size (texts per request; the Google provider allows
+   *  up to 2048 values per call, but Workers memory is the practical ceiling).
+   *  Larger batches
+   *  mean fewer, fatter requests — lower peak RPM for the same tokens — which is
+   *  the key lever when a reindex fans out across many concurrent workers and is
+   *  request-rate-bound. Defaults to the embedder's own default. */
+  readonly embedderBatchSize?: number;
   /** Inject a custom embedder (tests). Overrides `model`/`geminiApiKey`/`dimensions`. */
   readonly embedder?: ToolEmbedder;
   /** Chunker used when indexing the tool catalog. Defaults to `makeFacetChunker()`.
@@ -70,6 +75,7 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
 
 /** Default page size for the operator `search` surface. */
 const DEFAULT_SEARCH_LIMIT = 20;
+const DEFAULT_IN_PROCESS_PARTITIONS = 1;
 
 /** A live `tools.search` result page from the operator search surface. */
 export interface SemanticSearchResultPage {
@@ -98,110 +104,148 @@ const makeSemanticSearchExtension = (deps: {
   readonly embedder: ToolEmbedder | undefined;
   readonly store: VectorStore | undefined;
   readonly chunker: Chunker;
-  readonly fingerprints: Parameters<typeof reconcileToolCatalog>[0]["fingerprints"] | undefined;
-  readonly owner: Parameters<typeof reconcileToolCatalog>[0]["owner"] | undefined;
+  readonly fingerprints: Parameters<typeof runToolSearchIndex>[0]["fingerprints"] | undefined;
+  readonly indexRuns: Parameters<typeof runToolSearchIndex>[0]["runs"] | undefined;
+  readonly indexJobs: Parameters<typeof runToolSearchIndex>[0]["jobs"] | undefined;
+  readonly indexChunks: Parameters<typeof runToolSearchIndex>[0]["chunks"] | undefined;
+  readonly blobs: Parameters<typeof runToolSearchIndex>[0]["blobs"] | undefined;
+  readonly owner: Parameters<typeof runToolSearchIndex>[0]["owner"] | undefined;
   readonly lexicalStore: FtsLexicalStore | undefined;
   readonly provider: ToolDiscoveryProvider | undefined;
-}) => ({
-  reindex: (executor: Executor): Effect.Effect<ReconcileResult, SemanticSearchError> =>
-    deps.embedder && deps.store && deps.fingerprints && deps.owner
-      ? reconcileToolCatalog({
+}) => {
+  const unconfiguredIndex: ToolSearchIndex.Service = {
+    create: () => notConfigured(),
+    scan: () => notConfigured(),
+    chunk: () => notConfigured(),
+    embed: () => notConfigured(),
+    commit: () => notConfigured(),
+    fail: () => notConfigured(),
+    reconcile: () => notConfigured(),
+    status: () => notConfigured(),
+    complete: () => notConfigured(),
+  };
+  const index = (executor: Executor): ToolSearchIndex.Service =>
+    deps.embedder &&
+    deps.store &&
+    deps.fingerprints &&
+    deps.indexRuns &&
+    deps.indexJobs &&
+    deps.indexChunks &&
+    deps.blobs &&
+    deps.owner
+      ? makeToolSearchIndex({
           namespace: deps.namespace,
           executor,
           embedder: deps.embedder,
           store: deps.store,
           chunker: deps.chunker,
+          runs: deps.indexRuns,
+          jobs: deps.indexJobs,
+          chunks: deps.indexChunks,
           fingerprints: deps.fingerprints,
+          blobs: deps.blobs,
           owner: deps.owner,
           lexicalStore: deps.lexicalStore,
         })
-      : notConfigured(),
+      : unconfiguredIndex;
 
-  /** Reconcile ONE bounded page of the catalog. The unit a durable driver (a
-   *  Cloudflare Workflow step) calls in a loop so each step gets its own CPU
-   *  budget. Pair with `sweep` after the last page. */
-  reindexPage: (
-    executor: Executor,
-    input: { readonly cursor: number; readonly pageSize?: number },
-  ): Effect.Effect<ReconcilePageResult, SemanticSearchError> =>
-    deps.embedder && deps.store && deps.fingerprints && deps.owner
-      ? reconcileToolCatalogPage({
-          namespace: deps.namespace,
-          executor,
-          embedder: deps.embedder,
-          store: deps.store,
-          chunker: deps.chunker,
-          fingerprints: deps.fingerprints,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-          cursor: input.cursor,
-          pageSize: input.pageSize,
-        })
-      : notConfigured(),
-
-  /** Delete index entries for tools that left the catalog. Run as the terminal
-   *  step after a paged reindex (or standalone). Needs no embedder. */
-  sweep: (executor: Executor): Effect.Effect<SweepResult, SemanticSearchError> =>
-    deps.store && deps.fingerprints && deps.owner
-      ? sweepRemoved({
-          namespace: deps.namespace,
-          executor,
-          store: deps.store,
-          fingerprints: deps.fingerprints,
-          owner: deps.owner,
-          lexicalStore: deps.lexicalStore,
-        })
-      : notConfigured(),
-
-  /** Run a live `tools.search` through the same provider the engine uses, so the
-   *  operator console sees exactly what the agent would. Inert until configured. */
-  search: (
-    executor: Executor,
-    input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
-  ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
-    const namespace = input.namespace ?? deps.namespace;
-    return deps.provider
-      ? deps.provider
-          .searchTools({
+  return {
+    index,
+    reindex: (executor: Executor): Effect.Effect<ToolSearchIndex.Result, SemanticSearchError> =>
+      deps.embedder &&
+      deps.store &&
+      deps.fingerprints &&
+      deps.indexRuns &&
+      deps.indexJobs &&
+      deps.indexChunks &&
+      deps.blobs &&
+      deps.owner
+        ? runToolSearchIndex({
+            namespace: deps.namespace,
             executor,
-            query: input.query,
-            namespace,
-            limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
-            offset: 0,
+            embedder: deps.embedder,
+            store: deps.store,
+            chunker: deps.chunker,
+            runs: deps.indexRuns,
+            jobs: deps.indexJobs,
+            chunks: deps.indexChunks,
+            fingerprints: deps.fingerprints,
+            blobs: deps.blobs,
+            owner: deps.owner,
+            lexicalStore: deps.lexicalStore,
+            runId: `manual-${Date.now()}`,
+            partitionCount: DEFAULT_IN_PROCESS_PARTITIONS,
           })
-          .pipe(
-            Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
-            Effect.mapError(
-              (cause) =>
-                new SemanticSearchError({ message: "Semantic search query failed.", cause }),
-            ),
-          )
-      : notConfigured();
-  },
+        : notConfigured(),
 
-  /** Index status for the operator console: vector (fingerprint) + lexical counts. */
-  status: (): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
-    Effect.gen(function* () {
-      const indexed = deps.fingerprints
-        ? yield* deps.fingerprints
-            .count()
+    /** Delete index entries for tools that left the catalog. Needs no embedder. */
+    sweep: (
+      executor: Executor,
+    ): Effect.Effect<
+      { readonly namespace: string; readonly removed: number },
+      SemanticSearchError
+    > =>
+      deps.store && deps.fingerprints && deps.owner
+        ? sweepRemoved({
+            namespace: deps.namespace,
+            executor,
+            store: deps.store,
+            fingerprints: deps.fingerprints,
+            owner: deps.owner,
+            lexicalStore: deps.lexicalStore,
+          })
+        : notConfigured(),
+
+    /** Run a live `tools.search` through the same provider the engine uses, so the
+     *  operator console sees exactly what the agent would. Inert until configured. */
+    search: (
+      executor: Executor,
+      input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
+    ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
+      const namespace = input.namespace ?? deps.namespace;
+      return deps.provider
+        ? deps.provider
+            .searchTools({
+              executor,
+              query: input.query,
+              namespace,
+              limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
+              offset: 0,
+            })
             .pipe(
+              Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
               Effect.mapError(
                 (cause) =>
-                  new SemanticSearchError({ message: "Failed to count indexed tools.", cause }),
+                  new SemanticSearchError({ message: "Semantic search query failed.", cause }),
               ),
             )
-        : 0;
-      // A transient lexical-count failure must not mask the (already-fetched)
-      // vector count: degrade `lexical` to null and still return `indexed`.
-      const lexical = deps.lexicalStore
-        ? yield* deps.lexicalStore
-            .count(deps.namespace)
-            .pipe(Effect.catch(() => Effect.succeed(null)))
-        : null;
-      return { namespace: deps.namespace, indexed, lexical };
-    }),
-});
+        : notConfigured();
+    },
+
+    /** Index status for the operator console: vector (fingerprint) + lexical counts. */
+    status: (): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
+      Effect.gen(function* () {
+        const indexed = deps.fingerprints
+          ? yield* deps.fingerprints
+              .count()
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SemanticSearchError({ message: "Failed to count indexed tools.", cause }),
+                ),
+              )
+          : 0;
+        // A transient lexical-count failure must not mask the (already-fetched)
+        // vector count: degrade `lexical` to null and still return `indexed`.
+        const lexical = deps.lexicalStore
+          ? yield* deps.lexicalStore
+              .count(deps.namespace)
+              .pipe(Effect.catch(() => Effect.succeed(null)))
+          : null;
+        return { namespace: deps.namespace, indexed, lexical };
+      }),
+  };
+};
 
 /** The `executor.semanticSearch` surface, derived from its factory. */
 export type SemanticSearchExtension = ReturnType<typeof makeSemanticSearchExtension>;
@@ -227,6 +271,7 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
           apiKey: options.geminiApiKey,
           model: options.model,
           dimensions: options.dimensions,
+          batchSize: options.embedderBatchSize,
         })
       : undefined);
   // Inert without both a vector store and an embedder — the engine then
@@ -257,9 +302,13 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   return {
     id: "semanticSearch" as const,
     packageName: "@executor-js/plugin-semantic-search",
-    pluginStorage: { toolFingerprints },
+    pluginStorage: { toolFingerprints, indexRuns, indexJobs, indexChunks },
     storage: (deps) => ({
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
+      indexRuns: deps.pluginStorage.collection(indexRuns),
+      indexJobs: deps.pluginStorage.collection(indexJobs),
+      indexChunks: deps.pluginStorage.collection(indexChunks),
+      indexBlobs: deps.blobs,
       // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
       // org-scoped. Scoping by the triggering principal (user vs cron) would
       // split the fingerprint store into disjoint partitions, so each reindex
@@ -273,6 +322,10 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
         store,
         chunker,
         fingerprints: ctx.storage.fingerprints,
+        indexRuns: ctx.storage.indexRuns,
+        indexJobs: ctx.storage.indexJobs,
+        indexChunks: ctx.storage.indexChunks,
+        blobs: ctx.storage.indexBlobs,
         owner: ctx.storage.owner,
         lexicalStore,
         provider,

@@ -35,7 +35,7 @@ const DEFAULT_BATCH_SIZE = 32;
 const DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT";
 const QUERY_TASK_TYPE = "RETRIEVAL_QUERY";
 
-const chunk = <A>(items: readonly A[], size: number): readonly (readonly A[])[] => {
+const chunk = <A>(items: readonly A[], size: number): A[][] => {
   const safe = Math.max(1, Math.floor(size));
   const out: A[][] = [];
   for (let i = 0; i < items.length; i += safe) {
@@ -51,7 +51,7 @@ export const makeGeminiEmbedder = (options: GeminiEmbedderOptions): ToolEmbedder
   const google = createGoogleGenerativeAI({ apiKey: options.apiKey });
 
   const embedTexts = (
-    texts: readonly string[],
+    texts: string[],
     taskType: typeof DOCUMENT_TASK_TYPE | typeof QUERY_TASK_TYPE,
   ): Effect.Effect<readonly (readonly number[])[], SemanticSearchError> =>
     Effect.tryPromise({
@@ -69,7 +69,7 @@ export const makeGeminiEmbedder = (options: GeminiEmbedderOptions): ToolEmbedder
         }
         const { embeddings } = await embedMany({
           model: textModel,
-          values: [...texts],
+          values: texts,
           maxParallelCalls: 5,
           providerOptions,
         });

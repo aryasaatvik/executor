@@ -25,6 +25,7 @@ interface ToolSchemaViewCacheKeyInput {
   readonly inputSchema?: unknown;
   readonly outputSchema?: unknown;
   readonly definitions: Readonly<Record<string, unknown>>;
+  readonly includeTypeScript?: boolean;
 }
 
 const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
@@ -38,6 +39,7 @@ const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
     definitions: input.definitions,
+    includeTypeScript: input.includeTypeScript ?? true,
   });
 
 export const toolSchemaViewCacheKey = (input: ToolSchemaViewCacheKeyInput): Effect.Effect<string> =>
