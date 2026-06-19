@@ -67,14 +67,14 @@ export declare namespace ToolSearchIndex {
     readonly partitionCount: number;
   }
 
-  export interface PlanInput {
+  export interface ScanInput {
     readonly runId: string;
     readonly partition: number;
     readonly limit?: number;
     readonly maxTools?: number;
   }
 
-  export interface PlanResult {
+  export interface ScanResult {
     readonly runId: string;
     readonly partition: number;
     readonly processed: number;
@@ -82,6 +82,11 @@ export declare namespace ToolSearchIndex {
     readonly skipped: number;
     readonly paths: readonly string[];
     readonly hasMore: boolean;
+  }
+
+  export interface ChunkRef {
+    readonly path: string;
+    readonly chunkId: string;
   }
 
   export interface ChunkInput {
@@ -96,12 +101,13 @@ export declare namespace ToolSearchIndex {
     readonly processed: number;
     readonly chunks: number;
     readonly paths: readonly string[];
+    readonly chunkRefs: readonly ChunkRef[];
+    readonly commitPaths: readonly string[];
   }
 
   export interface EmbedInput {
     readonly runId: string;
-    readonly paths: readonly string[];
-    readonly limit?: number;
+    readonly chunkRefs: readonly ChunkRef[];
     readonly maxChunks?: number;
     readonly maxEstimatedInputTokens?: number;
     readonly maxEstimatedResponseBytes?: number;
@@ -113,6 +119,18 @@ export declare namespace ToolSearchIndex {
     readonly processed: number;
     readonly chunks: number;
     readonly paths: readonly string[];
+    readonly chunkRefs: readonly ChunkRef[];
+  }
+
+  export interface CommitInput {
+    readonly runId: string;
+    readonly path: string;
+  }
+
+  export interface CommitResult {
+    readonly runId: string;
+    readonly path: string;
+    readonly committed: boolean;
   }
 
   export interface CompleteInput {
@@ -128,6 +146,7 @@ export declare namespace ToolSearchIndex {
     readonly runId: string;
     readonly partition?: number;
     readonly paths?: readonly string[];
+    readonly chunkRefs?: readonly ChunkRef[];
     readonly error: string;
   }
 
@@ -144,9 +163,10 @@ export declare namespace ToolSearchIndex {
 
   export interface ReconcileResult {
     readonly runId: string;
-    readonly planPartitions: readonly number[];
+    readonly scanPartitions: readonly number[];
     readonly pendingChunkPaths: readonly string[];
-    readonly pendingEmbeddingPaths: readonly string[];
+    readonly pendingEmbeddingChunks: readonly ChunkRef[];
+    readonly pendingCommitPaths: readonly string[];
   }
 
   export interface StatusInput {
@@ -158,7 +178,7 @@ export declare namespace ToolSearchIndex {
     readonly namespace: string;
     readonly status: IndexRun["status"];
     readonly total: number;
-    readonly pendingPlan: number;
+    readonly pendingScan: number;
     readonly skipped: number;
     readonly pendingChunk: number;
     readonly pendingEmbedding: number;
@@ -178,9 +198,10 @@ export declare namespace ToolSearchIndex {
 
   export interface Service {
     readonly create: (input: CreateInput) => Effect.Effect<CreateResult, SemanticSearchError>;
-    readonly plan: (input: PlanInput) => Effect.Effect<PlanResult, SemanticSearchError>;
+    readonly scan: (input: ScanInput) => Effect.Effect<ScanResult, SemanticSearchError>;
     readonly chunk: (input: ChunkInput) => Effect.Effect<ChunkResult, SemanticSearchError>;
     readonly embed: (input: EmbedInput) => Effect.Effect<EmbedResult, SemanticSearchError>;
+    readonly commit: (input: CommitInput) => Effect.Effect<CommitResult, SemanticSearchError>;
     readonly fail: (input: FailInput) => Effect.Effect<FailResult, SemanticSearchError>;
     readonly reconcile: (
       input: ReconcileInput,
@@ -241,6 +262,30 @@ const queryChunksForJob = (
         (cause) => new SemanticSearchError({ message: "Failed to query index chunks.", cause }),
       ),
     );
+
+const getChunksByRefs = (
+  deps: IndexCollections,
+  input: {
+    readonly runId: string;
+    readonly chunkRefs: readonly ToolSearchIndex.ChunkRef[];
+  },
+): Effect.Effect<
+  readonly { readonly key: string; readonly data: IndexChunk }[],
+  SemanticSearchError
+> =>
+  Effect.forEach(
+    input.chunkRefs,
+    (ref) =>
+      deps.chunks
+        .getForOwner({ owner: deps.owner, key: chunkKey(input.runId, ref.path, ref.chunkId) })
+        .pipe(Effect.map((entry) => (entry?.data.status === "pendingEmbedding" ? entry : null))),
+    { concurrency: INDEX_STORAGE_CONCURRENCY },
+  ).pipe(
+    Effect.map((entries) => entries.flatMap((entry) => (entry === null ? [] : [entry]))),
+    Effect.mapError(
+      (cause) => new SemanticSearchError({ message: "Failed to load index chunks.", cause }),
+    ),
+  );
 
 interface EmbedBudget {
   readonly maxChunks: number;
@@ -499,6 +544,7 @@ export const fail = (
   Effect.gen(function* () {
     const updatedAt = nowIso();
     const paths = new Set(input.paths ?? []);
+    const chunkRefs = input.chunkRefs ?? [];
     let jobs = 0;
     let chunks = 0;
 
@@ -570,18 +616,58 @@ export const fail = (
       );
     }
 
-    const run = yield* input.runs
-      .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to load index run for failure marking.",
-              cause,
-            }),
-        ),
+    if (chunkRefs.length > 0) {
+      yield* Effect.forEach(
+        chunkRefs,
+        (ref) =>
+          Effect.gen(function* () {
+            const entry = yield* input.chunks
+              .getForOwner({
+                owner: input.owner,
+                key: chunkKey(input.runId, ref.path, ref.chunkId),
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new SemanticSearchError({
+                      message: `Failed to load chunk "${ref.chunkId}" for failure marking.`,
+                      cause,
+                    }),
+                ),
+              );
+            if (entry !== null && entry.data.status === "pendingEmbedding") {
+              yield* input.chunks
+                .put({
+                  owner: input.owner,
+                  key: entry.key,
+                  data: { ...entry.data, status: "failed", error: input.error, updatedAt },
+                })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new SemanticSearchError({
+                        message: `Failed to mark chunk "${ref.chunkId}" failed.`,
+                        cause,
+                      }),
+                  ),
+                );
+              chunks++;
+            }
+          }),
+        { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
       );
-    const runFailed = paths.size === 0;
+    }
+
+    const run = yield* input.runs.getForOwner({ owner: input.owner, key: input.runId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to load index run for failure marking.",
+            cause,
+          }),
+      ),
+    );
+    const runFailed = paths.size === 0 && chunkRefs.length === 0;
     if (runFailed && run !== null) {
       yield* input.runs
         .put({
@@ -614,51 +700,68 @@ export const reconcile = (
   input: IndexCollections & ToolSearchIndex.ReconcileInput,
 ): Effect.Effect<ToolSearchIndex.ReconcileResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const run = yield* input.runs
-      .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to load index run for reconciliation.",
-              cause,
-            }),
-        ),
-      );
+    const run = yield* input.runs.getForOwner({ owner: input.owner, key: input.runId }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to load index run for reconciliation.",
+            cause,
+          }),
+      ),
+    );
     if (run === null) {
       return yield* new SemanticSearchError({
         message: `Index run "${input.runId}" does not exist.`,
       });
     }
 
-    const [pendingChunkJobs, pendingEmbeddingJobs] = yield* Effect.all(
+    const [pendingChunkJobs, pendingEmbeddingJobs, pendingEmbeddingChunks] = yield* Effect.all(
       [
         queryJobsByStatus(input, { runId: input.runId, status: "pendingChunk" }),
         queryJobsByStatus(input, { runId: input.runId, status: "pendingEmbedding" }),
+        input.chunks
+          .query({
+            where: { runId: input.runId, status: "pendingEmbedding" },
+          })
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new SemanticSearchError({
+                  message: "Failed to load pending embedding chunks.",
+                  cause,
+                }),
+            ),
+          ),
       ],
       { concurrency: INDEX_STORAGE_CONCURRENCY },
     );
-    const observed = yield* input.jobs
-      .count({ where: { runId: input.runId } })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to count index jobs for reconciliation.",
-              cause,
-            }),
-        ),
-      );
-    const planPartitions =
+    const observed = yield* input.jobs.count({ where: { runId: input.runId } }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to count index jobs for reconciliation.",
+            cause,
+          }),
+      ),
+    );
+    const scanPartitions =
       observed < run.data.total
         ? Array.from({ length: run.data.partitionCount }, (_, partition) => partition)
         : [];
+    const pendingEmbeddingPaths = new Set(pendingEmbeddingChunks.map((entry) => entry.data.path));
+    const pendingCommitPaths = pendingEmbeddingJobs
+      .map((entry) => entry.data.path)
+      .filter((path) => !pendingEmbeddingPaths.has(path));
 
     return {
       runId: input.runId,
-      planPartitions,
+      scanPartitions,
       pendingChunkPaths: [...new Set(pendingChunkJobs.map((entry) => entry.data.path))],
-      pendingEmbeddingPaths: [...new Set(pendingEmbeddingJobs.map((entry) => entry.data.path))],
+      pendingEmbeddingChunks: pendingEmbeddingChunks.map((entry) => ({
+        path: entry.data.path,
+        chunkId: entry.data.chunkId,
+      })),
+      pendingCommitPaths: [...new Set(pendingCommitPaths)],
     };
   });
 
@@ -698,9 +801,9 @@ export const create = (
     };
   });
 
-export const plan = (
-  input: IndexStores & ToolSearchIndex.PlanInput,
-): Effect.Effect<ToolSearchIndex.PlanResult, SemanticSearchError> =>
+export const scan = (
+  input: IndexStores & ToolSearchIndex.ScanInput,
+): Effect.Effect<ToolSearchIndex.ScanResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const run = yield* input.runs
       .getForOwner({ owner: input.owner, key: input.runId })
@@ -724,7 +827,7 @@ export const plan = (
       .pipe(
         Effect.mapError(
           (cause) =>
-            new SemanticSearchError({ message: "Failed to count planned index jobs.", cause }),
+            new SemanticSearchError({ message: "Failed to count scanned index jobs.", cause }),
         ),
       );
     const selected = partitionDescriptors.slice(
@@ -834,7 +937,14 @@ export const chunk = (
       limit: input.limit,
     });
     if (jobs.length === 0) {
-      return { runId: input.runId, processed: 0, chunks: 0, paths: [] };
+      return {
+        runId: input.runId,
+        processed: 0,
+        chunks: 0,
+        paths: [],
+        chunkRefs: [],
+        commitPaths: [],
+      };
     }
 
     const updatedAt = nowIso();
@@ -843,6 +953,8 @@ export const chunk = (
       Math.floor(input.concurrency ?? DEFAULT_CHUNK_CONCURRENCY),
     );
     const paths: string[] = [];
+    const chunkRefs: ToolSearchIndex.ChunkRef[] = [];
+    const commitPaths: string[] = [];
 
     const chunkCounts = yield* Effect.forEach(
       jobs,
@@ -858,6 +970,9 @@ export const chunk = (
             concurrency: INDEX_STORAGE_CONCURRENCY,
             discard: true,
           });
+          for (const chunk of chunks) {
+            chunkRefs.push({ path: job.path, chunkId: chunk.id });
+          }
           yield* putJob(input, {
             ...job,
             status: "pendingEmbedding",
@@ -866,6 +981,9 @@ export const chunk = (
             updatedAt,
           });
           paths.push(job.path);
+          if (chunks.length === 0) {
+            commitPaths.push(job.path);
+          }
           return chunks.length;
         }),
       { concurrency: chunkConcurrency },
@@ -877,6 +995,8 @@ export const chunk = (
       processed: jobs.length,
       chunks: chunkCount,
       paths,
+      chunkRefs,
+      commitPaths,
     };
   });
 
@@ -923,77 +1043,45 @@ export const embed = (
 ): Effect.Effect<ToolSearchIndex.EmbedResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const budget = resolveEmbedBudget(input);
-    const jobs = yield* getJobsByPaths(input, {
+    const pendingChunks = yield* getChunksByRefs(input, {
       runId: input.runId,
-      status: "pendingEmbedding",
-      paths: input.paths,
-      limit: input.limit,
+      chunkRefs: input.chunkRefs,
     });
-    if (jobs.length === 0) {
-      return { runId: input.runId, processed: 0, chunks: 0, paths: [] };
-    }
-
-    const chunkEntriesByPath = new Map<
-      string,
-      readonly { readonly key: string; readonly data: IndexChunk }[]
-    >();
-    for (const jobEntry of jobs) {
-      chunkEntriesByPath.set(jobEntry.data.path, yield* queryChunksForJob(input, jobEntry.data));
-    }
-
     const selectedChunks: { readonly key: string; readonly data: IndexChunk }[] = [];
     const vectorResponseBytes = estimateEmbeddingResponseBytes(input.embedder.dimensions);
     let selectedInputTokens = 0;
     let selectedResponseBytes = 0;
-    let budgetFull = false;
 
-    for (const { data: job } of jobs) {
-      if (budgetFull) break;
-      const pending = (chunkEntriesByPath.get(job.path) ?? []).filter(
-        (entry) => entry.data.status === "pendingEmbedding",
-      );
-      for (const entry of pending) {
-        const inputTokens = entry.data.embeddingTextTokens;
-        if (inputTokens > budget.maxEstimatedTokensPerText) {
-          return yield* new SemanticSearchError({
-            message: `Index chunk "${entry.data.chunkId}" is estimated at ${inputTokens} tokens, above the per-text embedding budget of ${budget.maxEstimatedTokensPerText}. Lower the chunker facet budget or raise maxEstimatedTokensPerText.`,
-          });
-        }
-
-        const next = { inputTokens, responseBytes: vectorResponseBytes };
-        const current = {
-          chunks: selectedChunks.length,
-          inputTokens: selectedInputTokens,
-          responseBytes: selectedResponseBytes,
-        };
-        if (selectedChunks.length > 0 && wouldExceedEmbedBudget(current, next, budget)) {
-          budgetFull = true;
-          break;
-        }
-
-        selectedChunks.push(entry);
-        selectedInputTokens += inputTokens;
-        selectedResponseBytes += vectorResponseBytes;
+    for (const entry of pendingChunks) {
+      const inputTokens = entry.data.embeddingTextTokens;
+      if (inputTokens > budget.maxEstimatedTokensPerText) {
+        return yield* new SemanticSearchError({
+          message: `Index chunk "${entry.data.chunkId}" is estimated at ${inputTokens} tokens, above the per-text embedding budget of ${budget.maxEstimatedTokensPerText}. Lower the chunker facet budget or raise maxEstimatedTokensPerText.`,
+        });
       }
+
+      const next = { inputTokens, responseBytes: vectorResponseBytes };
+      const current = {
+        chunks: selectedChunks.length,
+        inputTokens: selectedInputTokens,
+        responseBytes: selectedResponseBytes,
+      };
+      if (selectedChunks.length > 0 && wouldExceedEmbedBudget(current, next, budget)) {
+        break;
+      }
+
+      selectedChunks.push(entry);
+      selectedInputTokens += inputTokens;
+      selectedResponseBytes += vectorResponseBytes;
     }
 
     if (selectedChunks.length === 0) {
-      const finalized = yield* finalizeCompletedEmbedJobs(
-        input,
-        jobs,
-        chunkEntriesByPath,
-        nowIso(),
-      );
-      return {
-        runId: input.runId,
-        processed: finalized,
-        chunks: 0,
-        paths: jobs.map((entry) => entry.data.path),
-      };
+      return { runId: input.runId, processed: 0, chunks: 0, paths: [], chunkRefs: [] };
     }
 
     const updatedAt = nowIso();
     const affectedPaths = new Set<string>();
+    const affectedChunks: ToolSearchIndex.ChunkRef[] = [];
     let indexedChunks = 0;
 
     for (let start = 0; start < selectedChunks.length; start += DEFAULT_EMBED_COMMIT_GROUP_SIZE) {
@@ -1054,28 +1142,40 @@ export const embed = (
       indexedChunks += records.length;
       for (const entry of group) {
         affectedPaths.add(entry.data.path);
+        affectedChunks.push({ path: entry.data.path, chunkId: entry.data.chunkId });
       }
     }
 
-    const finalizationCandidates = jobs.filter(({ data: job }) => {
-      if (affectedPaths.has(job.path)) return true;
-      return !(chunkEntriesByPath.get(job.path) ?? []).some(
-        (entry) => entry.data.status === "pendingEmbedding",
-      );
-    });
-    const finalized = yield* finalizeCompletedEmbedJobs(
-      input,
-      finalizationCandidates,
-      undefined,
-      updatedAt,
-    );
-
     return {
       runId: input.runId,
-      processed: Math.max(affectedPaths.size, finalized),
+      processed: affectedChunks.length,
       chunks: indexedChunks,
       paths: [...affectedPaths],
+      chunkRefs: affectedChunks,
     };
+  });
+
+export const commit = (
+  input: IndexDeps & ToolSearchIndex.CommitInput,
+): Effect.Effect<ToolSearchIndex.CommitResult, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const entry = yield* input.jobs
+      .getForOwner({ owner: input.owner, key: jobKey(input.runId, input.path) })
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({
+              message: `Failed to load index job "${input.path}" for commit.`,
+              cause,
+            }),
+        ),
+      );
+    if (entry === null || entry.data.status !== "pendingEmbedding") {
+      return { runId: input.runId, path: input.path, committed: false };
+    }
+
+    const committed = yield* finalizeCompletedEmbedJobs(input, [entry], undefined, nowIso());
+    return { runId: input.runId, path: input.path, committed: committed > 0 };
   });
 
 const finalizeCompletedEmbedJobs = (
@@ -1171,7 +1271,7 @@ export const status = (
         );
     const counts = yield* Effect.all(
       {
-        storedPendingPlan: count("pendingPlan"),
+        storedPendingScan: count("pendingScan"),
         skipped: count("skipped"),
         pendingChunk: count("pendingChunk"),
         pendingEmbedding: count("pendingEmbedding"),
@@ -1183,14 +1283,14 @@ export const status = (
       { concurrency: INDEX_STORAGE_CONCURRENCY },
     );
     const observed =
-      counts.storedPendingPlan +
+      counts.storedPendingScan +
       counts.skipped +
       counts.pendingChunk +
       counts.pendingEmbedding +
       counts.indexed +
       counts.failed;
     const total = run?.data.total ?? observed;
-    const pendingPlan = Math.max(0, total - observed + counts.storedPendingPlan);
+    const pendingScan = Math.max(0, total - observed + counts.storedPendingScan);
     const lastProgressAt = [
       run?.data.updatedAt,
       counts.latestJobUpdatedAt,
@@ -1204,7 +1304,7 @@ export const status = (
       namespace: run?.data.namespace ?? input.namespace,
       status: run?.data.status ?? "running",
       total,
-      pendingPlan,
+      pendingScan,
       skipped: counts.skipped,
       pendingChunk: counts.pendingChunk,
       pendingEmbedding: counts.pendingEmbedding,
@@ -1316,25 +1416,38 @@ export const run = (
     const started = yield* create(input);
     for (let partition = 0; partition < started.partitionCount; partition++) {
       for (;;) {
-        const page = yield* plan({
+        const page = yield* scan({
           ...input,
           partition,
           limit: input.pageLimit,
         });
         if (page.processed === 0) break;
         if (page.paths.length > 0) {
-          yield* chunk({
+          const chunked = yield* chunk({
             ...input,
             paths: page.paths,
             limit: input.pageLimit,
           });
-          for (;;) {
+          let pendingChunks = [...chunked.chunkRefs];
+          for (const path of chunked.commitPaths) {
+            yield* commit({ ...input, runId: input.runId, path });
+          }
+          while (pendingChunks.length > 0) {
             const embedded = yield* embed({
               ...input,
-              paths: page.paths,
-              limit: input.pageLimit,
+              chunkRefs: pendingChunks,
+              maxChunks: input.pageLimit,
             });
             if (embedded.processed === 0 || embedded.chunks === 0) break;
+            const embeddedKeys = new Set(
+              embedded.chunkRefs.map((ref) => `${ref.path}:${ref.chunkId}`),
+            );
+            pendingChunks = pendingChunks.filter(
+              (ref) => !embeddedKeys.has(`${ref.path}:${ref.chunkId}`),
+            );
+            for (const path of embedded.paths) {
+              yield* commit({ ...input, runId: input.runId, path });
+            }
           }
         }
         if (!page.hasMore) break;
@@ -1353,9 +1466,10 @@ export const run = (
 
 export const make = (input: IndexDeps): ToolSearchIndex.Service => ({
   create: (options) => create({ ...input, ...options }),
-  plan: (options) => plan({ ...input, ...options }),
+  scan: (options) => scan({ ...input, ...options }),
   chunk: (options) => chunk({ ...input, ...options }),
   embed: (options) => embed({ ...input, ...options }),
+  commit: (options) => commit({ ...input, ...options }),
   fail: (options) => fail({ ...input, ...options }),
   reconcile: (options) => reconcile({ ...input, ...options }),
   status: (options) => status({ ...input, ...options }),

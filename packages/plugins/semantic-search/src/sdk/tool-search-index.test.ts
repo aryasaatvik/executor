@@ -20,7 +20,7 @@ import {
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import { chunk, create, embed, fail, plan, reconcile, status } from "./tool-search-index";
+import { chunk, commit, create, embed, fail, reconcile, scan, status } from "./tool-search-index";
 import type { VectorInput, VectorStore } from "./store";
 
 const owner: Owner = "org" as Owner;
@@ -132,7 +132,7 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
 };
 
 describe("ToolSearchIndex", () => {
-  it.effect("plans, chunks, embeds, and indexes changed tools", () =>
+  it.effect("scans, chunks, embeds, and commits changed tools", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
@@ -157,7 +157,7 @@ describe("ToolSearchIndex", () => {
 
       const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
       yield* create({ ...base, runId: "run-1", partitionCount: 1 });
-      const planned = yield* plan({
+      const scanned = yield* scan({
         ...base,
         runId: "run-1",
         partition: 0,
@@ -169,7 +169,7 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: "run-1",
-        paths: planned.paths,
+        paths: scanned.paths,
         limit: 10,
       });
       const embedded = yield* embed({
@@ -178,14 +178,23 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: "run-1",
-        paths: chunked.paths,
-        limit: 10,
+        chunkRefs: chunked.chunkRefs,
       });
+      for (const path of embedded.paths) {
+        yield* commit({
+          ...base,
+          embedder,
+          store,
+          chunker: makeFacetChunker(),
+          runId: "run-1",
+          path,
+        });
+      }
 
-      expect(planned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect(scanned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
-      expect(embedded).toMatchObject({ processed: 1, chunks: chunked.chunks });
+      expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
       expect(counters).toEqual({ raw: 1, codegen: 1 });
       expect(upserted).toHaveLength(chunked.chunks);
       expect([...fingerprints.data.values()]).toHaveLength(1);
@@ -217,7 +226,7 @@ describe("ToolSearchIndex", () => {
 
       const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
       yield* create({ ...base, runId: "run-fail", partitionCount: 1 });
-      const planned = yield* plan({
+      const scanned = yield* scan({
         ...base,
         runId: "run-fail",
         partition: 0,
@@ -229,14 +238,14 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: "run-fail",
-        paths: planned.paths,
+        paths: scanned.paths,
         limit: 10,
       });
 
       const result = yield* fail({
         ...base,
         runId: "run-fail",
-        paths: planned.paths,
+        paths: scanned.paths,
         error: "queue exhausted",
       });
       const current = yield* status({ ...base, runId: "run-fail" });
@@ -251,7 +260,7 @@ describe("ToolSearchIndex", () => {
     }),
   );
 
-  it.effect("reconciles pending plan partitions and pending paths", () =>
+  it.effect("reconciles pending scan partitions, chunk paths, embedding chunks, and commits", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
@@ -263,18 +272,18 @@ describe("ToolSearchIndex", () => {
       const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
 
       yield* create({ ...base, runId: "run-reconcile", partitionCount: 1 });
-      const beforePlan = yield* reconcile({ ...base, runId: "run-reconcile" });
-      const planned = yield* plan({
+      const beforeScan = yield* reconcile({ ...base, runId: "run-reconcile" });
+      const scanned = yield* scan({
         ...base,
         runId: "run-reconcile",
         partition: 0,
         limit: 10,
       });
-      const afterPlan = yield* reconcile({ ...base, runId: "run-reconcile" });
+      const afterScan = yield* reconcile({ ...base, runId: "run-reconcile" });
 
-      expect(beforePlan.planPartitions).toEqual([0]);
-      expect(afterPlan.pendingChunkPaths).toEqual(planned.paths);
-      expect(afterPlan.planPartitions).toEqual([]);
+      expect(beforeScan.scanPartitions).toEqual([0]);
+      expect(afterScan.pendingChunkPaths).toEqual(scanned.paths);
+      expect(afterScan.scanPartitions).toEqual([]);
     }),
   );
 
@@ -337,7 +346,7 @@ describe("ToolSearchIndex", () => {
         partitionCount: 1,
         maxTools: 2,
       });
-      const planned = yield* plan({
+      const scanned = yield* scan({
         ...base,
         runId: "run-limited",
         partition: 0,
@@ -346,7 +355,7 @@ describe("ToolSearchIndex", () => {
       });
 
       expect(started.total).toBe(2);
-      expect(planned.processed).toBe(2);
+      expect(scanned.processed).toBe(2);
       expect(jobs.data.size).toBe(2);
     }),
   );
@@ -448,8 +457,7 @@ describe("ToolSearchIndex", () => {
       const first = yield* embed({
         ...base,
         runId: job.runId,
-        paths: [job.path],
-        limit: 10,
+        chunkRefs: job.chunkIds.map((chunkId) => ({ path: job.path, chunkId })),
         maxChunks: 2,
       });
       const afterFirstJob = jobs.data.get(`${job.runId}:${job.path}`);
@@ -458,18 +466,19 @@ describe("ToolSearchIndex", () => {
       const second = yield* embed({
         ...base,
         runId: job.runId,
-        paths: [job.path],
-        limit: 10,
+        chunkRefs: job.chunkIds.map((chunkId) => ({ path: job.path, chunkId })),
         maxChunks: 10,
       });
-      const afterSecondJob = jobs.data.get(`${job.runId}:${job.path}`);
+      const committed = yield* commit({ ...base, runId: job.runId, path: job.path });
+      const afterCommitJob = jobs.data.get(`${job.runId}:${job.path}`);
 
-      expect(first).toMatchObject({ processed: 1, chunks: 2 });
+      expect(first).toMatchObject({ processed: 2, chunks: 2 });
       expect(afterFirstJob?.status).toBe("pendingEmbedding");
       expect(firstChunkStatuses.filter((status) => status === "indexed")).toHaveLength(2);
       expect(firstChunkStatuses.filter((status) => status === "pendingEmbedding")).toHaveLength(1);
       expect(second).toMatchObject({ processed: 1, chunks: 1 });
-      expect(afterSecondJob?.status).toBe("indexed");
+      expect(committed.committed).toBe(true);
+      expect(afterCommitJob?.status).toBe("indexed");
       expect(mutableEmbeddedGroups.map((group) => group.length)).toEqual([2, 1]);
       expect(upserted).toHaveLength(3);
       expect([...fingerprints.data.values()]).toHaveLength(1);
@@ -516,7 +525,7 @@ describe("ToolSearchIndex", () => {
       };
       yield* jobs.put({ owner, key: `${job.runId}:${job.path}`, data: job });
 
-      const result = yield* embed({
+      const result = yield* commit({
         namespace,
         executor: makeExecutor({ raw: 0, codegen: 0 }),
         runs,
@@ -529,11 +538,10 @@ describe("ToolSearchIndex", () => {
         store,
         chunker: makeFacetChunker(),
         runId: job.runId,
-        paths: [job.path],
-        limit: 10,
+        path: job.path,
       });
 
-      expect(result).toMatchObject({ processed: 1, chunks: 0 });
+      expect(result).toMatchObject({ committed: true });
       expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
       expect(fingerprints.data.get(job.path)).toMatchObject({
         path: job.path,
