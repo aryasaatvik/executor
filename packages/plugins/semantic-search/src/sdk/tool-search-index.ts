@@ -19,9 +19,11 @@ import {
   toolFingerprints,
 } from "./collections";
 import {
+  addressToPath,
   buildLexicalText,
   collectDocForTool,
   type IndexableToolDescriptor,
+  listToolDescriptors,
   listToolManifests,
 } from "./documents";
 import type { ToolEmbedder } from "./embedder";
@@ -1316,10 +1318,10 @@ export const sweepRemoved = (input: {
   readonly lexicalStore?: FtsLexicalStore;
 }): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
   Effect.gen(function* () {
-    const live = yield* listToolManifests(input.executor);
+    const live = yield* listToolDescriptors(input.executor);
     if (live.length === 0) return { namespace: input.namespace, removed: 0 };
 
-    const livePaths = new Set(live.map((manifest) => manifest.path));
+    const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
     const stored = yield* input.fingerprints.list().pipe(
       Effect.mapError(
         (cause) =>

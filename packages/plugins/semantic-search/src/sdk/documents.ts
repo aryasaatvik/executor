@@ -86,12 +86,15 @@ const selectToolDescriptors = (
   tools: readonly Tool[],
   options?: ListToolDescriptorsOptions,
 ): readonly Tool[] => {
-  const sorted = [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
   const maxTools = options?.maxTools;
-  if (maxTools === undefined) return sorted;
+  if (maxTools === undefined) {
+    return [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
+  }
   const limit = Math.max(0, Math.floor(maxTools));
-  if (limit >= sorted.length) return sorted;
-  return [...sorted]
+  if (limit >= tools.length) {
+    return [...tools].sort((a, b) => String(a.address).localeCompare(String(b.address)));
+  }
+  return [...tools]
     .sort((a, b) => {
       const left = cyrb53(addressToPath(String(a.address)));
       const right = cyrb53(addressToPath(String(b.address)));
@@ -105,12 +108,15 @@ const selectToolManifests = (
   manifests: readonly ToolSchemaManifest[],
   options?: ListToolDescriptorsOptions,
 ): readonly ToolSchemaManifest[] => {
-  const sorted = [...manifests].sort((a, b) => a.path.localeCompare(b.path));
   const maxTools = options?.maxTools;
-  if (maxTools === undefined) return sorted;
+  if (maxTools === undefined) {
+    return [...manifests].sort((a, b) => a.path.localeCompare(b.path));
+  }
   const limit = Math.max(0, Math.floor(maxTools));
-  if (limit >= sorted.length) return sorted;
-  return [...sorted]
+  if (limit >= manifests.length) {
+    return [...manifests].sort((a, b) => a.path.localeCompare(b.path));
+  }
+  return [...manifests]
     .sort((a, b) => {
       const left = cyrb53(a.path);
       const right = cyrb53(b.path);
