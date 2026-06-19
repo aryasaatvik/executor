@@ -19,16 +19,14 @@ import {
   toolFingerprints,
 } from "./collections";
 import {
-  addressToPath,
   buildLexicalText,
   collectDocForTool,
-  collectFingerprintInputs,
   type IndexableToolDescriptor,
-  listToolDescriptors,
+  listToolManifests,
 } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
-import { cyrb53, fingerprintTool } from "./fingerprint";
+import { cyrb53 } from "./fingerprint";
 import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
@@ -770,7 +768,7 @@ export const create = (
 ): Effect.Effect<ToolSearchIndex.CreateResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const partitionCount = Math.max(1, Math.floor(input.partitionCount));
-    const descriptors = yield* listToolDescriptors(input.executor, { maxTools: input.maxTools });
+    const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
     const createdAt = nowIso();
 
     yield* input.runs
@@ -782,7 +780,7 @@ export const create = (
           namespace: input.namespace,
           status: "running",
           partitionCount,
-          total: descriptors.length,
+          total: manifests.length,
           createdAt,
           updatedAt: createdAt,
         },
@@ -796,7 +794,7 @@ export const create = (
     return {
       runId: input.runId,
       namespace: input.namespace,
-      total: descriptors.length,
+      total: manifests.length,
       partitionCount,
     };
   });
@@ -818,10 +816,13 @@ export const scan = (
       });
     }
 
-    const descriptors = yield* listToolDescriptors(input.executor, { maxTools: input.maxTools });
-    const partitionDescriptors = descriptors
-      .map((tool, ordinal) => ({ tool, ordinal, path: addressToPath(String(tool.address)) }))
-      .filter(({ path }) => partitionForPath(path, run.data.partitionCount) === input.partition);
+    const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
+    const partitionManifests = manifests
+      .map((manifest, ordinal) => ({ manifest, ordinal }))
+      .filter(
+        ({ manifest }) =>
+          partitionForPath(manifest.path, run.data.partitionCount) === input.partition,
+      );
     const existing = yield* input.jobs
       .count({ where: { runId: input.runId, partition: input.partition } })
       .pipe(
@@ -830,7 +831,7 @@ export const scan = (
             new SemanticSearchError({ message: "Failed to count scanned index jobs.", cause }),
         ),
       );
-    const selected = partitionDescriptors.slice(
+    const selected = partitionManifests.slice(
       existing,
       existing + (input.limit ?? DEFAULT_PAGE_LIMIT),
     );
@@ -846,43 +847,34 @@ export const scan = (
       };
     }
 
-    const fingerprintInputs = yield* collectFingerprintInputs(
-      input.executor,
-      selected.map(({ tool }) => tool),
-    );
     const stored = yield* loadFingerprints(
       input,
-      fingerprintInputs.map(({ input: fp }) => fp.path),
+      selected.map(({ manifest }) => manifest.path),
     );
 
     let changed = 0;
     let skipped = 0;
     const changedPaths: string[] = [];
-    const selectedByPath = new Map(selected.map((entry) => [entry.path, entry]));
     const updatedAt = nowIso();
 
     yield* Effect.forEach(
-      fingerprintInputs,
-      ({ input: fp }) => {
-        const selectedEntry = selectedByPath.get(fp.path);
-        if (selectedEntry === undefined) return Effect.void;
-        const fingerprint = fingerprintTool(fp);
-        const storedRow = stored.get(fp.path);
-        const { tool, ordinal, path } = selectedEntry;
+      selected,
+      ({ manifest, ordinal }) => {
+        const storedRow = stored.get(manifest.path);
         const next: IndexJob =
-          storedRow !== undefined && storedRow.fingerprint === fingerprint
+          storedRow !== undefined && storedRow.fingerprint === manifest.indexFingerprint
             ? {
                 runId: input.runId,
                 namespace: input.namespace,
                 partition: input.partition,
                 ordinal,
-                address: String(tool.address),
-                path,
-                name: String(tool.name),
-                integration: String(tool.integration),
-                description: String(tool.description ?? ""),
+                address: String(manifest.address),
+                path: manifest.path,
+                name: manifest.name,
+                integration: manifest.integration,
+                description: manifest.description,
                 status: "skipped",
-                fingerprint,
+                fingerprint: manifest.indexFingerprint,
                 oldChunkIds: storedRow.chunkIds,
                 chunkIds: storedRow.chunkIds,
                 updatedAt,
@@ -893,13 +885,13 @@ export const scan = (
                 namespace: input.namespace,
                 partition: input.partition,
                 ordinal,
-                address: String(tool.address),
-                path,
-                name: String(tool.name),
-                integration: String(tool.integration),
-                description: String(tool.description ?? ""),
+                address: String(manifest.address),
+                path: manifest.path,
+                name: manifest.name,
+                integration: manifest.integration,
+                description: manifest.description,
                 status: "pendingChunk",
-                fingerprint,
+                fingerprint: manifest.indexFingerprint,
                 oldChunkIds: storedRow?.chunkIds ?? [],
                 chunkIds: [],
                 updatedAt,
@@ -922,7 +914,7 @@ export const scan = (
       changed,
       skipped,
       paths: changedPaths,
-      hasMore: existing + selected.length < partitionDescriptors.length,
+      hasMore: existing + selected.length < partitionManifests.length,
     };
   });
 
@@ -1324,10 +1316,10 @@ export const sweepRemoved = (input: {
   readonly lexicalStore?: FtsLexicalStore;
 }): Effect.Effect<{ readonly namespace: string; readonly removed: number }, SemanticSearchError> =>
   Effect.gen(function* () {
-    const live = yield* listToolDescriptors(input.executor);
+    const live = yield* listToolManifests(input.executor);
     if (live.length === 0) return { namespace: input.namespace, removed: 0 };
 
-    const livePaths = new Set(live.map((tool) => addressToPath(String(tool.address))));
+    const livePaths = new Set(live.map((manifest) => manifest.path));
     const stored = yield* input.fingerprints.list().pipe(
       Effect.mapError(
         (cause) =>
