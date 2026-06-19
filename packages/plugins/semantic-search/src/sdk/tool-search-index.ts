@@ -278,7 +278,7 @@ const getChunksByRefs = (
     (ref) =>
       deps.chunks
         .getForOwner({ owner: deps.owner, key: chunkKey(input.runId, ref.path, ref.chunkId) })
-        .pipe(Effect.map((entry) => (entry?.data.status === "pendingEmbedding" ? entry : null))),
+        .pipe(Effect.map((entry) => entry ?? null)),
     { concurrency: INDEX_STORAGE_CONCURRENCY },
   ).pipe(
     Effect.map((entries) => entries.flatMap((entry) => (entry === null ? [] : [entry]))),
@@ -931,13 +931,38 @@ export const chunk = (
       limit: input.limit,
     });
     if (jobs.length === 0) {
+      const pendingEmbeddingJobs = yield* getJobsByPaths(input, {
+        runId: input.runId,
+        status: "pendingEmbedding",
+        paths: input.paths,
+        limit: input.limit,
+      });
+      const existing = yield* Effect.forEach(
+        pendingEmbeddingJobs,
+        (entry) =>
+          queryChunksForJob(input, entry.data).pipe(
+            Effect.map((chunkEntries) => ({ job: entry.data, chunkEntries })),
+          ),
+        { concurrency: INDEX_STORAGE_CONCURRENCY },
+      );
+      const chunkRefs = existing.flatMap(({ chunkEntries }) =>
+        chunkEntries
+          .filter((entry) => entry.data.status === "pendingEmbedding")
+          .map((entry) => ({ path: entry.data.path, chunkId: entry.data.chunkId })),
+      );
+      const commitPaths = existing
+        .filter(({ chunkEntries }) =>
+          chunkEntries.every((entry) => entry.data.status === "indexed"),
+        )
+        .map(({ job }) => job.path);
+
       return {
         runId: input.runId,
-        processed: 0,
-        chunks: 0,
-        paths: [],
-        chunkRefs: [],
-        commitPaths: [],
+        processed: pendingEmbeddingJobs.length,
+        chunks: chunkRefs.length,
+        paths: pendingEmbeddingJobs.map((entry) => entry.data.path),
+        chunkRefs,
+        commitPaths,
       };
     }
 
@@ -1037,16 +1062,18 @@ export const embed = (
 ): Effect.Effect<ToolSearchIndex.EmbedResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const budget = resolveEmbedBudget(input);
-    const pendingChunks = yield* getChunksByRefs(input, {
+    const chunkEntries = yield* getChunksByRefs(input, {
       runId: input.runId,
       chunkRefs: input.chunkRefs,
     });
+    const alreadyIndexed = chunkEntries.filter((entry) => entry.data.status === "indexed");
     const selectedChunks: { readonly key: string; readonly data: IndexChunk }[] = [];
     const vectorResponseBytes = estimateEmbeddingResponseBytes(input.embedder.dimensions);
     let selectedInputTokens = 0;
     let selectedResponseBytes = 0;
 
-    for (const entry of pendingChunks) {
+    for (const entry of chunkEntries) {
+      if (entry.data.status !== "pendingEmbedding") continue;
       const inputTokens = entry.data.embeddingTextTokens;
       if (inputTokens > budget.maxEstimatedTokensPerText) {
         return yield* new SemanticSearchError({
@@ -1070,12 +1097,24 @@ export const embed = (
     }
 
     if (selectedChunks.length === 0) {
-      return { runId: input.runId, processed: 0, chunks: 0, paths: [], chunkRefs: [] };
+      return {
+        runId: input.runId,
+        processed: 0,
+        chunks: 0,
+        paths: [...new Set(alreadyIndexed.map((entry) => entry.data.path))],
+        chunkRefs: alreadyIndexed.map((entry) => ({
+          path: entry.data.path,
+          chunkId: entry.data.chunkId,
+        })),
+      };
     }
 
     const updatedAt = nowIso();
-    const affectedPaths = new Set<string>();
-    const affectedChunks: ToolSearchIndex.ChunkRef[] = [];
+    const affectedPaths = new Set(alreadyIndexed.map((entry) => entry.data.path));
+    const affectedChunks: ToolSearchIndex.ChunkRef[] = alreadyIndexed.map((entry) => ({
+      path: entry.data.path,
+      chunkId: entry.data.chunkId,
+    }));
     let indexedChunks = 0;
 
     for (let start = 0; start < selectedChunks.length; start += DEFAULT_EMBED_COMMIT_GROUP_SIZE) {
@@ -1142,7 +1181,7 @@ export const embed = (
 
     return {
       runId: input.runId,
-      processed: affectedChunks.length,
+      processed: indexedChunks,
       chunks: indexedChunks,
       paths: [...affectedPaths],
       chunkRefs: affectedChunks,
