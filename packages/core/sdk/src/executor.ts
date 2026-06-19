@@ -169,6 +169,7 @@ import {
   TOOL_SCHEMA_VIEW_CACHE_VERSION,
   ToolSchemaViewCacheEntry,
   toolSchemaViewCacheKey,
+  toolSchemaViewManifestCacheKey,
 } from "./tool-schema-view-cache";
 import {
   refreshAccessToken,
@@ -387,12 +388,11 @@ export interface ExecutorConfig<TPlugins extends readonly AnyPlugin[] = readonly
    */
   readonly blobs?: BlobStore;
   /**
-   * Durable key/value store for derived executor artifacts. Defaults to an
-   * isolate-local in-memory store; hosts can provide Effect's
-   * `KeyValueStore.KeyValueStore` backed by platform storage such as
+   * Cache storage for derived executor artifacts. Defaults to an in-memory
+   * Effect `KeyValueStore`; hosts can provide platform storage such as
    * Cloudflare KV.
    */
-  readonly keyValueStore?: KeyValueStore.KeyValueStore;
+  readonly cache?: KeyValueStore.KeyValueStore;
   readonly plugins?: TPlugins;
   /** Config-level credential providers, merged with every
    *  `plugin.credentialProviders`. Config providers register first, so the
@@ -458,6 +458,58 @@ const validateExecutorDbTables = (required: FumaTables, actual: FumaTables): voi
 
 const storageFailureFromUnknown = (message: string, cause: unknown): StorageFailure =>
   isStorageFailure(cause) ? cause : new StorageError({ message, cause });
+
+const MEMORY_CACHE_CAPACITY = 2_048;
+const MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
+
+const makeMemoryCacheStore = (): KeyValueStore.KeyValueStore => {
+  const rows = new Map<string, { readonly value: string; readonly expiresAt: number }>();
+  const evictExpired = (now: number): void => {
+    for (const [key, entry] of rows) {
+      if (entry.expiresAt <= now) rows.delete(key);
+    }
+  };
+  const evictCapacity = (): void => {
+    while (rows.size > MEMORY_CACHE_CAPACITY) {
+      const oldest = rows.keys().next().value;
+      if (oldest === undefined) break;
+      rows.delete(oldest);
+    }
+  };
+  return KeyValueStore.makeStringOnly({
+    get: (key) =>
+      Effect.sync(() => {
+        const now = Date.now();
+        const entry = rows.get(key);
+        if (entry === undefined) return undefined;
+        if (entry.expiresAt <= now) {
+          rows.delete(key);
+          return undefined;
+        }
+        rows.delete(key);
+        rows.set(key, entry);
+        return entry.value;
+      }),
+    set: (key, value) =>
+      Effect.sync(() => {
+        const now = Date.now();
+        evictExpired(now);
+        rows.set(key, { value, expiresAt: now + MEMORY_CACHE_TTL_MS });
+        evictCapacity();
+      }),
+    remove: (key) =>
+      Effect.sync(() => {
+        rows.delete(key);
+      }),
+    clear: Effect.sync(() => {
+      rows.clear();
+    }),
+    size: Effect.sync(() => {
+      evictExpired(Date.now());
+      return rows.size;
+    }),
+  });
+};
 
 const pluginStorageFailure = (pluginId: string, hook: string, cause: unknown): StorageFailure =>
   storageFailureFromUnknown(`${hook} failed for plugin ${pluginId}`, cause);
@@ -1765,44 +1817,12 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     const fuma = makeFumaClient(rootDb);
     const core = makeCoreDb(fuma);
     const blobs = config.blobs ?? makeFumaBlobStore(fuma);
-    const typeScriptPreviewStore =
-      config.keyValueStore === undefined
-        ? undefined
-        : KeyValueStore.toSchemaStore(config.keyValueStore, ToolTypeScriptPreviewCacheEntry);
-    const toolSchemaViewStore =
-      config.keyValueStore === undefined
-        ? undefined
-        : KeyValueStore.toSchemaStore(config.keyValueStore, ToolSchemaViewCacheEntry);
-    const typeScriptPreviewCache = yield* Cache.make({
-      capacity: 2_048,
-      timeToLive: Duration.minutes(10),
-      lookup: (key: string) =>
-        Effect.gen(function* () {
-          if (typeScriptPreviewStore === undefined) return null;
-
-          const entry = yield* typeScriptPreviewStore
-            .get(key)
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isNone(entry)) return null;
-
-          return entry.value.preview;
-        }),
-    });
-    const toolSchemaViewCache = yield* Cache.make({
-      capacity: 2_048,
-      timeToLive: Duration.minutes(10),
-      lookup: (key: string) =>
-        Effect.gen(function* () {
-          if (toolSchemaViewStore === undefined) return null;
-
-          const entry = yield* toolSchemaViewStore
-            .get(key)
-            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-          if (Option.isNone(entry)) return null;
-
-          return entry.value.view;
-        }),
-    });
+    const cacheStore = config.cache ?? makeMemoryCacheStore();
+    const typeScriptPreviewStore = KeyValueStore.toSchemaStore(
+      cacheStore,
+      ToolTypeScriptPreviewCacheEntry,
+    );
+    const toolSchemaViewStore = KeyValueStore.toSchemaStore(cacheStore, ToolSchemaViewCacheEntry);
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
 
     // Populated once, never mutated after startup.
@@ -1836,8 +1856,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           outputSchema: input.outputSchema,
           definitions,
         });
-        const cached = yield* Cache.get(typeScriptPreviewCache, key);
-        if (cached !== null) return cached;
+        const cached = yield* typeScriptPreviewStore
+          .get(key)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        if (Option.isSome(cached)) return cached.value.preview;
 
         const preview = yield* Effect.tryPromise({
           try: () =>
@@ -1849,16 +1871,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           catch: (cause) =>
             storageFailureFromUnknown("Failed to build tool TypeScript preview", cause),
         });
-        yield* Cache.set(typeScriptPreviewCache, key, preview);
-        if (typeScriptPreviewStore !== undefined) {
-          yield* typeScriptPreviewStore
-            .set(key, {
-              version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-              compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-              preview,
-            })
-            .pipe(Effect.ignore);
-        }
+        yield* typeScriptPreviewStore
+          .set(key, {
+            version: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+            compilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+            preview,
+          })
+          .pipe(Effect.ignore);
         return preview;
       });
 
@@ -3104,8 +3123,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             definitions: {},
             includeTypeScript,
           });
-          const cached = yield* Cache.get(toolSchemaViewCache, key);
-          if (cached !== null) return cached;
+          const cached = yield* toolSchemaViewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
 
           const preview = includeTypeScript
             ? Option.getOrUndefined(
@@ -3126,22 +3147,45 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             outputTypeScript: preview?.outputTypeScript,
             typeScriptDefinitions: preview?.typeScriptDefinitions,
           });
-          yield* Cache.set(toolSchemaViewCache, key, view);
-          if (toolSchemaViewStore !== undefined) {
-            yield* toolSchemaViewStore
-              .set(key, {
-                version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
-                typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-                typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-                view,
-              })
-              .pipe(Effect.ignore);
-          }
+          yield* toolSchemaViewStore
+            .set(key, {
+              version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+              typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+              typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+              view,
+            })
+            .pipe(Effect.ignore);
           return view;
         }
 
         const parsed = parseToolAddress(String(address));
         if (!parsed) return null;
+        const manifestRow = yield* core.findFirst("tool_schema_manifest", {
+          where: (b: AnyCb) =>
+            b.and(
+              byOwner(parsed.owner)(b),
+              b("integration", "=", String(parsed.integration)),
+              b("connection", "=", String(parsed.connection)),
+              b("name", "=", String(parsed.tool)),
+            ),
+        });
+        const manifest = manifestRow === null ? null : rowToToolSchemaManifest(manifestRow);
+        const manifestCacheKey =
+          manifest === null
+            ? null
+            : yield* toolSchemaViewManifestCacheKey({
+                address: String(address),
+                indexFingerprint: manifest.indexFingerprint,
+                fingerprintVersion: manifest.fingerprintVersion,
+                includeTypeScript,
+              });
+        if (manifestCacheKey !== null) {
+          const cached = yield* toolSchemaViewStore
+            .get(manifestCacheKey)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
+        }
+
         const row = yield* core.findFirst("tool", {
           where: (b: AnyCb) =>
             b.and(
@@ -3165,17 +3209,23 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const defs = new Map<string, unknown>();
         for (const def of definitionRows) defs.set(def.name, decodeJsonColumn(def.schema));
         const definitions = Object.fromEntries(defs);
-        const key = yield* toolSchemaViewCacheKey({
-          address: String(address),
-          name: String(tool.name),
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          outputSchema: tool.outputSchema,
-          definitions,
-          includeTypeScript,
-        });
-        const cached = yield* Cache.get(toolSchemaViewCache, key);
-        if (cached !== null) return cached;
+        const key =
+          manifestCacheKey ??
+          (yield* toolSchemaViewCacheKey({
+            address: String(address),
+            name: String(tool.name),
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+            definitions,
+            includeTypeScript,
+          }));
+        if (manifestCacheKey === null) {
+          const cached = yield* toolSchemaViewStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) return cached.value.view;
+        }
 
         const referenced = collectReferencedDefinitions(
           [tool.inputSchema, tool.outputSchema],
@@ -3206,17 +3256,14 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           outputTypeScript: preview?.outputTypeScript,
           typeScriptDefinitions: preview?.typeScriptDefinitions,
         });
-        yield* Cache.set(toolSchemaViewCache, key, view);
-        if (toolSchemaViewStore !== undefined) {
-          yield* toolSchemaViewStore
-            .set(key, {
-              version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
-              typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
-              typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
-              view,
-            })
-            .pipe(Effect.ignore);
-        }
+        yield* toolSchemaViewStore
+          .set(key, {
+            version: TOOL_SCHEMA_VIEW_CACHE_VERSION,
+            typeScriptPreviewCacheVersion: TOOL_TYPESCRIPT_PREVIEW_CACHE_VERSION,
+            typeScriptPreviewCompilerVersion: TOOL_TYPESCRIPT_PREVIEW_COMPILER_VERSION,
+            view,
+          })
+          .pipe(Effect.ignore);
         return view;
       });
 
