@@ -15,7 +15,8 @@ import { SemanticSearchGroup } from "./group";
 // `Layer.succeed(SemanticSearchExtensionService, executor.semanticSearch)`.
 // The handler also yields the per-request `ExecutorService` (the scoped
 // executor) and hands it to `reindex`, since the catalog lives on the executor,
-// not the plugin ctx.
+// not the plugin ctx. `reindex` is a index run, not a legacy page
+// reconciler.
 // ---------------------------------------------------------------------------
 
 export class SemanticSearchExtensionService extends Context.Service<
