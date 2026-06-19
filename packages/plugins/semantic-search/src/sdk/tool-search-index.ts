@@ -226,8 +226,24 @@ const ESTIMATED_CHARS_PER_TOKEN = 4;
 const ESTIMATED_RESPONSE_BYTES_PER_DIMENSION = 16;
 const ESTIMATED_RESPONSE_BYTES_PER_VECTOR_OVERHEAD = 512;
 const INDEX_STORAGE_CONCURRENCY = 2;
+const VECTOR_METADATA_DESCRIPTION_BYTES = 2_048;
 
 const nowIso = (): string => new Date().toISOString();
+
+const truncateUtf8 = (value: string, maxBytes: number): string => {
+  const encoder = new TextEncoder();
+  if (encoder.encode(value).length <= maxBytes) return value;
+
+  let bytes = 0;
+  let result = "";
+  for (const char of value) {
+    const size = encoder.encode(char).length;
+    if (bytes + size > maxBytes) break;
+    result += char;
+    bytes += size;
+  }
+  return result;
+};
 
 const partitionForPath = (path: string, partitionCount: number): number =>
   Math.abs(cyrb53(path)) % Math.max(1, Math.floor(partitionCount));
@@ -1142,7 +1158,7 @@ export const embed = (
           metadata: {
             path: chunk.path,
             name: chunk.name,
-            description: chunk.description,
+            description: truncateUtf8(chunk.description, VECTOR_METADATA_DESCRIPTION_BYTES),
             integration: chunk.integration,
             facet: chunk.facet,
             chunkIndex: chunk.chunkIndex,

@@ -51,12 +51,15 @@ const manifestForTool = (
   fingerprintVersion: "tool-schema-manifest/v1",
 });
 
-const makeExecutor = (counters: { raw: number; codegen: number }): Executor => {
+const makeExecutor = (
+  counters: { raw: number; codegen: number },
+  options?: { readonly description?: string },
+): Executor => {
   const tool: Tool = {
     address: "tools.github.repos.get" as never,
     name: "repos.get" as never,
     integration: "github" as never,
-    description: "Get a repository",
+    description: options?.description ?? "Get a repository",
     owner,
     connection: "default" as never,
     pluginId: "test",
@@ -156,7 +159,7 @@ describe("ToolSearchIndex", () => {
   it.effect("scans, chunks, embeds, and commits changed tools", () =>
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
-      const executor = makeExecutor(counters);
+      const executor = makeExecutor(counters, { description: "Get a repository ".repeat(700) });
       const runs = makeCollection<IndexRun>(indexRuns.name);
       const jobs = makeCollection<IndexJob>(indexJobs.name);
       const chunks = makeCollection<IndexChunk>(indexChunks.name);
@@ -218,6 +221,11 @@ describe("ToolSearchIndex", () => {
       expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
       expect(counters).toEqual({ raw: 0, codegen: 1 });
       expect(upserted).toHaveLength(chunked.chunks);
+      for (const vector of upserted) {
+        expect(
+          Buffer.byteLength(String(vector.metadata?.description ?? ""), "utf8"),
+        ).toBeLessThanOrEqual(2_048);
+      }
       expect([...fingerprints.data.values()]).toHaveLength(1);
       expect([...jobs.data.values()][0]?.status).toBe("indexed");
     }),
@@ -308,60 +316,62 @@ describe("ToolSearchIndex", () => {
     }),
   );
 
-  it.effect("reconstructs embed messages when a chunk message retries after persisting chunks", () =>
-    Effect.gen(function* () {
-      const counters = { raw: 0, codegen: 0 };
-      const executor = makeExecutor(counters);
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
-      const blobs = makeBlobs();
-      const store: VectorStore = {
-        maxTopK: 100,
-        query: () => Effect.succeed([]),
-        upsert: () => Effect.void,
-        deleteByIds: () => Effect.void,
-      };
-      const embedder: ToolEmbedder = {
-        model: "test",
-        dimensions: 3,
-        embedDocuments: (texts) => Effect.succeed(texts.map(() => [0.1, 0.2, 0.3])),
-        embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
-      };
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+  it.effect(
+    "reconstructs embed messages when a chunk message retries after persisting chunks",
+    () =>
+      Effect.gen(function* () {
+        const counters = { raw: 0, codegen: 0 };
+        const executor = makeExecutor(counters);
+        const runs = makeCollection<IndexRun>(indexRuns.name);
+        const jobs = makeCollection<IndexJob>(indexJobs.name);
+        const chunks = makeCollection<IndexChunk>(indexChunks.name);
+        const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+        const blobs = makeBlobs();
+        const store: VectorStore = {
+          maxTopK: 100,
+          query: () => Effect.succeed([]),
+          upsert: () => Effect.void,
+          deleteByIds: () => Effect.void,
+        };
+        const embedder: ToolEmbedder = {
+          model: "test",
+          dimensions: 3,
+          embedDocuments: (texts) => Effect.succeed(texts.map(() => [0.1, 0.2, 0.3])),
+          embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
+        };
+        const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
 
-      yield* create({ ...base, runId: "run-chunk-retry", partitionCount: 1 });
-      const scanned = yield* scan({
-        ...base,
-        runId: "run-chunk-retry",
-        partition: 0,
-        limit: 10,
-      });
-      const first = yield* chunk({
-        ...base,
-        embedder,
-        store,
-        chunker: makeFacetChunker(),
-        runId: "run-chunk-retry",
-        paths: scanned.paths,
-        limit: 10,
-      });
-      const retry = yield* chunk({
-        ...base,
-        embedder,
-        store,
-        chunker: makeFacetChunker(),
-        runId: "run-chunk-retry",
-        paths: scanned.paths,
-        limit: 10,
-      });
+        yield* create({ ...base, runId: "run-chunk-retry", partitionCount: 1 });
+        const scanned = yield* scan({
+          ...base,
+          runId: "run-chunk-retry",
+          partition: 0,
+          limit: 10,
+        });
+        const first = yield* chunk({
+          ...base,
+          embedder,
+          store,
+          chunker: makeFacetChunker(),
+          runId: "run-chunk-retry",
+          paths: scanned.paths,
+          limit: 10,
+        });
+        const retry = yield* chunk({
+          ...base,
+          embedder,
+          store,
+          chunker: makeFacetChunker(),
+          runId: "run-chunk-retry",
+          paths: scanned.paths,
+          limit: 10,
+        });
 
-      expect(first.chunkRefs.length).toBeGreaterThan(0);
-      expect(retry.chunkRefs).toEqual(first.chunkRefs);
-      expect(retry.commitPaths).toEqual([]);
-      expect(counters.codegen).toBe(1);
-    }),
+        expect(first.chunkRefs.length).toBeGreaterThan(0);
+        expect(retry.chunkRefs).toEqual(first.chunkRefs);
+        expect(retry.commitPaths).toEqual([]);
+        expect(counters.codegen).toBe(1);
+      }),
   );
 
   it.effect("limits seeded tools when maxTools is provided", () =>
@@ -563,109 +573,111 @@ describe("ToolSearchIndex", () => {
     }),
   );
 
-  it.effect("reconstructs commit messages when an embed message retries after indexing chunks", () =>
-    Effect.gen(function* () {
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
-      const blobs = makeBlobs();
-      let embedCalls = 0;
-      const store: VectorStore = {
-        maxTopK: 100,
-        query: () => Effect.succeed([]),
-        upsert: () => Effect.void,
-        deleteByIds: () => Effect.void,
-      };
-      const embedder: ToolEmbedder = {
-        model: "test",
-        dimensions: 3,
-        embedDocuments: (texts) =>
-          Effect.sync(() => {
-            embedCalls++;
-            return texts.map(() => [0.1, 0.2, 0.3]);
-          }),
-        embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
-      };
+  it.effect(
+    "reconstructs commit messages when an embed message retries after indexing chunks",
+    () =>
+      Effect.gen(function* () {
+        const runs = makeCollection<IndexRun>(indexRuns.name);
+        const jobs = makeCollection<IndexJob>(indexJobs.name);
+        const chunks = makeCollection<IndexChunk>(indexChunks.name);
+        const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+        const blobs = makeBlobs();
+        let embedCalls = 0;
+        const store: VectorStore = {
+          maxTopK: 100,
+          query: () => Effect.succeed([]),
+          upsert: () => Effect.void,
+          deleteByIds: () => Effect.void,
+        };
+        const embedder: ToolEmbedder = {
+          model: "test",
+          dimensions: 3,
+          embedDocuments: (texts) =>
+            Effect.sync(() => {
+              embedCalls++;
+              return texts.map(() => [0.1, 0.2, 0.3]);
+            }),
+          embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
+        };
 
-      const createdAt = new Date(0).toISOString();
-      const lexicalTextKey = "test/lexical-retry.txt";
-      const job: IndexJob = {
-        runId: "run-embed-retry",
-        namespace,
-        partition: 0,
-        ordinal: 0,
-        address: "tools.github.repos.get",
-        path: "github.repos.get",
-        name: "repos.get",
-        integration: "github",
-        description: "Get a repository",
-        status: "pendingEmbedding",
-        fingerprint: "fp-embed-retry",
-        oldChunkIds: [],
-        chunkIds: ["chunk-0"],
-        lexicalTextKey,
-        createdAt,
-        updatedAt: createdAt,
-      };
-      const chunkRow: IndexChunk = {
-        runId: job.runId,
-        namespace,
-        partition: 0,
-        path: job.path,
-        chunkId: "chunk-0",
-        facet: "description",
-        chunkIndex: 0,
-        embeddingTextKey: "test/chunk-retry.txt",
-        embeddingTextBytes: "chunk retry text".length,
-        embeddingTextTokens: 4,
-        name: job.name,
-        integration: job.integration,
-        description: job.description,
-        status: "pendingEmbedding",
-        createdAt,
-        updatedAt: createdAt,
-      };
-      yield* blobs.put(lexicalTextKey, "github github.repos.get repos.get", { owner });
-      yield* blobs.put(chunkRow.embeddingTextKey, "chunk retry text", { owner });
-      yield* jobs.put({ owner, key: `${job.runId}:${job.path}`, data: job });
-      yield* chunks.put({
-        owner,
-        key: `${chunkRow.runId}:${chunkRow.path}:${chunkRow.chunkId}`,
-        data: chunkRow,
-      });
+        const createdAt = new Date(0).toISOString();
+        const lexicalTextKey = "test/lexical-retry.txt";
+        const job: IndexJob = {
+          runId: "run-embed-retry",
+          namespace,
+          partition: 0,
+          ordinal: 0,
+          address: "tools.github.repos.get",
+          path: "github.repos.get",
+          name: "repos.get",
+          integration: "github",
+          description: "Get a repository",
+          status: "pendingEmbedding",
+          fingerprint: "fp-embed-retry",
+          oldChunkIds: [],
+          chunkIds: ["chunk-0"],
+          lexicalTextKey,
+          createdAt,
+          updatedAt: createdAt,
+        };
+        const chunkRow: IndexChunk = {
+          runId: job.runId,
+          namespace,
+          partition: 0,
+          path: job.path,
+          chunkId: "chunk-0",
+          facet: "description",
+          chunkIndex: 0,
+          embeddingTextKey: "test/chunk-retry.txt",
+          embeddingTextBytes: "chunk retry text".length,
+          embeddingTextTokens: 4,
+          name: job.name,
+          integration: job.integration,
+          description: job.description,
+          status: "pendingEmbedding",
+          createdAt,
+          updatedAt: createdAt,
+        };
+        yield* blobs.put(lexicalTextKey, "github github.repos.get repos.get", { owner });
+        yield* blobs.put(chunkRow.embeddingTextKey, "chunk retry text", { owner });
+        yield* jobs.put({ owner, key: `${job.runId}:${job.path}`, data: job });
+        yield* chunks.put({
+          owner,
+          key: `${chunkRow.runId}:${chunkRow.path}:${chunkRow.chunkId}`,
+          data: chunkRow,
+        });
 
-      const base = {
-        namespace,
-        executor: makeExecutor({ raw: 0, codegen: 0 }),
-        runs,
-        jobs,
-        chunks,
-        fingerprints,
-        blobs,
-        owner,
-        embedder,
-        store,
-        chunker: makeFacetChunker(),
-      };
-      const first = yield* embed({
-        ...base,
-        runId: job.runId,
-        chunkRefs: [{ path: job.path, chunkId: "chunk-0" }],
-      });
-      const retry = yield* embed({
-        ...base,
-        runId: job.runId,
-        chunkRefs: [{ path: job.path, chunkId: "chunk-0" }],
-      });
-      const committed = yield* commit({ ...base, runId: job.runId, path: job.path });
+        const base = {
+          namespace,
+          executor: makeExecutor({ raw: 0, codegen: 0 }),
+          runs,
+          jobs,
+          chunks,
+          fingerprints,
+          blobs,
+          owner,
+          embedder,
+          store,
+          chunker: makeFacetChunker(),
+        };
+        const first = yield* embed({
+          ...base,
+          runId: job.runId,
+          chunkRefs: [{ path: job.path, chunkId: "chunk-0" }],
+        });
+        const retry = yield* embed({
+          ...base,
+          runId: job.runId,
+          chunkRefs: [{ path: job.path, chunkId: "chunk-0" }],
+        });
+        const committed = yield* commit({ ...base, runId: job.runId, path: job.path });
 
-      expect(first).toMatchObject({ processed: 1, chunks: 1, paths: [job.path] });
-      expect(retry).toMatchObject({ processed: 0, chunks: 0, paths: [job.path] });
-      expect(committed.committed).toBe(true);
-      expect(embedCalls).toBe(1);
-      expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
-    }),
+        expect(first).toMatchObject({ processed: 1, chunks: 1, paths: [job.path] });
+        expect(retry).toMatchObject({ processed: 0, chunks: 0, paths: [job.path] });
+        expect(committed.committed).toBe(true);
+        expect(embedCalls).toBe(1);
+        expect(jobs.data.get(`${job.runId}:${job.path}`)?.status).toBe("indexed");
+      }),
   );
 
   it.effect("commits zero-chunk embed jobs so fingerprints can warm future runs", () =>
