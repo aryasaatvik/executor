@@ -29,7 +29,7 @@ When creating a subscription, you must specify at least one item referencing a r
 Subscriptions support a rich set of lifecycle features: free trial periods via trial_period_days or trial_end, proration when upgrading or downgrading mid-cycle, metered billing via usage records, and multiple tax rates. You can also attach metadata, set a custom billing anchor, or pass coupon and promotion codes at creation time.
 
 After creation the subscription moves through statuses: incomplete, trialing, active, past_due, unpaid, and canceled. Webhooks such as customer.subscription.created and invoice.payment_succeeded are the recommended integration path for reacting to these transitions reliably.`,
-  inputTypeScript: `{
+  inputSchemaText: `{
   customer: string;
   items: Array<{
     price: string;
@@ -42,7 +42,7 @@ After creation the subscription moves through statuses: incomplete, trialing, ac
   promotion_code?: string;
   metadata?: Record<string, string>;
 }`,
-  outputTypeScript: `{
+  outputSchemaText: `{
   id: string;
   object: "subscription";
   customer: string;
@@ -113,7 +113,7 @@ describe("makeFacetChunker", () => {
     }
   });
 
-  it("tool with inputTypeScript and outputTypeScript → has input and output facets", () => {
+  it("tool with inputSchemaText and outputSchemaText → has input and output facets", () => {
     const chunker = makeFacetChunker();
     const chunks = chunker.chunk("ns", stripeSubscriptionsDoc);
 
@@ -132,11 +132,11 @@ describe("makeFacetChunker", () => {
     expect(outputChunks[0]!.embeddingText).toContain("status:");
   });
 
-  it("trivial outputTypeScript → no output facet", () => {
+  it("trivial outputSchemaText → no output facet", () => {
     const chunker = makeFacetChunker();
     const doc: ToolDocumentInput = {
       ...stripeSubscriptionsDoc,
-      outputTypeScript: "{}",
+      outputSchemaText: "{}",
     };
     const chunks = chunker.chunk("ns", doc);
     expect(chunks.filter((c) => c.facet === "output")).toHaveLength(0);
