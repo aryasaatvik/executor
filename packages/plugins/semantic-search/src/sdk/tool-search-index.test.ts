@@ -20,7 +20,7 @@ import {
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import { chunk, create, embed, plan } from "./tool-search-index";
+import { chunk, create, embed, fail, plan, reconcile, status } from "./tool-search-index";
 import type { VectorInput, VectorStore } from "./store";
 
 const owner: Owner = "org" as Owner;
@@ -190,6 +190,91 @@ describe("ToolSearchIndex", () => {
       expect(upserted).toHaveLength(chunked.chunks);
       expect([...fingerprints.data.values()]).toHaveLength(1);
       expect([...jobs.data.values()][0]?.status).toBe("indexed");
+    }),
+  );
+
+  it.effect("marks pending path work failed and reports progress timestamps", () =>
+    Effect.gen(function* () {
+      const counters = { raw: 0, codegen: 0 };
+      const executor = makeExecutor(counters);
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
+      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const blobs = makeBlobs();
+      const store: VectorStore = {
+        maxTopK: 100,
+        query: () => Effect.succeed([]),
+        upsert: () => Effect.void,
+        deleteByIds: () => Effect.void,
+      };
+      const embedder: ToolEmbedder = {
+        model: "test",
+        dimensions: 3,
+        embedDocuments: (texts) => Effect.succeed(texts.map(() => [0.1, 0.2, 0.3])),
+        embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
+      };
+
+      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      yield* create({ ...base, runId: "run-fail", partitionCount: 1 });
+      const planned = yield* plan({
+        ...base,
+        runId: "run-fail",
+        partition: 0,
+        limit: 10,
+      });
+      yield* chunk({
+        ...base,
+        embedder,
+        store,
+        chunker: makeFacetChunker(),
+        runId: "run-fail",
+        paths: planned.paths,
+        limit: 10,
+      });
+
+      const result = yield* fail({
+        ...base,
+        runId: "run-fail",
+        paths: planned.paths,
+        error: "queue exhausted",
+      });
+      const current = yield* status({ ...base, runId: "run-fail" });
+
+      expect(result.jobs).toBe(1);
+      expect(result.chunks).toBeGreaterThan(0);
+      expect(result.runFailed).toBe(false);
+      expect([...jobs.data.values()][0]?.status).toBe("failed");
+      expect([...chunks.data.values()].every((chunk) => chunk.status === "failed")).toBe(true);
+      expect(current.failed).toBe(1);
+      expect(current.lastProgressAt).toBeDefined();
+    }),
+  );
+
+  it.effect("reconciles pending plan partitions and pending paths", () =>
+    Effect.gen(function* () {
+      const counters = { raw: 0, codegen: 0 };
+      const executor = makeExecutor(counters);
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
+      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const blobs = makeBlobs();
+      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+
+      yield* create({ ...base, runId: "run-reconcile", partitionCount: 1 });
+      const beforePlan = yield* reconcile({ ...base, runId: "run-reconcile" });
+      const planned = yield* plan({
+        ...base,
+        runId: "run-reconcile",
+        partition: 0,
+        limit: 10,
+      });
+      const afterPlan = yield* reconcile({ ...base, runId: "run-reconcile" });
+
+      expect(beforePlan.planPartitions).toEqual([0]);
+      expect(afterPlan.pendingChunkPaths).toEqual(planned.paths);
+      expect(afterPlan.planPartitions).toEqual([]);
     }),
   );
 

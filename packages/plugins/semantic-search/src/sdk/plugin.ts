@@ -118,6 +118,8 @@ const makeSemanticSearchExtension = (deps: {
     plan: () => notConfigured(),
     chunk: () => notConfigured(),
     embed: () => notConfigured(),
+    fail: () => notConfigured(),
+    reconcile: () => notConfigured(),
     status: () => notConfigured(),
     complete: () => notConfigured(),
   };
