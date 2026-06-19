@@ -31,7 +31,10 @@ const namespace = "test-ns";
 const makeBlobs = () =>
   pluginBlobStore(makeInMemoryBlobStore(), { org: "test-org", user: null }, "semanticSearch");
 
-const manifestForTool = (tool: Tool): ToolSchemaManifest => ({
+const manifestForTool = (
+  tool: Tool,
+  fingerprint = `fingerprint:${String(tool.address)}`,
+): ToolSchemaManifest => ({
   address: tool.address,
   path: String(tool.address).replace(/^tools\./, ""),
   owner,
@@ -44,7 +47,7 @@ const manifestForTool = (tool: Tool): ToolSchemaManifest => ({
   inputSchemaHash: `input:${String(tool.address)}`,
   outputSchemaHash: `output:${String(tool.address)}`,
   definitionSetHash: `definitions:${String(tool.address)}`,
-  indexFingerprint: `fingerprint:${String(tool.address)}`,
+  indexFingerprint: fingerprint,
   fingerprintVersion: "tool-schema-manifest/v1",
 });
 
@@ -213,7 +216,7 @@ describe("ToolSearchIndex", () => {
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
       expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
-      expect(counters).toEqual({ raw: 1, codegen: 1 });
+      expect(counters).toEqual({ raw: 0, codegen: 1 });
       expect(upserted).toHaveLength(chunked.chunks);
       expect([...fingerprints.data.values()]).toHaveLength(1);
       expect([...jobs.data.values()][0]?.status).toBe("indexed");
