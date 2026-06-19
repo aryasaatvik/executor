@@ -280,6 +280,47 @@ const queryChunksForJob = (
       ),
     );
 
+const queryChunksByPaths = (
+  deps: IndexCollections,
+  input: {
+    readonly runId: string;
+    readonly paths: readonly string[];
+    readonly status?: IndexChunk["status"];
+  },
+): Effect.Effect<
+  ReadonlyMap<string, readonly { readonly key: string; readonly data: IndexChunk }[]>,
+  SemanticSearchError
+> => {
+  const paths = [...new Set(input.paths)];
+  if (paths.length === 0) return Effect.succeed(new Map());
+  return deps.chunks
+    .query({
+      where: {
+        runId: input.runId,
+        path: { in: paths },
+        ...(input.status === undefined ? {} : { status: input.status }),
+      },
+      orderBy: [{ field: "path", direction: "asc" }],
+    })
+    .pipe(
+      Effect.map((entries) => {
+        const grouped = new Map<string, { readonly key: string; readonly data: IndexChunk }[]>();
+        for (const entry of entries) {
+          const group = grouped.get(entry.data.path);
+          if (group) group.push(entry);
+          else grouped.set(entry.data.path, [entry]);
+        }
+        for (const group of grouped.values()) {
+          group.sort((a, b) => a.data.chunkIndex - b.data.chunkIndex);
+        }
+        return grouped;
+      }),
+      Effect.mapError(
+        (cause) => new SemanticSearchError({ message: "Failed to query index chunks.", cause }),
+      ),
+    );
+};
+
 const getChunksByRefs = (
   deps: IndexCollections,
   input: {
@@ -290,19 +331,22 @@ const getChunksByRefs = (
   readonly { readonly key: string; readonly data: IndexChunk }[],
   SemanticSearchError
 > =>
-  Effect.forEach(
-    input.chunkRefs,
-    (ref) =>
-      deps.chunks
-        .getForOwner({ owner: deps.owner, key: chunkKey(input.runId, ref.path, ref.chunkId) })
-        .pipe(Effect.map((entry) => entry ?? null)),
-    { concurrency: INDEX_STORAGE_CONCURRENCY },
-  ).pipe(
-    Effect.map((entries) => entries.flatMap((entry) => (entry === null ? [] : [entry]))),
-    Effect.mapError(
-      (cause) => new SemanticSearchError({ message: "Failed to load index chunks.", cause }),
-    ),
-  );
+  deps.chunks
+    .getManyForOwner({
+      owner: deps.owner,
+      keys: input.chunkRefs.map((ref) => chunkKey(input.runId, ref.path, ref.chunkId)),
+    })
+    .pipe(
+      Effect.map((entries) =>
+        input.chunkRefs.flatMap((ref) => {
+          const entry = entries.get(chunkKey(input.runId, ref.path, ref.chunkId));
+          return entry === undefined ? [] : [entry];
+        }),
+      ),
+      Effect.mapError(
+        (cause) => new SemanticSearchError({ message: "Failed to load index chunks.", cause }),
+      ),
+    );
 
 interface EmbedBudget {
   readonly maxChunks: number;
@@ -450,18 +494,8 @@ const loadFingerprints = (
   deps: IndexCollections,
   paths: readonly string[],
 ): Effect.Effect<ReadonlyMap<string, FingerprintRow>, SemanticSearchError> =>
-  Effect.forEach(
-    paths,
-    (path) =>
-      deps.fingerprints
-        .getForOwner({ owner: deps.owner, key: path })
-        .pipe(Effect.map((entry) => [path, entry?.data ?? null] as const)),
-    { concurrency: INDEX_STORAGE_CONCURRENCY },
-  ).pipe(
-    Effect.map(
-      (pairs) =>
-        new Map(pairs.flatMap(([path, data]) => (data === null ? [] : [[path, data] as const]))),
-    ),
+  deps.fingerprints.getManyForOwner({ owner: deps.owner, keys: paths }).pipe(
+    Effect.map((entries) => new Map([...entries].map(([path, entry]) => [path, entry.data]))),
     Effect.mapError(
       (cause) =>
         new SemanticSearchError({
@@ -483,28 +517,24 @@ const putJob = (deps: IndexCollections, job: IndexJob): Effect.Effect<void, Sema
     Effect.asVoid,
   );
 
-const removeChunksForJob = (
+const putJobs = (
   deps: IndexCollections,
-  job: IndexJob,
+  jobs: readonly IndexJob[],
 ): Effect.Effect<void, SemanticSearchError> =>
-  queryChunksForJob(deps, job).pipe(
-    Effect.flatMap((entries) =>
-      Effect.forEach(
-        entries,
-        (entry) =>
-          deps.chunks.remove({ owner: deps.owner, key: entry.key }).pipe(
-            Effect.mapError(
-              (cause) =>
-                new SemanticSearchError({
-                  message: `Failed to remove index chunk "${entry.key}".`,
-                  cause,
-                }),
-            ),
-          ),
-        { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
+  deps.jobs
+    .putMany({
+      owner: deps.owner,
+      entries: jobs.map((job) => ({ key: jobKey(job.runId, job.path), data: job })),
+    })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to persist index jobs.",
+            cause,
+          }),
       ),
-    ),
-  );
+    );
 
 const getJobsByPaths = (
   deps: IndexCollections,
@@ -518,23 +548,24 @@ const getJobsByPaths = (
   readonly { readonly key: string; readonly data: IndexJob }[],
   SemanticSearchError
 > =>
-  Effect.forEach(
-    input.paths,
-    (path) =>
-      deps.jobs
-        .getForOwner({ owner: deps.owner, key: jobKey(input.runId, path) })
-        .pipe(Effect.map((entry) => (entry?.data.status === input.status ? entry : null))),
-    { concurrency: INDEX_STORAGE_CONCURRENCY },
-  ).pipe(
-    Effect.map((entries) =>
-      entries
-        .flatMap((entry) => (entry === null ? [] : [entry]))
-        .slice(0, input.limit ?? input.paths.length),
-    ),
-    Effect.mapError(
-      (cause) => new SemanticSearchError({ message: "Failed to load index jobs.", cause }),
-    ),
-  );
+  deps.jobs
+    .getManyForOwner({
+      owner: deps.owner,
+      keys: input.paths.map((path) => jobKey(input.runId, path)),
+    })
+    .pipe(
+      Effect.map((entries) =>
+        input.paths
+          .flatMap((path) => {
+            const entry = entries.get(jobKey(input.runId, path));
+            return entry !== undefined && entry.data.status === input.status ? [entry] : [];
+          })
+          .slice(0, input.limit ?? input.paths.length),
+      ),
+      Effect.mapError(
+        (cause) => new SemanticSearchError({ message: "Failed to load index jobs.", cause }),
+      ),
+    );
 
 const queryJobsByStatus = (
   deps: IndexCollections,
@@ -927,59 +958,57 @@ export const scan = (
     let changed = 0;
     let skipped = 0;
     const changedPaths: string[] = [];
+    const jobs: IndexJob[] = [];
     const updatedAt = nowIso();
 
-    yield* Effect.forEach(
-      selected,
-      ({ manifest, ordinal }) => {
-        const storedRow = stored.get(manifest.path);
-        const next: IndexJob =
-          storedRow !== undefined && storedRow.fingerprint === manifest.indexFingerprint
-            ? {
-                runId: input.runId,
-                namespace: input.namespace,
-                partition: input.partition,
-                ordinal,
-                address: String(manifest.address),
-                path: manifest.path,
-                name: manifest.name,
-                integration: manifest.integration,
-                description: manifest.description,
-                status: "skipped",
-                fingerprint: manifest.indexFingerprint,
-                oldFingerprint: storedRow.fingerprint,
-                oldChunkIds: storedRow.chunkIds,
-                chunkIds: storedRow.chunkIds,
-                updatedAt,
-                createdAt: updatedAt,
-              }
-            : {
-                runId: input.runId,
-                namespace: input.namespace,
-                partition: input.partition,
-                ordinal,
-                address: String(manifest.address),
-                path: manifest.path,
-                name: manifest.name,
-                integration: manifest.integration,
-                description: manifest.description,
-                status: "pendingChunk",
-                fingerprint: manifest.indexFingerprint,
-                oldFingerprint: storedRow?.fingerprint,
-                oldChunkIds: storedRow?.chunkIds ?? [],
-                chunkIds: [],
-                updatedAt,
-                createdAt: updatedAt,
-              };
-        if (next.status === "skipped") skipped++;
-        else {
-          changed++;
-          changedPaths.push(next.path);
-        }
-        return putJob(input, next);
-      },
-      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
-    );
+    for (const { manifest, ordinal } of selected) {
+      const storedRow = stored.get(manifest.path);
+      const next: IndexJob =
+        storedRow !== undefined && storedRow.fingerprint === manifest.indexFingerprint
+          ? {
+              runId: input.runId,
+              namespace: input.namespace,
+              partition: input.partition,
+              ordinal,
+              address: String(manifest.address),
+              path: manifest.path,
+              name: manifest.name,
+              integration: manifest.integration,
+              description: manifest.description,
+              status: "skipped",
+              fingerprint: manifest.indexFingerprint,
+              oldFingerprint: storedRow.fingerprint,
+              oldChunkIds: storedRow.chunkIds,
+              chunkIds: storedRow.chunkIds,
+              updatedAt,
+              createdAt: updatedAt,
+            }
+          : {
+              runId: input.runId,
+              namespace: input.namespace,
+              partition: input.partition,
+              ordinal,
+              address: String(manifest.address),
+              path: manifest.path,
+              name: manifest.name,
+              integration: manifest.integration,
+              description: manifest.description,
+              status: "pendingChunk",
+              fingerprint: manifest.indexFingerprint,
+              oldFingerprint: storedRow?.fingerprint,
+              oldChunkIds: storedRow?.chunkIds ?? [],
+              chunkIds: [],
+              updatedAt,
+              createdAt: updatedAt,
+            };
+      if (next.status === "skipped") skipped++;
+      else {
+        changed++;
+        changedPaths.push(next.path);
+      }
+      jobs.push(next);
+    }
+    yield* putJobs(input, jobs);
 
     return {
       runId: input.runId,
@@ -1009,14 +1038,14 @@ export const chunk = (
         paths: input.paths,
         limit: input.limit,
       });
-      const existing = yield* Effect.forEach(
-        pendingEmbeddingJobs,
-        (entry) =>
-          queryChunksForJob(input, entry.data).pipe(
-            Effect.map((chunkEntries) => ({ job: entry.data, chunkEntries })),
-          ),
-        { concurrency: INDEX_STORAGE_CONCURRENCY },
-      );
+      const chunksByPath = yield* queryChunksByPaths(input, {
+        runId: input.runId,
+        paths: pendingEmbeddingJobs.map((entry) => entry.data.path),
+      });
+      const existing = pendingEmbeddingJobs.map((entry) => ({
+        job: entry.data,
+        chunkEntries: chunksByPath.get(entry.data.path) ?? [],
+      }));
       const chunkRefs = existing.flatMap(({ chunkEntries }) =>
         chunkEntries
           .filter((entry) => entry.data.status === "pendingEmbedding")
@@ -1043,11 +1072,12 @@ export const chunk = (
       1,
       Math.floor(input.concurrency ?? DEFAULT_CHUNK_CONCURRENCY),
     );
-    const paths: string[] = [];
-    const chunkRefs: ToolSearchIndex.ChunkRef[] = [];
-    const commitPaths: string[] = [];
+    const oldChunksByPath = yield* queryChunksByPaths(input, {
+      runId: input.runId,
+      paths: jobs.map((entry) => entry.data.path),
+    });
 
-    const chunkCounts = yield* Effect.forEach(
+    const chunkedJobs = yield* Effect.forEach(
       jobs,
       (entry) =>
         Effect.gen(function* () {
@@ -1066,77 +1096,107 @@ export const chunk = (
           const chunks = input.chunker.chunk(input.namespace, doc);
           const lexicalText = doc.lexicalText ?? buildLexicalText(doc);
           const lexicalTextKey = yield* putPayloadText(input, "lexical-text", lexicalText);
-          yield* removeChunksForJob(input, job);
-          yield* Effect.forEach(chunks, (chunk) => putChunk(input, job, chunk, updatedAt), {
-            concurrency: INDEX_STORAGE_CONCURRENCY,
-            discard: true,
-          });
-          for (const chunk of chunks) {
-            chunkRefs.push({ path: job.path, chunkId: chunk.id });
-          }
-          yield* putJob(input, {
+          const chunkEntries = yield* Effect.forEach(
+            chunks,
+            (chunk) => makeChunkEntry(input, job, chunk, updatedAt),
+            { concurrency: INDEX_STORAGE_CONCURRENCY },
+          );
+          const updatedJob: IndexJob = {
             ...job,
             status: "pendingEmbedding",
             chunkIds: chunks.map((chunk) => chunk.id),
             lexicalTextKey,
             updatedAt,
-          });
-          paths.push(job.path);
-          if (chunks.length === 0) {
-            commitPaths.push(job.path);
-          }
-          return chunks.length;
+          };
+          return {
+            path: job.path,
+            chunks: chunks.length,
+            oldChunkKeys: (oldChunksByPath.get(job.path) ?? []).map((chunk) => chunk.key),
+            chunkEntries,
+            chunkRefs: chunks.map((chunk) => ({ path: job.path, chunkId: chunk.id })),
+            updatedJob,
+            commitPath: chunks.length === 0 ? job.path : undefined,
+          };
         }),
       { concurrency: chunkConcurrency },
     );
-    const chunkCount = chunkCounts.reduce((sum, count) => sum + count, 0);
+    const oldChunkKeys = chunkedJobs.flatMap((job) => job.oldChunkKeys);
+    if (oldChunkKeys.length > 0) {
+      yield* input.chunks.removeMany({ owner: input.owner, keys: oldChunkKeys }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({
+              message: "Failed to remove stale index chunks.",
+              cause,
+            }),
+        ),
+      );
+    }
+    const chunkEntries = chunkedJobs.flatMap((job) => job.chunkEntries);
+    if (chunkEntries.length > 0) {
+      yield* input.chunks.putMany({ owner: input.owner, entries: chunkEntries }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({
+              message: "Failed to persist index chunks.",
+              cause,
+            }),
+        ),
+      );
+    }
+    yield* putJobs(
+      input,
+      chunkedJobs.map((job) => job.updatedJob),
+    );
+    const chunkCount = chunkedJobs.reduce((sum, job) => sum + job.chunks, 0);
 
     return {
       runId: input.runId,
       processed: jobs.length,
       chunks: chunkCount,
-      paths,
-      chunkRefs,
-      commitPaths,
+      paths: chunkedJobs.map((job) => job.path),
+      chunkRefs: chunkedJobs.flatMap((job) => job.chunkRefs),
+      commitPaths: chunkedJobs.flatMap((job) =>
+        job.commitPath === undefined ? [] : [job.commitPath],
+      ),
     };
   });
 
-const putChunk = (
+const makeChunkEntry = (
   deps: IndexCollections,
   job: IndexJob,
   chunk: ToolChunk,
   timestamp: string,
-): Effect.Effect<void, SemanticSearchError> =>
+): Effect.Effect<{ readonly key: string; readonly data: IndexChunk }, SemanticSearchError> =>
   Effect.gen(function* () {
     const embeddingTextKey = yield* putPayloadText(deps, "embedding-text", chunk.embeddingText);
-    yield* deps.chunks.put({
-      owner: deps.owner,
+    const data: IndexChunk = {
+      runId: job.runId,
+      namespace: job.namespace,
+      partition: job.partition,
+      path: job.path,
+      chunkId: chunk.id,
+      facet: chunk.facet,
+      chunkIndex: chunk.chunkIndex,
+      embeddingTextKey,
+      embeddingTextBytes: utf8Bytes(chunk.embeddingText),
+      embeddingTextTokens: estimateTokens(chunk.embeddingText),
+      name: chunk.name,
+      integration: chunk.integration,
+      description: job.description,
+      status: "pendingEmbedding",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    return {
       key: chunkKey(job.runId, job.path, chunk.id),
-      data: {
-        runId: job.runId,
-        namespace: job.namespace,
-        partition: job.partition,
-        path: job.path,
-        chunkId: chunk.id,
-        facet: chunk.facet,
-        chunkIndex: chunk.chunkIndex,
-        embeddingTextKey,
-        embeddingTextBytes: utf8Bytes(chunk.embeddingText),
-        embeddingTextTokens: estimateTokens(chunk.embeddingText),
-        name: chunk.name,
-        integration: chunk.integration,
-        description: job.description,
-        status: "pendingEmbedding",
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      },
-    });
+      data,
+    };
   }).pipe(
     Effect.mapError(
       (cause) =>
-        new SemanticSearchError({ message: `Failed to persist chunk "${chunk.id}".`, cause }),
+        new SemanticSearchError({ message: `Failed to prepare chunk "${chunk.id}".`, cause }),
     ),
-    Effect.asVoid,
   );
 
 export const embed = (
@@ -1233,26 +1293,23 @@ export const embed = (
       }
 
       yield* input.store.upsert(records);
-      yield* Effect.forEach(
-        group,
-        (entry) =>
-          input.chunks
-            .put({
-              owner: input.owner,
-              key: entry.key,
-              data: { ...entry.data, status: "indexed", updatedAt },
-            })
-            .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new SemanticSearchError({
-                    message: `Failed to mark chunk "${entry.data.chunkId}" indexed.`,
-                    cause,
-                  }),
-              ),
-            ),
-        { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
-      );
+      yield* input.chunks
+        .putMany({
+          owner: input.owner,
+          entries: group.map((entry) => ({
+            key: entry.key,
+            data: { ...entry.data, status: "indexed", updatedAt },
+          })),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({
+                message: "Failed to mark chunks indexed.",
+                cause,
+              }),
+          ),
+        );
 
       indexedChunks += records.length;
       for (const entry of group) {
@@ -1283,7 +1340,11 @@ export const commit = (
       return { runId: input.runId, processed: 0, committed: 0, paths: [] };
     }
 
-    const committed = yield* finalizeCompletedEmbedJobs(input, entries, undefined, nowIso());
+    const chunksByPath = yield* queryChunksByPaths(input, {
+      runId: input.runId,
+      paths: entries.map((entry) => entry.data.path),
+    });
+    const committed = yield* finalizeCompletedEmbedJobs(input, entries, chunksByPath, nowIso());
     return {
       runId: input.runId,
       processed: entries.length,
@@ -1301,7 +1362,15 @@ const finalizeCompletedEmbedJobs = (
   updatedAt: string,
 ): Effect.Effect<number, SemanticSearchError> =>
   Effect.gen(function* () {
-    let finalized = 0;
+    const fingerprintRows: {
+      readonly key: string;
+      readonly data: FingerprintRow;
+    }[] = [];
+    const indexedJobs: IndexJob[] = [];
+    const oldChunkIds: string[] = [];
+    const oldDocumentFingerprints: string[] = [];
+    const lexicalDocs: FtsDocumentInput[] = [];
+
     for (const { data: job } of jobs) {
       const chunkEntries = preloadedChunks?.get(job.path) ?? (yield* queryChunksForJob(input, job));
       if (chunkEntries.some((entry) => entry.data.status !== "indexed")) {
@@ -1315,32 +1384,21 @@ const finalizeCompletedEmbedJobs = (
         });
       }
 
-      yield* input.fingerprints
-        .put({
-          owner: input.owner,
-          key: job.path,
-          data: {
-            path: job.path,
-            integration: job.integration,
-            fingerprint,
-            chunkIds: job.chunkIds,
-          },
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new SemanticSearchError({
-                message: `Failed to persist fingerprint row for "${job.path}".`,
-                cause,
-              }),
-          ),
-        );
+      fingerprintRows.push({
+        key: job.path,
+        data: {
+          path: job.path,
+          integration: job.integration,
+          fingerprint,
+          chunkIds: job.chunkIds,
+        },
+      });
 
       if (job.oldChunkIds.length > 0) {
-        yield* input.store.deleteByIds(job.oldChunkIds);
+        oldChunkIds.push(...job.oldChunkIds);
       }
       if (job.oldFingerprint !== undefined && job.oldFingerprint !== fingerprint) {
-        yield* deleteCachedToolDocument(input, job.oldFingerprint);
+        oldDocumentFingerprints.push(job.oldFingerprint);
       }
 
       if (input.lexicalStore) {
@@ -1357,13 +1415,38 @@ const finalizeCompletedEmbedJobs = (
           integration: job.integration,
           lexicalText,
         };
-        yield* input.lexicalStore.upsert([lexicalDoc]);
+        lexicalDocs.push(lexicalDoc);
       }
 
-      yield* putJob(input, { ...job, status: "indexed", updatedAt });
-      finalized++;
+      indexedJobs.push({ ...job, status: "indexed", updatedAt });
     }
-    return finalized;
+
+    if (fingerprintRows.length > 0) {
+      yield* input.fingerprints.putMany({ owner: input.owner, entries: fingerprintRows }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SemanticSearchError({
+              message: "Failed to persist fingerprint rows.",
+              cause,
+            }),
+        ),
+      );
+    }
+    if (oldChunkIds.length > 0) {
+      yield* input.store.deleteByIds([...new Set(oldChunkIds)]);
+    }
+    yield* Effect.forEach(
+      [...new Set(oldDocumentFingerprints)],
+      (fingerprint) => deleteCachedToolDocument(input, fingerprint),
+      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
+    );
+    if (input.lexicalStore && lexicalDocs.length > 0) {
+      yield* input.lexicalStore.upsert(lexicalDocs);
+    }
+    if (indexedJobs.length > 0) {
+      yield* putJobs(input, indexedJobs);
+    }
+    return indexedJobs.length;
   });
 
 export const status = (

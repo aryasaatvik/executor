@@ -1307,12 +1307,74 @@ const makePluginStorageFacade = (input: {
       Effect.map((row) => (row ? pluginStorageEntryFromRow<T>(row) : null)),
     );
 
+  const getManyVisible = <T>(collection: string, keys: readonly string[]) =>
+    Effect.gen(function* () {
+      const entries = new Map<string, PluginStorageEntry<T>>();
+      const uniqueKeys = [...new Set(keys)];
+      for (
+        let offset = 0;
+        offset < uniqueKeys.length;
+        offset += PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE
+      ) {
+        const batchKeys = uniqueKeys.slice(offset, offset + PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE);
+        const rows = yield* input.core.findMany("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("plugin_id", "=", input.pluginId),
+              b("collection", "=", collection),
+              b("key", "in", batchKeys),
+            ),
+        });
+        for (const row of sortByOwnerPrecedence(rows)) {
+          if (!entries.has(row.key)) entries.set(row.key, pluginStorageEntryFromRow<T>(row));
+        }
+      }
+      return new Map(
+        uniqueKeys.flatMap((key) => {
+          const entry = entries.get(key);
+          return entry === undefined ? [] : [[key, entry] as const];
+        }),
+      );
+    });
+
   const getForOwnerImpl = <T>(owner: Owner, collection: string, key: string) =>
     input.core
       .findFirst("plugin_storage", {
         where: whereOwner(owner, collection, key),
       })
       .pipe(Effect.map((row) => (row ? pluginStorageEntryFromRow<T>(row) : null)));
+
+  const getManyForOwnerImpl = <T>(owner: Owner, collection: string, keys: readonly string[]) =>
+    Effect.gen(function* () {
+      const entries = new Map<string, PluginStorageEntry<T>>();
+      const uniqueKeys = [...new Set(keys)];
+      const os = ownerSubject(owner);
+      const subject = os ? os.subject : ORG_SUBJECT;
+      for (
+        let offset = 0;
+        offset < uniqueKeys.length;
+        offset += PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE
+      ) {
+        const batchKeys = uniqueKeys.slice(offset, offset + PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE);
+        const rows = yield* input.core.findMany("plugin_storage", {
+          where: (b) =>
+            b.and(
+              b("plugin_id", "=", input.pluginId),
+              b("collection", "=", collection),
+              b("key", "in", batchKeys),
+              b("owner", "=", owner),
+              b("subject", "=", subject),
+            ),
+        });
+        for (const row of rows) entries.set(row.key, pluginStorageEntryFromRow<T>(row));
+      }
+      return new Map(
+        uniqueKeys.flatMap((key) => {
+          const entry = entries.get(key);
+          return entry === undefined ? [] : [[key, entry] as const];
+        }),
+      );
+    });
 
   const putImpl = <T>(owner: Owner, collection: string, key: string, data: unknown) =>
     Effect.gen(function* () {
@@ -1545,9 +1607,23 @@ const makePluginStorageFacade = (input: {
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>> | null,
           StorageFailure
         >,
+      getMany: (storageInput) =>
+        getManyVisible(definition.name, storageInput.keys) as Effect.Effect<
+          ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<typeof definition>>>,
+          StorageFailure
+        >,
       getForOwner: (storageInput) =>
         getForOwnerImpl(storageInput.owner, definition.name, storageInput.key) as Effect.Effect<
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>> | null,
+          StorageFailure
+        >,
+      getManyForOwner: (storageInput) =>
+        getManyForOwnerImpl(
+          storageInput.owner,
+          definition.name,
+          storageInput.keys,
+        ) as Effect.Effect<
+          ReadonlyMap<string, PluginStorageEntry<PluginStorageCollectionData<typeof definition>>>,
           StorageFailure
         >,
       list: (storageInput) => queryCollection(definition, { keyPrefix: storageInput?.keyPrefix }),
@@ -1561,6 +1637,15 @@ const makePluginStorageFacade = (input: {
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>>,
           StorageFailure
         >,
+      putMany: (storageInput) =>
+        putManyImpl(
+          storageInput.owner,
+          storageInput.entries.map((entry) => ({
+            collection: definition.name,
+            key: entry.key,
+            data: entry.data,
+          })),
+        ),
       query: (storageInput) => queryCollection(definition, storageInput),
       count: (storageInput) =>
         queryCollection(definition, storageInput).pipe(Effect.map((rows) => rows.length)),
@@ -1679,10 +1764,18 @@ const makePluginStorageFacade = (input: {
           }),
       },
       remove: (storageInput) => removeImpl(storageInput.owner, definition.name, storageInput.key),
+      removeMany: (storageInput) =>
+        removeManyImpl(
+          storageInput.owner,
+          storageInput.keys.map((key) => ({ collection: definition.name, key })),
+        ),
     }),
     get: (storageInput) => getVisible(storageInput.collection, storageInput.key),
+    getMany: (storageInput) => getManyVisible(storageInput.collection, storageInput.keys),
     getForOwner: (storageInput) =>
       getForOwnerImpl(storageInput.owner, storageInput.collection, storageInput.key),
+    getManyForOwner: (storageInput) =>
+      getManyForOwnerImpl(storageInput.owner, storageInput.collection, storageInput.keys),
     list: (storageInput) =>
       Effect.gen(function* () {
         const rows = yield* input.core.findMany("plugin_storage", {
