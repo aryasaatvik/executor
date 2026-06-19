@@ -618,9 +618,7 @@ interface ToolManifestInput {
   readonly sourceRevision?: string;
 }
 
-const buildToolSchemaManifest = (
-  input: ToolManifestInput,
-): Effect.Effect<ToolSchemaManifest> =>
+const buildToolSchemaManifest = (input: ToolManifestInput): Effect.Effect<ToolSchemaManifest> =>
   Effect.gen(function* () {
     const address =
       input.address ?? toolAddress(input.owner, input.integration, input.connection, input.name);
@@ -629,36 +627,31 @@ const buildToolSchemaManifest = (
       [input.inputSchema, input.outputSchema],
       input.definitions,
     );
-    const [
-      descriptorHash,
-      inputSchemaHash,
-      outputSchemaHash,
-      definitionSetHash,
-      indexFingerprint,
-    ] = yield* Effect.all(
-      [
-        hashManifestValue({
-          path,
-          name: String(input.name),
-          description: input.description,
-          integration: String(input.integration),
-          connection: String(input.connection),
-          pluginId: input.pluginId,
-        }),
-        hashManifestValue(input.inputSchema),
-        hashManifestValue(input.outputSchema),
-        hashManifestValue(referencedDefinitions),
-        hashManifestValue({
-          path,
-          name: String(input.name),
-          description: input.description,
-          inputSchema: input.inputSchema,
-          outputSchema: input.outputSchema,
-          schemaDefinitions: referencedDefinitions,
-        }),
-      ],
-      { concurrency: 5 },
-    );
+    const [descriptorHash, inputSchemaHash, outputSchemaHash, definitionSetHash, indexFingerprint] =
+      yield* Effect.all(
+        [
+          hashManifestValue({
+            path,
+            name: String(input.name),
+            description: input.description,
+            integration: String(input.integration),
+            connection: String(input.connection),
+            pluginId: input.pluginId,
+          }),
+          hashManifestValue(input.inputSchema),
+          hashManifestValue(input.outputSchema),
+          hashManifestValue(referencedDefinitions),
+          hashManifestValue({
+            path,
+            name: String(input.name),
+            description: input.description,
+            inputSchema: input.inputSchema,
+            outputSchema: input.outputSchema,
+            schemaDefinitions: referencedDefinitions,
+          }),
+        ],
+        { concurrency: 5 },
+      );
 
     return ToolSchemaManifest.make({
       address,
