@@ -403,6 +403,27 @@ describe("ToolSearchIndex", () => {
     }),
   );
 
+  it.effect("preserves the run's maxTools cap through reconcile", () =>
+    Effect.gen(function* () {
+      const counters = { raw: 0, codegen: 0 };
+      const executor = makeExecutor(counters);
+      const runs = makeCollection<IndexRun>(indexRuns.name);
+      const jobs = makeCollection<IndexJob>(indexJobs.name);
+      const chunks = makeCollection<IndexChunk>(indexChunks.name);
+      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const blobs = makeBlobs();
+      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+
+      yield* create({ ...base, runId: "run-capped", partitionCount: 1, maxTools: 1 });
+      const capped = yield* reconcile({ ...base, runId: "run-capped" });
+      expect(capped.maxTools).toBe(1);
+
+      yield* create({ ...base, runId: "run-uncapped", partitionCount: 1 });
+      const uncapped = yield* reconcile({ ...base, runId: "run-uncapped" });
+      expect(uncapped.maxTools).toBeUndefined();
+    }),
+  );
+
   it.effect(
     "reconstructs embed messages when a chunk message retries after persisting chunks",
     () =>
