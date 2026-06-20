@@ -211,7 +211,6 @@ import { annotateToolResultOutcome } from "./tool-result";
 import { isUnauthorizedToolFailure } from "./auth-tool-failure";
 
 const PLUGIN_STORAGE_DELETE_KEY_BATCH_SIZE = 90;
-const PLUGIN_STORAGE_CREATE_ROW_BATCH_SIZE = 90;
 const MAX_APPROVAL_ARGUMENT_PREVIEW_CHARS = 4_000;
 
 // ---------------------------------------------------------------------------
@@ -1210,6 +1209,14 @@ type LooseStorageDb = {
     tableName: string,
     rows: readonly Record<string, unknown>[],
   ) => Promise<readonly unknown[]>;
+  readonly upsertMany: (
+    tableName: string,
+    options: {
+      readonly target: readonly string[];
+      readonly update: readonly string[];
+      readonly values: readonly Record<string, unknown>[];
+    },
+  ) => Promise<void>;
   readonly deleteMany: (tableName: string, options?: unknown) => Promise<void>;
   readonly findFirst: (
     tableName: string,
@@ -1260,6 +1267,19 @@ const makeCoreDb = (fuma: ReturnType<typeof makeFumaClient>) => ({
       : fuma
           .use(`${tableName}.createMany`, (db) => asLooseStorageDb(db).createMany(tableName, rows))
           .pipe(Effect.asVoid),
+  upsertMany: <TName extends CoreTableName>(
+    tableName: TName,
+    options: {
+      readonly target: readonly string[];
+      readonly update: readonly string[];
+      readonly values: readonly Record<string, unknown>[];
+    },
+  ): Effect.Effect<void, StorageFailure> =>
+    options.values.length === 0
+      ? Effect.void
+      : fuma.use(`${tableName}.upsertMany`, (db) =>
+          asLooseStorageDb(db).upsertMany(tableName, options),
+        ),
   deleteMany: <TName extends CoreTableName>(
     tableName: TName,
     options: { readonly where?: CoreWhere } = {},
@@ -1848,33 +1868,22 @@ const makePluginStorageFacade = (input: {
       const uniqueEntries = [...entriesById.values()];
       if (uniqueEntries.length === 0) return;
 
-      yield* deleteManyImpl(owner, os.subject, uniqueEntries);
-
       const now = new Date();
-      for (
-        let offset = 0;
-        offset < uniqueEntries.length;
-        offset += PLUGIN_STORAGE_CREATE_ROW_BATCH_SIZE
-      ) {
-        const batchEntries = uniqueEntries.slice(
-          offset,
-          offset + PLUGIN_STORAGE_CREATE_ROW_BATCH_SIZE,
-        );
-        yield* input.core.createMany(
-          "plugin_storage",
-          batchEntries.map((entry) => ({
-            tenant,
-            owner: os.owner,
-            subject: os.subject,
-            plugin_id: input.pluginId,
-            collection: entry.collection,
-            key: entry.key,
-            data: entry.data,
-            created_at: now,
-            updated_at: now,
-          })),
-        );
-      }
+      yield* input.core.upsertMany("plugin_storage", {
+        target: ["tenant", "owner", "subject", "plugin_id", "collection", "key"],
+        update: ["data", "updated_at"],
+        values: uniqueEntries.map((entry) => ({
+          tenant,
+          owner: os.owner,
+          subject: os.subject,
+          plugin_id: input.pluginId,
+          collection: entry.collection,
+          key: entry.key,
+          data: entry.data,
+          created_at: now,
+          updated_at: now,
+        })),
+      });
     });
 
   const removeManyImpl = (

@@ -87,6 +87,8 @@ type TestCollection<T extends object> = PluginStorageCollectionFacade<any> & {
   readonly data: Map<string, T>;
 };
 
+type TestAggregateValue = string | number | boolean | null;
+
 const makeCollection = <T extends object>(collection: string): TestCollection<T> => {
   const data = new Map<string, T>();
   let id = 0;
@@ -176,7 +178,25 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
     queryKeyset: () => Effect.succeed({ entries: [], nextCursor: null }),
     aggregate: {
       count: () => Effect.succeed(data.size),
-      groupCount: () => Effect.succeed([]),
+      groupCount: (input: { field: string; where?: Record<string, unknown> }) =>
+        Effect.succeed(
+          [
+            ...[...data.values()]
+              .filter((value) => matches(value, input.where))
+              .reduce((counts, value) => {
+                const fieldValue = (value as Record<string, unknown>)[input.field];
+                if (
+                  typeof fieldValue === "string" ||
+                  typeof fieldValue === "number" ||
+                  typeof fieldValue === "boolean" ||
+                  fieldValue === null
+                ) {
+                  counts.set(fieldValue, (counts.get(fieldValue) ?? 0) + 1);
+                }
+                return counts;
+              }, new Map<TestAggregateValue, number>()),
+          ].map(([value, count]) => ({ value, count })),
+        ),
       timeBuckets: () => Effect.succeed([]),
       stats: () => Effect.succeed({ count: 0, min: null, max: null, percentiles: [] }),
     },
