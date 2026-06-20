@@ -639,6 +639,42 @@ const loadLatestChunkUpdatedAt = (
       ),
     );
 
+const countJobsByStatus = (
+  collection: PluginStorageCollectionFacade<typeof indexJobs>,
+  runId: string,
+): Effect.Effect<Record<IndexJob["status"], number>, SemanticSearchError> =>
+  collection.aggregate
+    .groupCount({
+      field: "status",
+      valueType: "text",
+      where: { runId },
+    })
+    .pipe(
+      Effect.map((rows) => {
+        const counts: Record<IndexJob["status"], number> = {
+          pendingScan: 0,
+          skipped: 0,
+          pendingChunk: 0,
+          pendingEmbedding: 0,
+          indexed: 0,
+          failed: 0,
+        };
+        for (const row of rows) {
+          if (typeof row.value === "string" && row.value in counts) {
+            counts[row.value as IndexJob["status"]] = row.count;
+          }
+        }
+        return counts;
+      }),
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({
+            message: "Failed to count index jobs by status.",
+            cause,
+          }),
+      ),
+    );
+
 export const fail = (
   input: IndexCollections & ToolSearchIndex.FailInput,
 ): Effect.Effect<ToolSearchIndex.FailResult, SemanticSearchError> =>
@@ -1331,10 +1367,11 @@ export const commit = (
   input: IndexDeps & ToolSearchIndex.CommitInput,
 ): Effect.Effect<ToolSearchIndex.CommitResult, SemanticSearchError> =>
   Effect.gen(function* () {
+    const paths = [...new Set(input.paths)];
     const entries = yield* getJobsByPaths(input, {
       runId: input.runId,
       status: "pendingEmbedding",
-      paths: input.paths,
+      paths,
     });
     if (entries.length === 0) {
       return { runId: input.runId, processed: 0, committed: 0, paths: [] };
@@ -1460,37 +1497,23 @@ export const status = (
           (cause) => new SemanticSearchError({ message: "Failed to load index run.", cause }),
         ),
       );
-    const count = (status: IndexJob["status"]) =>
-      input.jobs
-        .count({ where: { runId: input.runId, status } })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new SemanticSearchError({ message: `Failed to count ${status} jobs.`, cause }),
-          ),
-        );
+    const statusCounts = yield* countJobsByStatus(input.jobs, input.runId);
     const counts = yield* Effect.all(
       {
-        storedPendingScan: count("pendingScan"),
-        skipped: count("skipped"),
-        pendingChunk: count("pendingChunk"),
-        pendingEmbedding: count("pendingEmbedding"),
-        indexed: count("indexed"),
-        failed: count("failed"),
         latestJobUpdatedAt: loadLatestJobUpdatedAt(input.jobs, input.runId),
         latestChunkUpdatedAt: loadLatestChunkUpdatedAt(input.chunks, input.runId),
       },
       { concurrency: INDEX_STORAGE_CONCURRENCY },
     );
     const observed =
-      counts.storedPendingScan +
-      counts.skipped +
-      counts.pendingChunk +
-      counts.pendingEmbedding +
-      counts.indexed +
-      counts.failed;
+      statusCounts.pendingScan +
+      statusCounts.skipped +
+      statusCounts.pendingChunk +
+      statusCounts.pendingEmbedding +
+      statusCounts.indexed +
+      statusCounts.failed;
     const total = run?.data.total ?? observed;
-    const pendingScan = Math.max(0, total - observed + counts.storedPendingScan);
+    const pendingScan = Math.max(0, total - observed + statusCounts.pendingScan);
     const lastProgressAt = [
       run?.data.updatedAt,
       counts.latestJobUpdatedAt,
@@ -1505,11 +1528,11 @@ export const status = (
       status: run?.data.status ?? "running",
       total,
       pendingScan,
-      skipped: counts.skipped,
-      pendingChunk: counts.pendingChunk,
-      pendingEmbedding: counts.pendingEmbedding,
-      indexed: counts.indexed,
-      failed: counts.failed,
+      skipped: statusCounts.skipped,
+      pendingChunk: statusCounts.pendingChunk,
+      pendingEmbedding: statusCounts.pendingEmbedding,
+      indexed: statusCounts.indexed,
+      failed: statusCounts.failed,
       updatedAt: run?.data.updatedAt,
       lastProgressAt,
     };
