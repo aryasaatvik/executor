@@ -164,6 +164,9 @@ export declare namespace ToolSearchIndex {
 
   export interface ReconcileResult {
     readonly runId: string;
+    /** The run's original `maxTools` cap (absent = uncapped), so the host can
+     *  re-enqueue scan partitions with the same limit on resume. */
+    readonly maxTools?: number;
     readonly scanPartitions: readonly number[];
     readonly pendingChunkPaths: readonly string[];
     readonly pendingEmbeddingChunks: readonly ChunkRef[];
@@ -892,6 +895,7 @@ export const reconcile = (
 
     return {
       runId: input.runId,
+      maxTools: run.data.maxTools,
       scanPartitions,
       pendingChunkPaths: [...new Set(pendingChunkJobs.map((entry) => entry.data.path))],
       pendingEmbeddingChunks: pendingEmbeddingChunks.map((entry) => ({
@@ -920,6 +924,7 @@ export const create = (
           status: "running",
           partitionCount,
           total: manifests.length,
+          ...(input.maxTools === undefined ? {} : { maxTools: input.maxTools }),
           createdAt,
           updatedAt: createdAt,
         },

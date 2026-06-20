@@ -37,6 +37,9 @@ export const IndexRun = Schema.Struct({
   status: IndexRunStatus,
   partitionCount: Schema.Number,
   total: Schema.Number,
+  /** Original reindex cap (`maxTools`), preserved so `resume` re-enqueues scan
+   *  partitions with the same limit instead of running uncapped. Absent = no cap. */
+  maxTools: Schema.optional(Schema.Number),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
