@@ -494,7 +494,7 @@ describe("createExecutor", () => {
       expect(inspect?.definitionSetHash).toHaveLength(64);
       expect(inspect?.indexFingerprint).toHaveLength(64);
 
-      const schema = yield* executor.tools.schema(addr("inspect"), { includeTypeScript: false });
+      const schema = yield* executor.tools.schema(addr("inspect"));
       expect(schema?.schemaDefinitions).not.toHaveProperty("Unused");
     }),
   );

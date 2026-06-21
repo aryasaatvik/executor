@@ -98,7 +98,6 @@ export type { ToolPolicyAction } from "./core-schema";
 
 // Schema-side views + onboarding autodetect.
 export { ToolSchemaManifest, ToolSchemaView, IntegrationDetectionResult } from "./types";
-export type { ToolSchemaOptions } from "./types";
 
 // OAuth wire contracts (data + tagged errors; the flow impl is server-only).
 export {
