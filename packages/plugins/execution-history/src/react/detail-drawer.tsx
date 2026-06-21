@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Badge } from "@executor-js/react/components/badge";
 import { Button } from "@executor-js/react/components/button";
@@ -168,13 +168,14 @@ function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonl
   // scrolled out and back keeps its expansion).
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const windowStart = props.run.startedAt;
-  const toggle = (id: string) =>
+  const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
+  }, []);
   if (props.toolCalls.length === 0) {
     return <p className="p-5 text-sm text-muted-foreground">No tool calls recorded.</p>;
   }
