@@ -68,6 +68,21 @@ export function isNearBottom(metrics: ScrollMetrics, threshold: number): boolean
   return metrics.scrollHeight - metrics.scrollTop - metrics.clientHeight <= threshold;
 }
 
+/** The sticky header that should be pinned at the top of the window: the last
+ *  sticky index at or above the first visible row, or null if none precedes it.
+ *  `stickyIndices` must be ascending. Pure — unit-testable. */
+export function resolveActiveStickyIndex(
+  stickyIndices: readonly number[],
+  startIndex: number,
+): number | null {
+  let active: number | null = null;
+  for (const idx of stickyIndices) {
+    if (idx <= startIndex) active = idx;
+    else break;
+  }
+  return active;
+}
+
 // --- imperative handle -----------------------------------------------------
 export interface VirtualListHandle {
   scrollToIndex: (index: number, options?: { align?: "start" | "center" | "end" }) => void;
@@ -144,11 +159,7 @@ export function VirtualList<T>(props: VirtualListProps<T>) {
         activeStickyRef.current = null;
         return defaultRangeExtractor(range);
       }
-      let active: number | null = null;
-      for (const idx of stickyIndices) {
-        if (idx <= range.startIndex) active = idx;
-        else break;
-      }
+      const active = resolveActiveStickyIndex(stickyIndices, range.startIndex);
       activeStickyRef.current = active;
       const indices = new Set(defaultRangeExtractor(range));
       if (active !== null) indices.add(active);

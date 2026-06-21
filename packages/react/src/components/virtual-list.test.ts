@@ -5,6 +5,7 @@ import {
   DEFAULT_END_REACHED_THRESHOLD,
   isNearBottom,
   readScrollPosition,
+  resolveActiveStickyIndex,
   saveScrollPosition,
 } from "./virtual-list";
 
@@ -46,5 +47,29 @@ describe("scroll position store", () => {
     clearScrollPosition("a");
     expect(readScrollPosition("a")).toBeUndefined();
     expect(readScrollPosition("b")).toBe(20);
+  });
+});
+
+describe("resolveActiveStickyIndex", () => {
+  // Sections at rows 0, 4 and 9 (e.g. the tool tree's per-account headers).
+  const sticky = [0, 4, 9];
+
+  it("pins the first header while scrolled within the first section", () => {
+    expect(resolveActiveStickyIndex(sticky, 0)).toBe(0);
+    expect(resolveActiveStickyIndex(sticky, 3)).toBe(0);
+  });
+
+  it("switches to the header at the section boundary", () => {
+    expect(resolveActiveStickyIndex(sticky, 4)).toBe(4);
+    expect(resolveActiveStickyIndex(sticky, 8)).toBe(4);
+    expect(resolveActiveStickyIndex(sticky, 9)).toBe(9);
+    expect(resolveActiveStickyIndex(sticky, 50)).toBe(9);
+  });
+
+  it("returns null when no header is at or above the first visible row", () => {
+    // A list whose first sticky header isn't at the very top.
+    expect(resolveActiveStickyIndex([2, 5], 0)).toBeNull();
+    expect(resolveActiveStickyIndex([2, 5], 1)).toBeNull();
+    expect(resolveActiveStickyIndex([], 7)).toBeNull();
   });
 });
