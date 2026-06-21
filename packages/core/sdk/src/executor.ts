@@ -178,12 +178,7 @@ import {
   ORG_SUBJECT,
   type ExecutorOwnerPolicyContext,
 } from "./owner-policy";
-import {
-  ToolSchemaManifest,
-  ToolSchemaView,
-  type IntegrationDetectionResult,
-  type ToolSchemaOptions,
-} from "./types";
+import { ToolSchemaManifest, ToolSchemaView, type IntegrationDetectionResult } from "./types";
 import { type Tool, type ToolAnnotations, type ToolDef, type ToolListFilter } from "./tool";
 import { buildToolTypeScriptPreview, type ToolTypeScriptPreview } from "./schema-types";
 import { collectReferencedDefinitions } from "./schema-refs";
@@ -410,10 +405,7 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
     readonly manifest: (
       filter?: ToolListFilter,
     ) => Effect.Effect<readonly ToolSchemaManifest[], StorageFailure>;
-    readonly schema: (
-      address: ToolAddress,
-      options?: ToolSchemaOptions,
-    ) => Effect.Effect<ToolSchemaView | null, StorageFailure>;
+    readonly schema: (address: ToolAddress) => Effect.Effect<ToolSchemaView | null, StorageFailure>;
   };
 
   readonly providers: {
@@ -4536,15 +4528,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
 
     const toolSchema = (
       address: ToolAddress,
-      options?: ToolSchemaOptions,
     ): Effect.Effect<ToolSchemaView | null, StorageFailure> =>
       Effect.gen(function* () {
         const policyRules = yield* listActivePolicyRuleSet();
-        // The JSON-schema → TypeScript codegen is the CPU-heavy part of this
-        // surface; callers that only need the schema's content (a reindex
-        // computing a content fingerprint) opt out and skip it. Raw schema roots
-        // + referenced `$defs` are returned either way.
-        const includeTypeScript = options?.includeTypeScript ?? true;
         const staticEntry = staticTools.get(String(address));
         if (staticEntry) {
           const tool = staticToolToTool(staticEntry);
@@ -4561,21 +4547,18 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             inputSchema: tool.inputSchema,
             outputSchema: tool.outputSchema,
             definitions: {},
-            includeTypeScript,
           });
           const cached = yield* toolSchemaViewStore
             .get(key)
             .pipe(Effect.catch(() => Effect.succeed(Option.none())));
           if (Option.isSome(cached)) return cached.value.view;
-          const preview = includeTypeScript
-            ? Option.getOrUndefined(
-                yield* buildCachedToolTypeScriptPreview({
-                  inputSchema: tool.inputSchema,
-                  outputSchema: tool.outputSchema,
-                  defs: new Map(),
-                }).pipe(Effect.option),
-            )
-            : undefined;
+          const preview = Option.getOrUndefined(
+            yield* buildCachedToolTypeScriptPreview({
+              inputSchema: tool.inputSchema,
+              outputSchema: tool.outputSchema,
+              defs: new Map(),
+            }).pipe(Effect.option),
+          );
           const view = ToolSchemaView.make({
             address,
             name: tool.name,
@@ -4616,7 +4599,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 address: String(address),
                 indexFingerprint: manifest.indexFingerprint,
                 fingerprintVersion: manifest.fingerprintVersion,
-                includeTypeScript,
               });
         if (manifestCacheKey !== null) {
           const cached = yield* toolSchemaViewStore
@@ -4687,7 +4669,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             inputSchema,
             outputSchema,
             definitions,
-            includeTypeScript,
           }));
         if (manifestCacheKey === null) {
           const cached = yield* toolSchemaViewStore
@@ -4698,15 +4679,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
 
         const referenced = collectReferencedDefinitions([inputSchema, outputSchema], defs);
         const referencedDefs = new Map<string, unknown>(Object.entries(referenced));
-        const preview = includeTypeScript
-          ? Option.getOrUndefined(
-              yield* buildCachedToolTypeScriptPreview({
-                inputSchema,
-                outputSchema,
-                defs: referencedDefs,
-              }).pipe(Effect.option),
-            )
-          : undefined;
+        const preview = Option.getOrUndefined(
+          yield* buildCachedToolTypeScriptPreview({
+            inputSchema,
+            outputSchema,
+            defs: referencedDefs,
+          }).pipe(Effect.option),
+        );
 
         const view = ToolSchemaView.make({
           address,

@@ -145,7 +145,7 @@ export const listToolDescriptors = (
  *
  *  This is the manifest tier for indexing: it carries precomputed raw-schema
  *  fingerprints from source refresh, so scan/diff can avoid per-tool
- *  `tools.schema(includeTypeScript: false)` reads entirely. */
+ *  `tools.schema` reads entirely. */
 export const listToolManifests = (
   executor: Executor,
   options?: ListToolDescriptorsOptions,
@@ -219,8 +219,10 @@ const schemaDefinitionsFacetText = (
 
 /** Collect `ToolDocumentInput` for a single tool descriptor.
  *
- *  Attempts to fetch raw schema via `tools.schema(address, { includeTypeScript:
- *  false })` to populate compact schema facets; on failure it degrades
+ *  Fetches the tool's schema via `tools.schema(address)` to populate compact
+ *  schema facets from the raw input/output schema + `$defs`. The TypeScript
+ *  preview it also renders is unused here, but the call warms the shared
+ *  schema-view cache the web UI reads on first open. On failure it degrades
  *  gracefully to an identity-only document.
  */
 export const collectDocForTool = (
@@ -234,7 +236,7 @@ export const collectDocForTool = (
     integration: String(tool.integration),
     description: stripHtml(String(tool.description ?? "")),
   };
-  return executor.tools.schema(tool.address as Tool["address"], { includeTypeScript: false }).pipe(
+  return executor.tools.schema(tool.address as Tool["address"]).pipe(
     Effect.map((view): ToolDocumentInput => {
       if (view === null) return { ...base, lexicalText: buildLexicalText(base) };
 
