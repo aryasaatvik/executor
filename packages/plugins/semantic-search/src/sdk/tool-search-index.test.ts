@@ -68,14 +68,12 @@ const makeExecutor = (
     tools: {
       list: () => Effect.succeed([tool]),
       manifest: () => Effect.succeed([manifestForTool(tool)]),
-      schema: (address, options) => {
-        const includeTypeScript = options?.includeTypeScript ?? true;
-        if (includeTypeScript) counters.codegen++;
-        else counters.raw++;
+      schema: (address) => {
+        counters.codegen++;
         return Effect.succeed({
           address,
           inputSchema: { type: "object", properties: { owner: { type: "string" } } },
-          inputTypeScript: includeTypeScript ? "{ owner: string }" : undefined,
+          inputTypeScript: "{ owner: string }",
         });
       },
     },
@@ -298,7 +296,7 @@ describe("ToolSearchIndex", () => {
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
       expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
-      expect(counters).toEqual({ raw: 1, codegen: 0 });
+      expect(counters).toEqual({ raw: 0, codegen: 1 });
       expect(upserted).toHaveLength(chunked.chunks);
       for (const vector of upserted) {
         expect(
@@ -478,7 +476,7 @@ describe("ToolSearchIndex", () => {
         expect(first.chunkRefs.length).toBeGreaterThan(0);
         expect(retry.chunkRefs).toEqual(first.chunkRefs);
         expect(retry.commitPaths).toEqual([]);
-        expect(counters).toEqual({ raw: 1, codegen: 0 });
+        expect(counters).toEqual({ raw: 0, codegen: 1 });
       }),
   );
 

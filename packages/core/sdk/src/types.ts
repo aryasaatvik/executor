@@ -54,18 +54,6 @@ export const ToolSchemaManifest = Schema.Struct({
 });
 export type ToolSchemaManifest = typeof ToolSchemaManifest.Type;
 
-/** Options for `executor.tools.schema`. */
-export interface ToolSchemaOptions {
-  /** Generate the TypeScript preview strings (`inputTypeScript` /
-   *  `outputTypeScript` / `typeScriptDefinitions`). Defaults to `true`. Pass
-   *  `false` to skip the CPU-heavy JSON-schema → TypeScript codegen and return
-   *  only the raw JSON schema roots plus referenced `$defs` — the cheap tier for
-   *  callers that need the schema's content but not its rendered types (e.g. a
-   *  reindex computing a content fingerprint). Mirrors `tools.list`'s
-   *  `includeAnnotations` opt-out of an expensive per-tool derivation. */
-  readonly includeTypeScript?: boolean;
-}
-
 // ---------------------------------------------------------------------------
 // Integration detection — optional capability on `PluginSpec.detect`. When a
 // user pastes a URL in the onboarding UI, `executor.integrations.detect(url)`
