@@ -3235,19 +3235,35 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const revisionRows = yield* core.findMany("plugin_storage", {
           where: (b: AnyCb) =>
             b.and(
+              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
               b("plugin_id", "=", CATALOG_REVISION_PLUGIN_ID),
               b("collection", "=", CATALOG_REVISION_COLLECTION),
             ),
         });
+        // Carry `owner` in both the tuple and the sort: the revision `key` is only
+        // `integration:connection`, so the all-owners read (filter.owner undefined)
+        // can surface same-`key` rows for different owners — sorting by `key` alone
+        // would order them nondeterministically and destabilize the cache key.
         const catalogGen = yield* sha256Hex(
           cacheKeyPayload(
             revisionRows
               .map((row) => ({
+                owner: row.owner,
                 key: row.key,
                 revision:
                   (decodeJsonColumn(row.data) as { revision?: string } | undefined)?.revision ?? "",
               }))
-              .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)),
+              .sort((a, b) =>
+                a.owner === b.owner
+                  ? a.key < b.key
+                    ? -1
+                    : a.key > b.key
+                      ? 1
+                      : 0
+                  : a.owner < b.owner
+                    ? -1
+                    : 1,
+              ),
           ),
         );
         const key = yield* toolListCacheKey({
