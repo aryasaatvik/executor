@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRightIcon, MoreHorizontalIcon, SearchIcon, XIcon } from "lucide-react";
 import type { EffectivePolicy, Owner, ToolPolicyAction } from "@executor-js/sdk/shared";
 import { ownerLabel, useOwnerDisplay } from "../api/owner-display";
@@ -22,6 +22,7 @@ import {
   POLICY_INDICATOR_COLOR,
   POLICY_STATE_LABEL,
 } from "../lib/policy-display";
+import { VirtualList, type VirtualListHandle } from "./virtual-list";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -272,7 +273,92 @@ const highlightMatch = (text: string, search: string) => {
 
 // ---------------------------------------------------------------------------
 // ToolTree — main export
+//
+// One windowed scroller over a single flattened item list. In grouped mode the
+// per-account sections and their dotted-name trees are flattened together —
+// section headers become sticky items — so a source with thousands of tools
+// keeps a bounded DOM (only near-viewport rows mount). Expand/collapse state is
+// lifted here and keyed by (section, path) so sections stay independent.
 // ---------------------------------------------------------------------------
+
+// Flat (ungrouped) mode has no account sections; its rows share one empty key.
+const FLAT_SECTION_KEY = "";
+// NUL separates section key from path - it can't appear in a `${owner}:${connection}`
+// key or a dotted tool path, so prefix matching never bleeds across sections.
+const COMPOSITE_SEP = "\u0000";
+const compositeKey = (sectionKey: string, path: string) => `${sectionKey}${COMPOSITE_SEP}${path}`;
+
+type ToolTreeItem =
+  | { readonly kind: "section"; readonly sectionKey: string; readonly group: AccountGroup }
+  | {
+      readonly kind: "leaf";
+      readonly sectionKey: string;
+      readonly depth: number;
+      readonly path: string;
+      readonly tool: ToolSummary;
+    }
+  | {
+      readonly kind: "group";
+      readonly sectionKey: string;
+      readonly depth: number;
+      readonly path: string;
+      readonly segment: string;
+      readonly count: number;
+      readonly open: boolean;
+    };
+
+// The open group paths for one section: every group when searching (so matches
+// are visible), otherwise the user's manual toggles plus the selected tool's
+// ancestors (best-effort, based on its dotted name).
+const resolveSectionOpenSet = (
+  tree: TreeNode,
+  manualOpen: ReadonlySet<string>,
+  sectionKey: string,
+  terms: readonly string[],
+  selectedToolId: string | null,
+): Set<string> => {
+  if (terms.length > 0) {
+    const all = new Set<string>();
+    collectGroupPaths(tree, all);
+    return all;
+  }
+  const set = new Set<string>();
+  const prefix = `${sectionKey}${COMPOSITE_SEP}`;
+  for (const composite of manualOpen) {
+    if (composite.startsWith(prefix)) set.add(composite.slice(prefix.length));
+  }
+  if (selectedToolId) {
+    const parts = selectedToolId.split(".");
+    let acc = "";
+    for (let i = 0; i < parts.length - 1; i++) {
+      acc = acc ? `${acc}.${parts[i]}` : parts[i]!;
+      set.add(acc);
+    }
+  }
+  return set;
+};
+
+function SectionHeader(props: {
+  group: AccountGroup;
+  ownerDisplay: ReturnType<typeof useOwnerDisplay>;
+}) {
+  const { group, ownerDisplay } = props;
+  return (
+    <header className="flex items-center gap-2 border-b border-border/30 bg-muted/40 px-3 py-1.5 backdrop-blur-sm">
+      {ownerDisplay.showOwnerLabels ? (
+        <Badge variant="outline" className="shrink-0 text-[10px]">
+          {ownerLabel(group.owner)}
+        </Badge>
+      ) : null}
+      <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
+        {group.connection || ownerDisplay.label(group.owner)}
+      </span>
+      <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+        {group.tools.length}
+      </span>
+    </header>
+  );
+}
 
 export function ToolTree(props: {
   tools: readonly ToolSummary[];
@@ -311,10 +397,9 @@ export function ToolTree(props: {
   }, [policies]);
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const selectedRowRef = useRef<HTMLButtonElement>(null);
   const ownerDisplay = useOwnerDisplay();
 
-  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const terms = useMemo(() => search.trim().toLowerCase().split(/\s+/).filter(Boolean), [search]);
 
   const filteredTools = useMemo(() => {
     if (terms.length === 0) return tools;
@@ -330,6 +415,46 @@ export function ToolTree(props: {
     () => (groupByConnection ? buildAccountGroups(filteredTools) : []),
     [groupByConnection, filteredTools],
   );
+
+  // Expand/collapse state, lifted out of the per-section bodies so account
+  // sections stay independent. Keys are `${sectionKey}\u0000${path}`.
+  const [manualOpen, setManualOpen] = useState<Set<string>>(() => new Set());
+
+  // The single flat item list fed to the virtualizer: section headers plus the
+  // flattened dotted-name rows of each section (or one flat tree when ungrouped).
+  const items = useMemo<ToolTreeItem[]>(() => {
+    const acc: ToolTreeItem[] = [];
+    const pushRows = (sectionTools: readonly ToolSummary[], sectionKey: string) => {
+      const tree = buildTree(sectionTools);
+      const openSet = resolveSectionOpenSet(tree, manualOpen, sectionKey, terms, selectedToolId);
+      const rows: Row[] = [];
+      flattenTree(tree, 0, openSet, rows);
+      for (const row of rows) {
+        if (row.kind === "leaf") {
+          acc.push({ kind: "leaf", sectionKey, depth: row.depth, path: row.path, tool: row.tool });
+        } else {
+          acc.push({
+            kind: "group",
+            sectionKey,
+            depth: row.depth,
+            path: row.path,
+            segment: row.segment,
+            count: row.count,
+            open: row.open,
+          });
+        }
+      }
+    };
+    if (groupByConnection) {
+      for (const group of accountGroups) {
+        acc.push({ kind: "section", sectionKey: group.key, group });
+        pushRows(group.tools, group.key);
+      }
+    } else {
+      pushRows(filteredTools, FLAT_SECTION_KEY);
+    }
+    return acc;
+  }, [groupByConnection, accountGroups, filteredTools, manualOpen, terms, selectedToolId]);
 
   // Keyboard shortcuts — `/` focuses search, Escape clears
   useEffect(() => {
@@ -347,22 +472,92 @@ export function ToolTree(props: {
     return () => document.removeEventListener("keydown", handler);
   }, [search]);
 
-  // Scroll the selected row into view when it changes
+  // Scroll the selected row into view when it changes. Reads the latest items
+  // through a ref so re-flattening (e.g. expanding a group) doesn't re-trigger.
+  const listRef = useRef<VirtualListHandle>(null);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   useEffect(() => {
     if (!selectedToolId) return;
-    selectedRowRef.current?.scrollIntoView({ block: "nearest" });
+    const index = itemsRef.current.findIndex(
+      (it) => it.kind === "leaf" && it.tool.id === selectedToolId,
+    );
+    if (index >= 0) listRef.current?.scrollToIndex(index, { align: "center" });
   }, [selectedToolId]);
 
-  const bodyProps = {
-    selectedToolId,
-    onSelect,
-    onSetPolicy,
-    onClearPolicy,
-    exactPatterns,
-    search,
-    terms,
-    selectedRowRef,
-  };
+  const toggleGroup = useCallback((sectionKey: string, path: string) => {
+    setManualOpen((prev) => {
+      const next = new Set(prev);
+      const key = compositeKey(sectionKey, path);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const isSticky = useCallback((index: number) => items[index]?.kind === "section", [items]);
+  const estimateSize = useCallback(
+    (index: number) => (items[index]?.kind === "section" ? 30 : 34),
+    [items],
+  );
+  const getKey = useCallback((item: ToolTreeItem) => {
+    if (item.kind === "section") return `section:${item.sectionKey}`;
+    if (item.kind === "leaf") return `${item.sectionKey}:leaf:${item.tool.id}`;
+    return `${item.sectionKey}:group:${item.path}`;
+  }, []);
+
+  const renderItem = useCallback(
+    (item: ToolTreeItem) => {
+      if (item.kind === "section") {
+        return <SectionHeader group={item.group} ownerDisplay={ownerDisplay} />;
+      }
+      if (item.kind === "leaf") {
+        return (
+          <ToolLeafRow
+            tool={item.tool}
+            depth={item.depth}
+            active={item.tool.id === selectedToolId}
+            onSelect={() => {
+              const nameParts = item.tool.name.split(".");
+              trackEvent("tool_selected", {
+                integration_slug: nameParts[0] ?? item.tool.name,
+                tool_name: nameParts.slice(1).join(".") || item.tool.name,
+              });
+              onSelect(item.tool.id);
+            }}
+            search={search}
+            onSetPolicy={onSetPolicy}
+            onClearPolicy={onClearPolicy}
+            exactRule={exactPatterns.get(toPolicyPattern(item.tool.name))}
+          />
+        );
+      }
+      return (
+        <ToolGroupRow
+          path={item.path}
+          segment={item.segment}
+          depth={item.depth}
+          count={item.count}
+          open={item.open}
+          onToggle={() => toggleGroup(item.sectionKey, item.path)}
+          search={search}
+          onSetPolicy={onSetPolicy}
+          onClearPolicy={onClearPolicy}
+          exactRule={exactPatterns.get(toPolicyPattern(`${item.path}.*`))}
+        />
+      );
+    },
+    [
+      ownerDisplay,
+      selectedToolId,
+      search,
+      onSelect,
+      onSetPolicy,
+      onClearPolicy,
+      exactPatterns,
+      toggleGroup,
+    ],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/20">
@@ -389,146 +584,22 @@ export function ToolTree(props: {
         )}
       </div>
       <div className="mx-2 border-t border-border/30" />
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {filteredTools.length === 0 ? (
+      <VirtualList
+        items={items}
+        renderItem={renderItem}
+        getKey={getKey}
+        estimateSize={estimateSize}
+        isSticky={isSticky}
+        apiRef={listRef}
+        className="min-h-0 flex-1"
+        aria-label="Tools"
+        renderEmpty={() => (
           <div className="p-4 text-center text-xs text-muted-foreground">
             {terms.length > 0 ? "No tools match your filter" : "No tools available"}
           </div>
-        ) : groupByConnection ? (
-          accountGroups.map((group) => (
-            <section key={group.key}>
-              <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-border/30 bg-muted/40 px-3 py-1.5 backdrop-blur-sm">
-                {ownerDisplay.showOwnerLabels ? (
-                  <Badge variant="outline" className="shrink-0 text-[10px]">
-                    {ownerLabel(group.owner)}
-                  </Badge>
-                ) : null}
-                <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-                  {group.connection || ownerDisplay.label(group.owner)}
-                </span>
-                <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
-                  {group.tools.length}
-                </span>
-              </header>
-              <ToolTreeBody key={group.key} tools={group.tools} {...bodyProps} />
-            </section>
-          ))
-        ) : (
-          <ToolTreeBody tools={filteredTools} {...bodyProps} />
         )}
-      </div>
+      />
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ToolTreeBody — one dotted-name tree for a tools subset. Owns its own
-// expand/collapse state so account sections (grouped mode) expand independently
-// and never share path keys. Already-filtered tools are passed in.
-// ---------------------------------------------------------------------------
-
-function ToolTreeBody(props: {
-  tools: readonly ToolSummary[];
-  selectedToolId: string | null;
-  onSelect: (toolId: string) => void;
-  onSetPolicy?: (pattern: string, action: ToolPolicyAction) => void;
-  onClearPolicy?: (pattern: string) => void;
-  exactPatterns: ReadonlyMap<string, ToolPolicyAction>;
-  search: string;
-  terms: readonly string[];
-  selectedRowRef: React.Ref<HTMLButtonElement>;
-}) {
-  const {
-    tools,
-    selectedToolId,
-    onSelect,
-    onSetPolicy,
-    onClearPolicy,
-    exactPatterns,
-    search,
-    terms,
-    selectedRowRef,
-  } = props;
-  const [manualOpen, setManualOpen] = useState<Set<string>>(() => new Set());
-
-  const tree = useMemo(() => buildTree(tools), [tools]);
-
-  // When searching, expand everything so matches are visible.
-  // Also auto-expand groups that contain the selected tool.
-  const openSet = useMemo(() => {
-    if (terms.length > 0) {
-      const all = new Set<string>();
-      collectGroupPaths(tree, all);
-      return all;
-    }
-    const set = new Set(manualOpen);
-    if (selectedToolId) {
-      const parts = selectedToolId.split(".");
-      // Progressively add ancestor paths (best-effort, based on dotted name).
-      let acc = "";
-      for (let i = 0; i < parts.length - 1; i++) {
-        acc = acc ? `${acc}.${parts[i]}` : parts[i]!;
-        set.add(acc);
-      }
-    }
-    return set;
-  }, [tree, manualOpen, selectedToolId, terms.length]);
-
-  const rows = useMemo(() => {
-    const acc: Row[] = [];
-    flattenTree(tree, 0, openSet, acc);
-    return acc;
-  }, [tree, openSet]);
-
-  const toggleGroup = (path: string) => {
-    setManualOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  };
-
-  return (
-    <>
-      {rows.map((row) =>
-        row.kind === "leaf" ? (
-          <ToolLeafRow
-            key={row.tool.id}
-            buttonRef={row.tool.id === selectedToolId ? selectedRowRef : undefined}
-            tool={row.tool}
-            depth={row.depth}
-            active={row.tool.id === selectedToolId}
-            onSelect={() => {
-              const nameParts = row.tool.name.split(".");
-              trackEvent("tool_selected", {
-                integration_slug: nameParts[0] ?? row.tool.name,
-                tool_name: nameParts.slice(1).join(".") || row.tool.name,
-              });
-              onSelect(row.tool.id);
-            }}
-            search={search}
-            onSetPolicy={onSetPolicy}
-            onClearPolicy={onClearPolicy}
-            exactRule={exactPatterns.get(toPolicyPattern(row.tool.name))}
-          />
-        ) : (
-          <ToolGroupRow
-            key={row.path}
-            path={row.path}
-            segment={row.segment}
-            depth={row.depth}
-            count={row.count}
-            open={row.open}
-            onToggle={() => toggleGroup(row.path)}
-            search={search}
-            onSetPolicy={onSetPolicy}
-            onClearPolicy={onClearPolicy}
-            exactRule={exactPatterns.get(toPolicyPattern(`${row.path}.*`))}
-          />
-        ),
-      )}
-    </>
   );
 }
 

@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Badge } from "@executor-js/react/components/badge";
 import { Button } from "@executor-js/react/components/button";
@@ -8,6 +8,7 @@ import { useResolveActorLabel } from "@executor-js/react/lib/actor-labels";
 import { CodeBlock } from "@executor-js/react/components/code-block";
 import { CopyButton } from "@executor-js/react/components/copy-button";
 import { ScrollArea } from "@executor-js/react/components/scroll-area";
+import { VirtualList } from "@executor-js/react/components/virtual-list";
 import {
   Sheet,
   SheetContent,
@@ -65,20 +66,25 @@ function LogsBlock(props: { readonly logsJson: string | null }) {
     );
   }
   return (
-    <div className="overflow-hidden rounded-md border border-border bg-muted/25">
-      {lines.map((line, index) => (
+    <VirtualList
+      items={lines}
+      getKey={(line, index) => `${index}-${line.slice(0, 24)}`}
+      estimateSize={() => 28}
+      overscan={16}
+      className="min-h-0 flex-1 px-5 py-4"
+      aria-label="Run logs"
+      renderItem={(line) => (
         <pre
-          key={`${index}-${line.slice(0, 24)}`}
           className={cn(
-            "border-b border-border/40 px-3 py-1.5 font-mono text-xs whitespace-pre-wrap last:border-b-0",
+            "border-b border-border/40 px-3 py-1.5 font-mono text-xs whitespace-pre-wrap",
             line.includes("[error]") && "text-destructive",
             line.includes("[warn]") && "text-amber-600 dark:text-amber-300",
           )}
         >
           {line}
         </pre>
-      ))}
-    </div>
+      )}
+    />
   );
 }
 
@@ -117,14 +123,15 @@ function ToolCallItem(props: {
   readonly call: ToolCallRow;
   readonly windowStart: number;
   readonly windowEnd: number;
+  readonly expanded: boolean;
+  readonly onToggle: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-muted/20">
       <Button
         type="button"
         variant="ghost"
-        onClick={() => setExpanded((value) => !value)}
+        onClick={props.onToggle}
         className="grid h-auto w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-none px-3 py-2 text-left"
       >
         <ToolCallWaterfall
@@ -137,7 +144,7 @@ function ToolCallItem(props: {
           {props.call.durationMs != null ? `${props.call.durationMs}ms` : "—"}
         </span>
       </Button>
-      {expanded && (
+      {props.expanded && (
         <div className="grid gap-3 border-t border-border p-3 xl:grid-cols-2">
           <JsonBlock title="Args" value={props.call.argsJson} />
           {props.call.status === "failed" && props.call.errorText ? (
@@ -157,9 +164,20 @@ function ToolCallItem(props: {
 }
 
 function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonly ToolCallRow[] }) {
+  // Expanded state is lifted out of the row so it survives windowing (a row
+  // scrolled out and back keeps its expansion).
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const windowStart = props.run.startedAt;
+  const toggle = useCallback((id: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
   if (props.toolCalls.length === 0) {
-    return <p className="text-sm text-muted-foreground">No tool calls recorded.</p>;
+    return <p className="p-5 text-sm text-muted-foreground">No tool calls recorded.</p>;
   }
   // Derive the window end from the tool-call data as well as `run.completedAt`
   // so a fresher tool call can't outrun a stale run end and clamp its bar to a
@@ -175,16 +193,25 @@ function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonl
   );
   const windowEnd = Math.max(props.run.completedAt ?? Date.now(), callsEnd);
   return (
-    <div className="space-y-2">
-      {props.toolCalls.map((call) => (
-        <ToolCallItem
-          key={call.toolCallId}
-          call={call}
-          windowStart={windowStart}
-          windowEnd={windowEnd}
-        />
-      ))}
-    </div>
+    <VirtualList
+      items={props.toolCalls}
+      getKey={(call) => call.toolCallId}
+      estimateSize={() => 52}
+      overscan={12}
+      className="min-h-0 flex-1 px-5 py-4"
+      aria-label="Tool calls"
+      renderItem={(call) => (
+        <div className="pb-2">
+          <ToolCallItem
+            call={call}
+            windowStart={windowStart}
+            windowEnd={windowEnd}
+            expanded={expanded.has(call.toolCallId)}
+            onToggle={() => toggle(call.toolCallId)}
+          />
+        </div>
+      )}
+    />
   );
 }
 
@@ -313,85 +340,87 @@ function DetailContent(props: {
           </TabsTrigger>
           <TabsTrigger value="logs">Logs</TabsTrigger>
         </TabsList>
-        <ScrollArea className="min-h-0 flex-1 px-5 py-4">
-          <TabsContent value="properties" className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <MetaCard label="Status">
-                <span className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      "size-2 shrink-0 rounded-full",
-                      tone.dot,
-                      tone.pulse && "animate-pulse",
-                    )}
-                  />
-                  <span className={tone.text}>{statusLabel(run.status)}</span>
-                </span>
-              </MetaCard>
-              <MetaCard label="Duration">
-                {run.durationMs != null ? formatDuration(run.durationMs) : "—"}
-              </MetaCard>
-              <MetaCard label="Actor">
-                {run.actorId !== null ? (
-                  <span className="font-mono text-xs break-all">
-                    {actorLabel}
-                    {run.actorKind !== null ? (
-                      <span className="text-muted-foreground/60"> · {run.actorKind}</span>
-                    ) : null}
+        <TabsContent value="properties" className="flex min-h-0 flex-col">
+          <ScrollArea className="min-h-0 flex-1 px-5 py-4">
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <MetaCard label="Status">
+                  <span className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "size-2 shrink-0 rounded-full",
+                        tone.dot,
+                        tone.pulse && "animate-pulse",
+                      )}
+                    />
+                    <span className={tone.text}>{statusLabel(run.status)}</span>
                   </span>
-                ) : (
-                  <span className="text-muted-foreground/60">—</span>
-                )}
-              </MetaCard>
-              <MetaCard label="Started">
-                <HoverCardTimestamp timestamp={run.startedAt} side="bottom" />
-              </MetaCard>
-              <MetaCard label="Completed">
-                {run.completedAt != null ? (
-                  <HoverCardTimestamp timestamp={run.completedAt} side="bottom" />
-                ) : (
-                  formatDateTime(run.completedAt)
-                )}
-              </MetaCard>
-            </div>
-
-            <div className="flex items-center gap-2 text-xs">
-              <span className="flex items-center gap-1.5">
-                <span className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
-                <span className={trigger.text}>via {trigger.label}</span>
-              </span>
-              <span className="text-muted-foreground">· tools {run.toolCallCount}</span>
-            </div>
-
-            <CodeBlock code={props.code} lang="typescript" title="Code" />
-            <JsonBlock title="Result" value={props.resultJson} />
-            {props.errorText && (
-              <div className="space-y-1">
-                <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
-                <pre className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
-                  {props.errorText}
-                </pre>
+                </MetaCard>
+                <MetaCard label="Duration">
+                  {run.durationMs != null ? formatDuration(run.durationMs) : "—"}
+                </MetaCard>
+                <MetaCard label="Actor">
+                  {run.actorId !== null ? (
+                    <span className="font-mono text-xs break-all">
+                      {actorLabel}
+                      {run.actorKind !== null ? (
+                        <span className="text-muted-foreground/60"> · {run.actorKind}</span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground/60">—</span>
+                  )}
+                </MetaCard>
+                <MetaCard label="Started">
+                  <HoverCardTimestamp timestamp={run.startedAt} side="bottom" />
+                </MetaCard>
+                <MetaCard label="Completed">
+                  {run.completedAt != null ? (
+                    <HoverCardTimestamp timestamp={run.completedAt} side="bottom" />
+                  ) : (
+                    formatDateTime(run.completedAt)
+                  )}
+                </MetaCard>
               </div>
-            )}
 
-            {props.interactions.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-[10px] font-medium uppercase text-muted-foreground">
-                  {interactionsHeading}
-                </p>
-                {props.interactions.map((interaction) => (
-                  <InteractionBlock key={interaction.interactionId} interaction={interaction} />
-                ))}
+              <div className="flex items-center gap-2 text-xs">
+                <span className="flex items-center gap-1.5">
+                  <span className={cn("size-1.5 shrink-0 rounded-full", trigger.dot)} />
+                  <span className={trigger.text}>via {trigger.label}</span>
+                </span>
+                <span className="text-muted-foreground">· tools {run.toolCallCount}</span>
               </div>
-            )}
-          </TabsContent>
-          <TabsContent value="tools">
-            <ToolCallsTab run={run} toolCalls={props.toolCalls} />
-          </TabsContent>
-          <TabsContent value="logs">
-            <LogsBlock logsJson={props.logsJson} />
-          </TabsContent>
-        </ScrollArea>
+
+              <CodeBlock code={props.code} lang="typescript" title="Code" />
+              <JsonBlock title="Result" value={props.resultJson} />
+              {props.errorText && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
+                  <pre className="rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
+                    {props.errorText}
+                  </pre>
+                </div>
+              )}
+
+              {props.interactions.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[10px] font-medium uppercase text-muted-foreground">
+                    {interactionsHeading}
+                  </p>
+                  {props.interactions.map((interaction) => (
+                    <InteractionBlock key={interaction.interactionId} interaction={interaction} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+        </TabsContent>
+        <TabsContent value="tools" className="flex min-h-0 flex-col">
+          <ToolCallsTab run={run} toolCalls={props.toolCalls} />
+        </TabsContent>
+        <TabsContent value="logs" className="flex min-h-0 flex-col">
+          <LogsBlock logsJson={props.logsJson} />
+        </TabsContent>
       </Tabs>
     </div>
   );

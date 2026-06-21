@@ -10,7 +10,7 @@ import { LiveButton } from "./live-button";
 import { LiveDivider } from "./live-row";
 import { RefreshButton } from "./refresh-button";
 import { RunListRow } from "./run-row";
-import { RunsShell, RUNS_TABLE_COLSPAN } from "./shell";
+import { RunsShell, RUNS_TABLE_COLSPAN, type RunsShellRow } from "./shell";
 import { RunsTimelineChart } from "./timeline-chart";
 import {
   emptyRunsFilters,
@@ -146,37 +146,40 @@ export function RunsPage() {
     [isDescending, view.rows, view.liveCutoffId],
   );
 
-  const rowItems: React.ReactNode[] = [];
+  // Run rows + the interleaved live divider, as keyed entries the shell windows.
+  // Elements for off-screen runs are cheap descriptors — only the rows the
+  // windowing mounts actually run their per-row hooks / portals.
+  const rows: RunsShellRow[] = [];
   view.rows.forEach((run, index) => {
     if (index === cutoffIndex && cutoffIndex > 0) {
-      rowItems.push(<LiveDivider key="live-divider" />);
+      rows.push({ key: "live-divider", node: <LiveDivider /> });
     }
-    rowItems.push(
-      <RunListRow
-        key={run.executionId}
-        run={run}
-        selected={run.executionId === selected}
-        isPast={cutoffIndex > 0 && index >= cutoffIndex}
-        columns={columns}
-        onSelect={() => setSelected(run.executionId)}
-      />,
-    );
+    rows.push({
+      key: run.executionId,
+      node: (
+        <RunListRow
+          run={run}
+          selected={run.executionId === selected}
+          isPast={cutoffIndex > 0 && index >= cutoffIndex}
+          columns={columns}
+          onSelect={() => setSelected(run.executionId)}
+        />
+      ),
+    });
   });
 
-  if (view.isLoadMoreError) {
-    rowItems.push(
-      <tr key="load-more-error">
-        <td colSpan={RUNS_TABLE_COLSPAN} className="border-t border-border/50 py-4 text-center">
-          <span className="flex flex-col items-center justify-center gap-2">
-            <span className="font-mono text-xs text-destructive">Failed to load more</span>
-            <Button type="button" variant="outline" size="sm" onClick={view.retry}>
-              Retry
-            </Button>
-          </span>
-        </td>
-      </tr>,
-    );
-  }
+  const loadMoreError = view.isLoadMoreError ? (
+    <tr>
+      <td colSpan={RUNS_TABLE_COLSPAN} className="border-t border-border/50 py-4 text-center">
+        <span className="flex flex-col items-center justify-center gap-2">
+          <span className="font-mono text-xs text-destructive">Failed to load more</span>
+          <Button type="button" variant="outline" size="sm" onClick={view.retry}>
+            Retry
+          </Button>
+        </span>
+      </td>
+    </tr>
+  ) : undefined;
 
   const toolbar = (
     <div className="flex flex-col gap-2 px-4 py-2">
@@ -226,7 +229,7 @@ export function RunsPage() {
       />
     ) : undefined;
 
-  const body = view.isLoading ? (
+  const statusRow = view.isLoading ? (
     <tr>
       <td colSpan={RUNS_TABLE_COLSPAN} className="p-6 text-center text-sm text-muted-foreground">
         Loading runs…
@@ -238,9 +241,7 @@ export function RunsPage() {
         Unable to load runs.
       </td>
     </tr>
-  ) : (
-    rowItems
-  );
+  ) : undefined;
 
   // Prev/next drawer navigation mirrors the ArrowUp/ArrowDown keyboard handler:
   // index-1 is the row above (newer in descending sort), index+1 the row below.
@@ -286,9 +287,11 @@ export function RunsPage() {
           </div>
         }
         railCollapsed={railCollapsed}
-      >
-        {body}
-      </RunsShell>
+        rows={rows}
+        statusRow={statusRow}
+        loadMoreError={loadMoreError}
+        scrollRestoreId="execution-history-runs"
+      />
 
       <DetailDrawer
         executionId={selected}
