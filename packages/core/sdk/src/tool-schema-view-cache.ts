@@ -25,14 +25,12 @@ interface ToolSchemaViewCacheKeyInput {
   readonly inputSchema?: unknown;
   readonly outputSchema?: unknown;
   readonly definitions: Readonly<Record<string, unknown>>;
-  readonly includeTypeScript?: boolean;
 }
 
 interface ToolSchemaViewManifestCacheKeyInput {
   readonly address: string;
   readonly indexFingerprint: string;
   readonly fingerprintVersion: string;
-  readonly includeTypeScript?: boolean;
 }
 
 const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
@@ -46,7 +44,6 @@ const cachePayload = (input: ToolSchemaViewCacheKeyInput): string =>
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
     definitions: input.definitions,
-    includeTypeScript: input.includeTypeScript ?? true,
   });
 
 const manifestCachePayload = (input: ToolSchemaViewManifestCacheKeyInput): string =>
@@ -57,7 +54,6 @@ const manifestCachePayload = (input: ToolSchemaViewManifestCacheKeyInput): strin
     address: input.address,
     indexFingerprint: input.indexFingerprint,
     fingerprintVersion: input.fingerprintVersion,
-    includeTypeScript: input.includeTypeScript ?? true,
   });
 
 export const toolSchemaViewCacheKey = (input: ToolSchemaViewCacheKeyInput): Effect.Effect<string> =>
