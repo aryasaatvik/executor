@@ -99,7 +99,9 @@ export interface SemanticSearchStatus {
  *  scoped executor because only the request/API layer holds it. `reindex`/`search`
  *  are inert — failing clearly — until both a vector store and an embedder are
  *  present. */
-const makeSemanticSearchExtension = (deps: {
+// Exported for unit testing the `search` namespace handling; not re-exported
+// from the package index (see sdk/index.ts), so the public API is unchanged.
+export const makeSemanticSearchExtension = (deps: {
   readonly namespace: string;
   readonly embedder: ToolEmbedder | undefined;
   readonly store: VectorStore | undefined;
@@ -203,18 +205,28 @@ const makeSemanticSearchExtension = (deps: {
       executor: Executor,
       input: { readonly query: string; readonly namespace?: string; readonly limit?: number },
     ): Effect.Effect<SemanticSearchResultPage, SemanticSearchError> => {
-      const namespace = input.namespace ?? deps.namespace;
+      // `input.namespace` is an OPTIONAL integration/path-prefix filter — distinct
+      // from the tenant `deps.namespace` (Vectorize storage isolation, applied
+      // inside the provider's store.query). It must NOT default to the tenant
+      // namespace: a tenant id like "default" is not a tool prefix, so the
+      // provider's `matchesNamespace` would drop every result. Absent → no prefix
+      // filter; the response still reports the tenant namespace.
+      const prefix = input.namespace;
       return deps.provider
         ? deps.provider
             .searchTools({
               executor,
               query: input.query,
-              namespace,
+              namespace: prefix,
               limit: input.limit ?? DEFAULT_SEARCH_LIMIT,
               offset: 0,
             })
             .pipe(
-              Effect.map((page) => ({ namespace, query: input.query, items: page.items })),
+              Effect.map((page) => ({
+                namespace: deps.namespace,
+                query: input.query,
+                items: page.items,
+              })),
               Effect.mapError(
                 (cause) =>
                   new SemanticSearchError({ message: "Semantic search query failed.", cause }),
