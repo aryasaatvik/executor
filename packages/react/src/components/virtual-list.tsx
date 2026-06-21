@@ -174,6 +174,11 @@ export function VirtualList<T>(props: VirtualListProps<T>) {
     estimateSize: estimateSize ?? (() => DEFAULT_ESTIMATE_SIZE),
     overscan,
     rangeExtractor,
+    // Key the measurement cache by stable item identity, not index, so measured
+    // heights follow rows when the list reorders (the tool tree re-flattens on
+    // expand/collapse/filter). Without this the virtualizer caches sizes by
+    // index and a reorder leaves stale heights until the next re-measure.
+    getItemKey: (index) => getKey(items[index]!, index),
   });
 
   React.useImperativeHandle(
