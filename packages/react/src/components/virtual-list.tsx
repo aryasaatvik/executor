@@ -1,5 +1,10 @@
 import * as React from "react";
-import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
+import {
+  defaultRangeExtractor,
+  useVirtualizer,
+  type Range,
+  type VirtualItem,
+} from "@tanstack/react-virtual";
 
 import { cn } from "../lib/utils";
 
@@ -247,4 +252,76 @@ export function VirtualList<T>(props: VirtualListProps<T>) {
       )}
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// useWindowedRows — windowing for surfaces that can't use <div> rows.
+//
+// A real <table> needs its scroll container to wrap <thead>+<tbody>, so the runs
+// table can't drop in <VirtualList>. This hook exposes the same engine: attach
+// `scrollRef` to the scroll container, render a top spacer row of height
+// `paddingTop`, the `virtualItems`, then a bottom spacer of `paddingBottom`.
+// `onScroll` fires end-reached and persists scroll position, mirroring the
+// component. Rows are assumed near-uniform height (fixed `estimateSize`); the
+// sticky-header offset is absorbed by `overscan`.
+// ---------------------------------------------------------------------------
+export interface WindowedRows {
+  readonly scrollRef: React.RefObject<HTMLDivElement | null>;
+  readonly virtualItems: readonly VirtualItem[];
+  readonly paddingTop: number;
+  readonly paddingBottom: number;
+  readonly onScroll: (event: React.UIEvent<HTMLDivElement>) => void;
+}
+
+export function useWindowedRows(options: {
+  readonly count: number;
+  readonly estimateSize?: number;
+  readonly overscan?: number;
+  readonly onEndReached?: () => void;
+  readonly endReachedThreshold?: number;
+  readonly scrollRestoreId?: string;
+}): WindowedRows {
+  const {
+    count,
+    estimateSize = DEFAULT_ESTIMATE_SIZE,
+    overscan = DEFAULT_OVERSCAN,
+    onEndReached,
+    endReachedThreshold = DEFAULT_END_REACHED_THRESHOLD,
+    scrollRestoreId,
+  } = options;
+
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => estimateSize,
+    overscan,
+  });
+
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!scrollRestoreId || !el) return;
+    const saved = readScrollPosition(scrollRestoreId);
+    if (saved !== undefined && saved > 0) el.scrollTop = saved;
+    return () => saveScrollPosition(scrollRestoreId, el.scrollTop);
+  }, [scrollRestoreId]);
+
+  const onScroll = React.useCallback(
+    (event: React.UIEvent<HTMLDivElement>) => {
+      const el = event.currentTarget;
+      if (scrollRestoreId) saveScrollPosition(scrollRestoreId, el.scrollTop);
+      if (onEndReached && isNearBottom(el, endReachedThreshold)) onEndReached();
+    },
+    [onEndReached, endReachedThreshold, scrollRestoreId],
+  );
+
+  const virtualItems = virtualizer.getVirtualItems();
+  const paddingTop = virtualItems.length > 0 ? virtualItems[0]!.start : 0;
+  const paddingBottom =
+    virtualItems.length > 0
+      ? virtualizer.getTotalSize() - virtualItems[virtualItems.length - 1]!.end
+      : 0;
+
+  return { scrollRef, virtualItems, paddingTop, paddingBottom, onScroll };
 }
