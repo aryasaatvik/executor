@@ -168,6 +168,15 @@ import {
   toolSchemaViewManifestCacheKey,
 } from "./tool-schema-view-cache";
 import {
+  CATALOG_REVISION_COLLECTION,
+  CATALOG_REVISION_PLUGIN_ID,
+  catalogRevisionStorageKey,
+  TOOL_LIST_CACHE_VERSION,
+  ToolListCacheEntry,
+  toolListCacheKey,
+  type ToolListCacheItem,
+} from "./tool-list-cache";
+import {
   refreshAccessToken,
   exchangeClientCredentials,
   shouldRefreshToken,
@@ -1943,6 +1952,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       ToolTypeScriptPreviewCacheEntry,
     );
     const toolSchemaViewStore = KeyValueStore.toSchemaStore(cacheStore, ToolSchemaViewCacheEntry);
+    const toolListCacheStore = KeyValueStore.toSchemaStore(cacheStore, ToolListCacheEntry);
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
 
     // Populated once, never mutated after startup.
@@ -2547,6 +2557,14 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
           yield* core.deleteMany("tool_schema_manifest", { where });
+          yield* core.deleteMany("plugin_storage", {
+            where: (b: AnyCb) =>
+              b.and(
+                b("plugin_id", "=", CATALOG_REVISION_PLUGIN_ID),
+                b("collection", "=", CATALOG_REVISION_COLLECTION),
+                b("key", "starts with", `${String(slug)}:`),
+              ),
+          });
           yield* core.deleteMany("connection", { where });
           yield* core.deleteMany("integration", {
             where: (b: AnyCb) => b("slug", "=", String(slug)),
@@ -2592,6 +2610,14 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             b("integration", "=", String(ref.integration)),
             b("connection", "=", String(ref.name)),
           );
+        const revisionKey = catalogRevisionStorageKey(String(ref.integration), String(ref.name));
+        const revisionWhere = (b: AnyCb) =>
+          b.and(
+            byOwner(owner)(b),
+            b("plugin_id", "=", CATALOG_REVISION_PLUGIN_ID),
+            b("collection", "=", CATALOG_REVISION_COLLECTION),
+            b("key", "=", revisionKey),
+          );
         // Every exit stamps the sync time — including the cleanup paths that
         // produce zero tools — so the stale-catalog check (`config_revised_at`
         // vs `tools_synced_at`) doesn't re-attempt this connection per read.
@@ -2625,6 +2651,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
               yield* core.deleteMany("tool_schema_manifest", { where });
+              yield* core.deleteMany("plugin_storage", { where: revisionWhere });
               yield* stampSynced;
             }),
           );
@@ -2638,6 +2665,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               yield* core.deleteMany("tool", { where });
               yield* core.deleteMany("definition", { where });
               yield* core.deleteMany("tool_schema_manifest", { where });
+              yield* core.deleteMany("plugin_storage", { where: revisionWhere });
               yield* stampSynced;
             }),
           );
@@ -2729,6 +2757,17 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           { concurrency: 16 },
         );
 
+        // Content-addressed per-connection toolset revision: the cache catalog
+        // generation is derived from these, so it flips exactly when this
+        // connection's tool SET or any tool's `index_fingerprint` changes.
+        const toolsetRevision = yield* sha256Hex(
+          cacheKeyPayload(
+            manifestRows
+              .map((manifestRow) => [manifestRow.path, manifestRow.index_fingerprint] as const)
+              .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
+          ),
+        );
+
         yield* transaction(
           Effect.gen(function* () {
             yield* core.deleteMany("tool", { where });
@@ -2737,6 +2776,23 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             yield* core.createMany("tool", toolRows);
             yield* core.createMany("definition", definitionRows);
             yield* core.createMany("tool_schema_manifest", manifestRows);
+            yield* core.upsertMany("plugin_storage", {
+              target: ["tenant", "owner", "subject", "plugin_id", "collection", "key"],
+              update: ["data", "updated_at"],
+              values: [
+                {
+                  tenant: keys.tenant,
+                  owner: keys.owner,
+                  subject: keys.subject,
+                  plugin_id: CATALOG_REVISION_PLUGIN_ID,
+                  collection: CATALOG_REVISION_COLLECTION,
+                  key: revisionKey,
+                  data: { revision: toolsetRevision },
+                  created_at: now,
+                  updated_at: now,
+                },
+              ],
+            });
             yield* stampSynced;
           }),
         );
@@ -3149,6 +3205,15 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           yield* core.deleteMany("tool", { where });
           yield* core.deleteMany("definition", { where });
           yield* core.deleteMany("tool_schema_manifest", { where });
+          yield* core.deleteMany("plugin_storage", {
+            where: (b: AnyCb) =>
+              b.and(
+                byOwner(ref.owner)(b),
+                b("plugin_id", "=", CATALOG_REVISION_PLUGIN_ID),
+                b("collection", "=", CATALOG_REVISION_COLLECTION),
+                b("key", "=", catalogRevisionStorageKey(String(ref.integration), String(ref.name))),
+              ),
+          });
           yield* core.deleteMany("connection", {
             where: (b: AnyCb) =>
               b.and(
@@ -3240,45 +3305,161 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       }
     });
 
+    const cachedItemToTool = (item: ToolListCacheItem): Tool => {
+      const owner = item.owner as Owner;
+      const integration = IntegrationSlug.make(item.integration);
+      const connection = ConnectionName.make(item.connection);
+      const name = ToolName.make(item.name);
+      return {
+        address: toolAddress(owner, integration, connection, name),
+        owner,
+        integration,
+        connection,
+        name,
+        pluginId: item.pluginId,
+        description: item.description,
+        annotations: item.annotations as ToolAnnotations | undefined,
+        ...(item.static === undefined ? {} : { static: item.static }),
+      };
+    };
+    const toolToCachedItem = (tool: Tool): ToolListCacheItem => ({
+      owner: tool.owner,
+      integration: tool.integration,
+      connection: tool.connection,
+      name: tool.name,
+      pluginId: tool.pluginId,
+      description: tool.description,
+      ...(tool.annotations === undefined ? {} : { annotations: tool.annotations }),
+      ...(tool.static === undefined ? {} : { static: tool.static }),
+    });
+
     const toolsList = (filter?: ToolListFilter): Effect.Effect<readonly Tool[], StorageFailure> =>
       Effect.gen(function* () {
         yield* syncStaleConnectionTools;
-        // Projected: the list surface is metadata (address, description,
-        // annotations) — loading every tool's input/output schema JSON made
-        // an unbounded list scale with schema bytes, not tool count.
-        const rows = yield* core.findMany("tool", {
-          where: (b: AnyCb) =>
-            b.and(
-              filter?.integration === undefined
-                ? true
-                : b("integration", "=", String(filter.integration)),
-              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
-              filter?.connection === undefined
-                ? true
-                : b("connection", "=", String(filter.connection)),
-            ),
-          select: TOOL_INVOCATION_COLUMNS,
-        });
         const includeBlocked = filter?.includeBlocked ?? false;
         const policyRows = yield* core.findMany("tool_policy", {});
-        const tools: Tool[] = [];
-        for (const row of rows) {
-          const tool = rowToTool(row);
-          if (!matchesToolFilter(tool, filter)) continue;
-          if (!includeBlocked) {
-            const effective = resolveEffectivePolicy(
-              normalizedPolicyId(tool),
-              policyRows,
-              ownerRankForRow,
-              tool.annotations?.requiresApproval,
-            );
-            if (effective.action === "block") continue;
+        // Content-derived revisions, read live each call (cheap: `tool_policy` is
+        // small and the revision rows are O(connections)). The catalog only moves
+        // when a connection is (re)produced or removed, so the cached DB list stays
+        // warm through token rotation and unrelated writes.
+        const policyGen = yield* sha256Hex(
+          cacheKeyPayload(
+            policyRows
+              .map((policy) => ({
+                id: policy.id,
+                owner: policy.owner,
+                pattern: policy.pattern,
+                action: policy.action,
+                position: policy.position,
+              }))
+              .sort((a, b) =>
+                a.owner === b.owner
+                  ? a.id < b.id
+                    ? -1
+                    : a.id > b.id
+                      ? 1
+                      : 0
+                  : a.owner < b.owner
+                    ? -1
+                    : 1,
+              ),
+          ),
+        );
+        const revisionRows = yield* core.findMany("plugin_storage", {
+          where: (b: AnyCb) =>
+            b.and(
+              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
+              b("plugin_id", "=", CATALOG_REVISION_PLUGIN_ID),
+              b("collection", "=", CATALOG_REVISION_COLLECTION),
+            ),
+        });
+        // Carry `owner` in both the tuple and the sort: the revision `key` is only
+        // `integration:connection`, so the all-owners read (filter.owner undefined)
+        // can surface same-`key` rows for different owners — sorting by `key` alone
+        // would order them nondeterministically and destabilize the cache key.
+        const catalogGen = yield* sha256Hex(
+          cacheKeyPayload(
+            revisionRows
+              .map((row) => ({
+                owner: row.owner,
+                key: row.key,
+                revision:
+                  (decodeJsonColumn(row.data) as { revision?: string } | undefined)?.revision ?? "",
+              }))
+              .sort((a, b) =>
+                a.owner === b.owner
+                  ? a.key < b.key
+                    ? -1
+                    : a.key > b.key
+                      ? 1
+                      : 0
+                  : a.owner < b.owner
+                    ? -1
+                    : 1,
+              ),
+          ),
+        );
+        const key = yield* toolListCacheKey({
+          owner: filter?.owner,
+          integration: filter?.integration === undefined ? undefined : String(filter.integration),
+          connection: filter?.connection === undefined ? undefined : String(filter.connection),
+          includeBlocked,
+          catalogGen,
+          policyGen,
+        });
+
+        // The cached value is the DB-derived, policy-filtered list for this
+        // (owner, integration, connection, includeBlocked) scope — query-UNfiltered
+        // and static-EXcluded. Static tools are unioned live; `query` applied below.
+        const cached = yield* toolListCacheStore
+          .get(key)
+          .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+        let dbTools: Tool[];
+        if (Option.isSome(cached)) {
+          dbTools = cached.value.tools.map(cachedItemToTool);
+        } else {
+          // Projected: the list surface is metadata (address, description,
+          // annotations) — loading every tool's input/output schema JSON made
+          // an unbounded list scale with schema bytes, not tool count.
+          const rows = yield* core.findMany("tool", {
+            where: (b: AnyCb) =>
+              b.and(
+                filter?.integration === undefined
+                  ? true
+                  : b("integration", "=", String(filter.integration)),
+                filter?.owner === undefined ? true : b("owner", "=", filter.owner),
+                filter?.connection === undefined
+                  ? true
+                  : b("connection", "=", String(filter.connection)),
+              ),
+            select: TOOL_INVOCATION_COLUMNS,
+          });
+          dbTools = [];
+          for (const row of rows) {
+            const tool = rowToTool(row);
+            if (!includeBlocked) {
+              const effective = resolveEffectivePolicy(
+                normalizedPolicyId(tool),
+                policyRows,
+                ownerRankForRow,
+                tool.annotations?.requiresApproval,
+              );
+              if (effective.action === "block") continue;
+            }
+            dbTools.push(tool);
           }
-          tools.push(tool);
+          yield* toolListCacheStore
+            .set(key, { version: TOOL_LIST_CACHE_VERSION, tools: dbTools.map(toolToCachedItem) })
+            .pipe(Effect.ignore);
         }
+
+        const tools: Tool[] = [...dbTools];
+        // Static tools are matched without `query` so they share the cached DB set;
+        // `query` is applied once to the union at the end.
+        const staticFilter = filter?.query === undefined ? filter : { ...filter, query: undefined };
         for (const entry of staticTools.values()) {
           const tool = staticToolToTool(entry);
-          if (!matchesToolFilter(tool, filter)) continue;
+          if (!matchesToolFilter(tool, staticFilter)) continue;
           if (!includeBlocked) {
             const effective = resolveEffectivePolicy(
               normalizedPolicyId(tool),
@@ -3290,7 +3471,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           }
           tools.push(tool);
         }
-        return tools;
+        return filter?.query === undefined
+          ? tools
+          : tools.filter((tool) => matchesToolFilter(tool, filter));
       });
 
     const toolsManifest = (

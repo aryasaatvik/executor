@@ -654,3 +654,141 @@ describe("createExecutor", () => {
     }),
   );
 });
+
+describe("tools.list cache", () => {
+  const names = (tools: readonly { readonly name: ToolName }[]): string[] =>
+    tools.map((tool) => String(tool.name)).sort();
+
+  const dynamicPlugin = (resolve: () => readonly { name: ToolName; description: string }[]) =>
+    definePlugin(() => ({
+      id: "listCache" as const,
+      credentialProviders: [memoryProvider()],
+      storage: () => ({}),
+      resolveTools: () => Effect.succeed({ tools: resolve(), definitions: {} }),
+      invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+      extension: (ctx) => ({
+        seed: () =>
+          ctx.core.integrations.register({ slug: INTEG, description: "Demo", config: {} }),
+      }),
+    }))();
+
+  it.effect("reflects tool-set additions and removals across a refresh", () =>
+    Effect.gen(function* () {
+      let tools = [
+        { name: ToolName.make("inspect"), description: "inspect" },
+        { name: ToolName.make("run"), description: "run" },
+      ];
+      const executor = yield* makeTestExecutor({
+        plugins: [dynamicPlugin(() => tools)] as const,
+      });
+      yield* executor.listCache.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      // Prime the cache.
+      expect(names(yield* executor.tools.list({ integration: INTEG }))).toEqual(["inspect", "run"]);
+
+      // Remove `inspect`, add `status` — a stale cache would still return [inspect, run].
+      tools = [
+        { name: ToolName.make("run"), description: "run" },
+        { name: ToolName.make("status"), description: "status" },
+      ];
+      yield* executor.connections.refresh({ owner: "org", integration: INTEG, name: CONN });
+      expect(names(yield* executor.tools.list({ integration: INTEG }))).toEqual(["run", "status"]);
+    }),
+  );
+
+  it.effect("reflects a tool content change across a refresh", () =>
+    Effect.gen(function* () {
+      let description = "v1";
+      const executor = yield* makeTestExecutor({
+        plugins: [dynamicPlugin(() => [{ name: ToolName.make("inspect"), description }])] as const,
+      });
+      yield* executor.listCache.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      expect((yield* executor.tools.list({ integration: INTEG }))[0]?.description).toBe("v1");
+      description = "v2";
+      yield* executor.connections.refresh({ owner: "org", integration: INTEG, name: CONN });
+      expect((yield* executor.tools.list({ integration: INTEG }))[0]?.description).toBe("v2");
+    }),
+  );
+
+  it.effect("invalidates when a block policy is added", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        plugins: [
+          dynamicPlugin(() => [{ name: ToolName.make("inspect"), description: "inspect" }]),
+        ] as const,
+      });
+      yield* executor.listCache.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      expect(names(yield* executor.tools.list({ integration: INTEG }))).toEqual(["inspect"]);
+      // A stale cache would still surface the now-blocked tool.
+      yield* executor.policies.create({ owner: "org", pattern: `${INTEG}.*`, action: "block" });
+      expect(yield* executor.tools.list({ integration: INTEG })).toEqual([]);
+    }),
+  );
+
+  it.effect("applies the query filter post-cache so distinct queries share a cached set", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        plugins: [
+          dynamicPlugin(() => [
+            { name: ToolName.make("inspect"), description: "inspect" },
+            { name: ToolName.make("run"), description: "run" },
+          ]),
+        ] as const,
+      });
+      yield* executor.listCache.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      expect(names(yield* executor.tools.list({ integration: INTEG, query: "inspect" }))).toEqual([
+        "inspect",
+      ]);
+      expect(names(yield* executor.tools.list({ integration: INTEG, query: "run" }))).toEqual([
+        "run",
+      ]);
+      expect(names(yield* executor.tools.list({ integration: INTEG }))).toEqual(["inspect", "run"]);
+    }),
+  );
+
+  it.effect("unions static tools live on a cache hit", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        coreTools: { webBaseUrl: "http://localhost:3000" },
+      });
+      const first = yield* executor.tools.list({});
+      const second = yield* executor.tools.list({});
+      const addresses = (tools: readonly { readonly address: ToolAddress }[]) =>
+        tools.map((tool) => String(tool.address)).sort();
+      expect(addresses(first)).toEqual(addresses(second));
+      expect(first.length).toBeGreaterThan(0);
+      expect(first.some((tool) => tool.static === true)).toBe(true);
+    }),
+  );
+});
