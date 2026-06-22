@@ -6,12 +6,17 @@ import { Schema } from "effect";
 //
 // The scan phase used to re-read the entire `tool_schema_manifest` table from D1
 // on every page (12 partitions × ~N/limit pages), so an unchanged catalog cost
-// O(N²/pageLimit) cross-region reads. Instead, `create` (and `reconcile`, for
-// resume) reads the manifest once, partitions it, and writes one snapshot per
-// partition to the executor's KV cache. `scan` then reads only its partition's
-// snapshot — KV-only, no D1 fallback on the hot path; a miss fails the message
-// so the queue retries (the initial scan fan-out is delayed once to let the
-// write propagate). Snapshots are deleted when the run reaches a terminal state.
+// O(N²/pageLimit) cross-region reads. Instead, `create` reads the manifest once,
+// partitions it, and writes one snapshot per partition to the executor's KV cache.
+// `scan` then reads only its partition's snapshot — KV-only, no D1 fallback on the
+// hot path; a miss fails the message so the queue retries (the initial scan fan-out
+// is delayed once to let the write propagate). Snapshots are deleted when the run
+// reaches a terminal state (`complete` or terminal `fail`).
+//
+// Only `create` writes the snapshot — `reconcile` (resume) does not. The snapshot is
+// durable (no TTL; removed only at terminal state), so a resumed stalled run still
+// finds it. If a snapshot is ever genuinely absent at resume (e.g. a version-key bump
+// or KV rollback), its scans DLQ and the recovery path is a fresh reindex, not resume.
 // ---------------------------------------------------------------------------
 
 export const MANIFEST_SNAPSHOT_PREFIX = "index-manifest/";

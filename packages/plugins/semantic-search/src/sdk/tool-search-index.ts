@@ -687,7 +687,7 @@ const countJobsByStatus = (
     );
 
 export const fail = (
-  input: IndexCollections & ToolSearchIndex.FailInput,
+  input: IndexStores & ToolSearchIndex.FailInput,
 ): Effect.Effect<ToolSearchIndex.FailResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const updatedAt = nowIso();
@@ -834,6 +834,7 @@ export const fail = (
               new SemanticSearchError({ message: "Failed to mark index run failed.", cause }),
           ),
         );
+      yield* deleteManifestSnapshot(input.executor, input.runId, run.data.partitionCount);
     }
 
     return {
@@ -979,8 +980,9 @@ const readManifestSnapshot = (
     );
 
 /** Best-effort delete of every partition snapshot once a run reaches a terminal
- *  state. (Stalled / terminally-failed runs that never complete leave their
- *  snapshots until overwritten — a small, bounded leak; KV has no native TTL.) */
+ *  state (`complete` or terminal `fail`). A stalled run that never reaches a
+ *  terminal state leaves its snapshot until overwritten — a small, bounded leak;
+ *  KV has no native TTL through this abstraction. */
 const deleteManifestSnapshot = (
   executor: Executor,
   runId: string,

@@ -1005,4 +1005,20 @@ describe("ToolSearchIndex manifest snapshot", () => {
       expect(error).toBeInstanceOf(SemanticSearchError); // snapshot cleared on completion
     }),
   );
+
+  it.effect("clears the partition snapshots when the run terminally fails", () =>
+    Effect.gen(function* () {
+      const { executor } = makeCountingExecutor(makeTools(3));
+      const base = makeBase(executor);
+
+      yield* create({ ...base, runId: "run-failclear", partitionCount: 1 });
+      const failed = yield* fail({ ...base, runId: "run-failclear", error: "queue exhausted" });
+      expect(failed.runFailed).toBe(true); // no pending paths/chunks → run is terminally failed
+
+      const error = yield* Effect.flip(
+        scan({ ...base, runId: "run-failclear", partition: 0, limit: 10 }),
+      );
+      expect(error).toBeInstanceOf(SemanticSearchError); // snapshot cleared on terminal failure
+    }),
+  );
 });
