@@ -369,6 +369,13 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
    *  machinery (e.g. execution observers) can attribute work to an owner
    *  without re-threading identity through every call site. */
   readonly owner: OwnerBinding;
+
+  /** The host-provided key/value cache primitive (Cloudflare KV in prod, an
+   *  in-memory fallback otherwise). Plugins reach durable cache storage through
+   *  this without re-threading a binding — wrap it with
+   *  `KeyValueStore.toSchemaStore` for typed entries (mirrors the internal
+   *  `tools.list` / schema-view caches). */
+  readonly cache: KeyValueStore.KeyValueStore;
 } & PluginExtensions<TPlugins>;
 
 export interface ExecutorDb {
@@ -4370,6 +4377,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       execute,
       close,
       owner: ownerBinding,
+      cache: cacheStore,
     };
 
     const toExecutor = (value: unknown): Executor<TPlugins> => value as Executor<TPlugins>;

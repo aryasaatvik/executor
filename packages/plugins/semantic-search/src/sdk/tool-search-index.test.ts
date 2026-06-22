@@ -9,6 +9,7 @@ import type {
 } from "@executor-js/sdk/core";
 import { makeInMemoryBlobStore, pluginBlobStore } from "@executor-js/sdk/core";
 import { Effect } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 
 import { makeFacetChunker } from "./chunker";
 import {
@@ -22,7 +23,18 @@ import {
   toolFingerprints,
 } from "./collections";
 import type { ToolEmbedder } from "./embedder";
-import { chunk, commit, create, embed, fail, reconcile, scan, status } from "./tool-search-index";
+import { SemanticSearchError } from "./errors";
+import {
+  chunk,
+  commit,
+  complete,
+  create,
+  embed,
+  fail,
+  reconcile,
+  scan,
+  status,
+} from "./tool-search-index";
 import type { VectorInput, VectorStore } from "./store";
 
 const owner: Owner = "org" as Owner;
@@ -30,6 +42,27 @@ const namespace = "test-ns";
 
 const makeBlobs = () =>
   pluginBlobStore(makeInMemoryBlobStore(), { org: "test-org", user: null }, "semanticSearch");
+
+/** In-memory cache primitive for the executor mock — durable within a single test
+ *  so a `create` snapshot write is visible to the `scan` reads that follow. */
+const makeMemoryCache = (): Executor["cache"] => {
+  const rows = new Map<string, string>();
+  return KeyValueStore.makeStringOnly({
+    get: (key) => Effect.sync(() => rows.get(key)),
+    set: (key, value) =>
+      Effect.sync(() => {
+        rows.set(key, value);
+      }),
+    remove: (key) =>
+      Effect.sync(() => {
+        rows.delete(key);
+      }),
+    clear: Effect.sync(() => {
+      rows.clear();
+    }),
+    size: Effect.sync(() => rows.size),
+  });
+};
 
 const manifestForTool = (
   tool: Tool,
@@ -64,7 +97,7 @@ const makeExecutor = (
     connection: "default" as never,
     pluginId: "test",
   };
-  const executor: Pick<Executor, "tools"> = {
+  const executor: Pick<Executor, "tools" | "cache"> = {
     tools: {
       list: () => Effect.succeed([tool]),
       manifest: () => Effect.succeed([manifestForTool(tool)]),
@@ -77,6 +110,7 @@ const makeExecutor = (
         });
       },
     },
+    cache: makeMemoryCache(),
   };
   return executor as Executor;
 };
@@ -511,12 +545,13 @@ describe("ToolSearchIndex", () => {
           pluginId: "test",
         },
       ];
-      const executor: Pick<Executor, "tools"> = {
+      const executor: Pick<Executor, "tools" | "cache"> = {
         tools: {
           list: () => Effect.succeed(tools),
           manifest: () => Effect.succeed(tools.map((tool) => manifestForTool(tool))),
           schema: () => Effect.succeed(null),
         },
+        cache: makeMemoryCache(),
       };
       const runs = makeCollection<IndexRun>(indexRuns.name);
       const jobs = makeCollection<IndexJob>(indexJobs.name);
@@ -849,6 +884,141 @@ describe("ToolSearchIndex", () => {
         fingerprint: "fp-zero",
         chunkIds: [],
       });
+    }),
+  );
+});
+
+describe("ToolSearchIndex manifest snapshot", () => {
+  const makeTools = (count: number): Tool[] =>
+    Array.from({ length: count }, (_, i) => ({
+      address: `tools.github.repos.get${i}` as never,
+      name: `repos.get${i}` as never,
+      integration: "github" as never,
+      description: `Get repository ${i}`,
+      owner,
+      connection: "default" as never,
+      pluginId: "test",
+    }));
+
+  /** Executor mock that counts `tools.manifest()` calls so a test can prove the
+   *  scan reads the KV snapshot rather than re-querying the manifest per page. */
+  const makeCountingExecutor = (tools: Tool[]) => {
+    const counters = { manifest: 0 };
+    const executor: Pick<Executor, "tools" | "cache"> = {
+      tools: {
+        list: () => Effect.succeed(tools),
+        manifest: () => {
+          counters.manifest++;
+          return Effect.succeed(tools.map((tool) => manifestForTool(tool)));
+        },
+        schema: () => Effect.succeed(null),
+      },
+      cache: makeMemoryCache(),
+    };
+    return { executor: executor as Executor, counters };
+  };
+
+  const makeBase = (executor: Executor) => ({
+    namespace,
+    executor,
+    runs: makeCollection<IndexRun>(indexRuns.name),
+    jobs: makeCollection<IndexJob>(indexJobs.name),
+    chunks: makeCollection<IndexChunk>(indexChunks.name),
+    fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+    blobs: makeBlobs(),
+    owner,
+  });
+
+  it.effect("reads the manifest once at create and pages scans from the KV snapshot", () =>
+    Effect.gen(function* () {
+      const { executor, counters } = makeCountingExecutor(makeTools(5));
+      const base = makeBase(executor);
+
+      yield* create({ ...base, runId: "run-snap", partitionCount: 1 });
+      expect(counters.manifest).toBe(1);
+
+      let pages = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const result = yield* scan({ ...base, runId: "run-snap", partition: 0, limit: 2 });
+        hasMore = result.hasMore;
+        pages++;
+      }
+
+      expect(pages).toBe(3); // ceil(5 / 2) pages, each from the snapshot
+      expect(counters.manifest).toBe(1); // never re-read during scan
+      expect(base.jobs.data.size).toBe(5); // every tool scanned exactly once
+    }),
+  );
+
+  it.effect("fails the scan when the run snapshot is missing (no D1 fallback)", () =>
+    Effect.gen(function* () {
+      const { executor, counters } = makeCountingExecutor(makeTools(2));
+      const base = makeBase(executor);
+
+      // No `create`, so nothing was written to the KV snapshot.
+      const error = yield* Effect.flip(
+        scan({ ...base, runId: "run-missing", partition: 0, limit: 10 }),
+      );
+
+      expect(error).toBeInstanceOf(SemanticSearchError); // KV miss → fail, not a live read
+      expect(counters.manifest).toBe(0); // the scan never falls back to a live manifest read
+    }),
+  );
+
+  it.effect("clears the partition snapshots when the run completes", () =>
+    Effect.gen(function* () {
+      const { executor } = makeCountingExecutor(makeTools(3));
+      const base = makeBase(executor);
+
+      yield* create({ ...base, runId: "run-clear", partitionCount: 1 });
+      let hasMore = true;
+      while (hasMore) {
+        const result = yield* scan({ ...base, runId: "run-clear", partition: 0, limit: 10 });
+        hasMore = result.hasMore;
+      }
+
+      const store: VectorStore = {
+        maxTopK: 100,
+        query: () => Effect.succeed([]),
+        upsert: () => Effect.void,
+        deleteByIds: () => Effect.void,
+      };
+      const embedder: ToolEmbedder = {
+        model: "test",
+        dimensions: 3,
+        embedDocuments: (texts) => Effect.succeed(texts.map(() => [0.1, 0.2, 0.3])),
+        embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
+      };
+      yield* complete({
+        ...base,
+        store,
+        embedder,
+        chunker: makeFacetChunker(),
+        runId: "run-clear",
+      });
+
+      // The snapshot is gone, so a post-completion scan can no longer read it.
+      const error = yield* Effect.flip(
+        scan({ ...base, runId: "run-clear", partition: 0, limit: 10 }),
+      );
+      expect(error).toBeInstanceOf(SemanticSearchError); // snapshot cleared on completion
+    }),
+  );
+
+  it.effect("clears the partition snapshots when the run terminally fails", () =>
+    Effect.gen(function* () {
+      const { executor } = makeCountingExecutor(makeTools(3));
+      const base = makeBase(executor);
+
+      yield* create({ ...base, runId: "run-failclear", partitionCount: 1 });
+      const failed = yield* fail({ ...base, runId: "run-failclear", error: "queue exhausted" });
+      expect(failed.runFailed).toBe(true); // no pending paths/chunks → run is terminally failed
+
+      const error = yield* Effect.flip(
+        scan({ ...base, runId: "run-failclear", partition: 0, limit: 10 }),
+      );
+      expect(error).toBeInstanceOf(SemanticSearchError); // snapshot cleared on terminal failure
     }),
   );
 });
