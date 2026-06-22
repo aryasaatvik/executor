@@ -3,9 +3,11 @@ import type {
   Owner,
   PluginBlobStore,
   PluginStorageCollectionFacade,
+  ToolSchemaManifest,
 } from "@executor-js/sdk/core";
 import { sha256Hex } from "@executor-js/sdk/core";
-import { Context, Effect, Predicate, Schema } from "effect";
+import { Context, Effect, Option, Predicate, Schema } from "effect";
+import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore";
 
 import { type Chunker, type ToolChunk, ToolDocumentInput } from "./chunker";
 import {
@@ -28,6 +30,12 @@ import {
 } from "./documents";
 import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
+import {
+  ManifestSnapshotEntry,
+  type ManifestSnapshotItem,
+  MANIFEST_SNAPSHOT_VERSION,
+  manifestSnapshotKey,
+} from "./manifest-snapshot";
 import { cyrb53 } from "./fingerprint";
 import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
@@ -679,7 +687,7 @@ const countJobsByStatus = (
     );
 
 export const fail = (
-  input: IndexCollections & ToolSearchIndex.FailInput,
+  input: IndexStores & ToolSearchIndex.FailInput,
 ): Effect.Effect<ToolSearchIndex.FailResult, SemanticSearchError> =>
   Effect.gen(function* () {
     const updatedAt = nowIso();
@@ -826,6 +834,7 @@ export const fail = (
               new SemanticSearchError({ message: "Failed to mark index run failed.", cause }),
           ),
         );
+      yield* deleteManifestSnapshot(input.executor, input.runId, run.data.partitionCount);
     }
 
     return {
@@ -906,6 +915,85 @@ export const reconcile = (
     };
   });
 
+const manifestSnapshotStore = (executor: Executor) =>
+  KeyValueStore.toSchemaStore(executor.cache, ManifestSnapshotEntry);
+
+/** Partition the run's full manifest list (preserving each entry's ordinal in the
+ *  full list) and write one snapshot per partition to the executor cache. Written
+ *  once at run creation so the scan phase reads KV instead of re-querying the whole
+ *  `tool_schema_manifest` table on every page. Fails loudly: the scan path has no
+ *  D1 fallback, so a run must not start without its snapshot. */
+const writeManifestSnapshot = (
+  executor: Executor,
+  runId: string,
+  partitionCount: number,
+  manifests: readonly ToolSchemaManifest[],
+): Effect.Effect<void, SemanticSearchError> =>
+  Effect.gen(function* () {
+    const store = manifestSnapshotStore(executor);
+    const byPartition: ManifestSnapshotItem[][] = Array.from({ length: partitionCount }, () => []);
+    manifests.forEach((manifest, ordinal) => {
+      byPartition[partitionForPath(manifest.path, partitionCount)]?.push({ ordinal, manifest });
+    });
+    yield* Effect.forEach(
+      byPartition,
+      (items, partition) =>
+        store.set(manifestSnapshotKey(runId, partition), {
+          version: MANIFEST_SNAPSHOT_VERSION,
+          items,
+        }),
+      { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({ message: "Failed to write tool manifest snapshot.", cause }),
+      ),
+    );
+  });
+
+/** Read a partition's manifest snapshot. KV-only by design: a miss fails the scan
+ *  so the queue retries (the initial scan fan-out is delayed once to let the write
+ *  propagate) — there is deliberately no D1 fallback on this hot path. */
+const readManifestSnapshot = (
+  executor: Executor,
+  runId: string,
+  partition: number,
+): Effect.Effect<readonly ManifestSnapshotItem[], SemanticSearchError> =>
+  manifestSnapshotStore(executor)
+    .get(manifestSnapshotKey(runId, partition))
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new SemanticSearchError({ message: "Failed to read tool manifest snapshot.", cause }),
+      ),
+      Effect.flatMap(
+        Option.match({
+          onNone: () =>
+            Effect.fail(
+              new SemanticSearchError({
+                message: `Tool manifest snapshot for run "${runId}" partition ${partition} is missing.`,
+              }),
+            ),
+          onSome: (entry) => Effect.succeed(entry.items),
+        }),
+      ),
+    );
+
+/** Best-effort delete of every partition snapshot once a run reaches a terminal
+ *  state (`complete` or terminal `fail`). A stalled run that never reaches a
+ *  terminal state leaves its snapshot until overwritten — a small, bounded leak;
+ *  KV has no native TTL through this abstraction. */
+const deleteManifestSnapshot = (
+  executor: Executor,
+  runId: string,
+  partitionCount: number,
+): Effect.Effect<void> =>
+  Effect.forEach(
+    Array.from({ length: partitionCount }, (_, partition) => partition),
+    (partition) => executor.cache.remove(manifestSnapshotKey(runId, partition)),
+    { concurrency: INDEX_STORAGE_CONCURRENCY, discard: true },
+  ).pipe(Effect.ignore);
+
 export const create = (
   input: IndexStores & ToolSearchIndex.CreateInput,
 ): Effect.Effect<ToolSearchIndex.CreateResult, SemanticSearchError> =>
@@ -913,6 +1001,8 @@ export const create = (
     const partitionCount = Math.max(1, Math.floor(input.partitionCount));
     const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
     const createdAt = nowIso();
+
+    yield* writeManifestSnapshot(input.executor, input.runId, partitionCount, manifests);
 
     yield* input.runs
       .put({
@@ -947,26 +1037,12 @@ export const scan = (
   input: IndexStores & ToolSearchIndex.ScanInput,
 ): Effect.Effect<ToolSearchIndex.ScanResult, SemanticSearchError> =>
   Effect.gen(function* () {
-    const run = yield* input.runs
-      .getForOwner({ owner: input.owner, key: input.runId })
-      .pipe(
-        Effect.mapError(
-          (cause) => new SemanticSearchError({ message: "Failed to load index run.", cause }),
-        ),
-      );
-    if (run === null) {
-      return yield* new SemanticSearchError({
-        message: `Index run "${input.runId}" does not exist.`,
-      });
-    }
+    const partitionManifests = yield* readManifestSnapshot(
+      input.executor,
+      input.runId,
+      input.partition,
+    );
 
-    const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
-    const partitionManifests = manifests
-      .map((manifest, ordinal) => ({ manifest, ordinal }))
-      .filter(
-        ({ manifest }) =>
-          partitionForPath(manifest.path, run.data.partitionCount) === input.partition,
-      );
     const existing = yield* input.jobs
       .count({ where: { runId: input.runId, partition: input.partition } })
       .pipe(
@@ -1631,6 +1707,7 @@ export const complete = (
               new SemanticSearchError({ message: "Failed to mark index run completed.", cause }),
           ),
         );
+      yield* deleteManifestSnapshot(input.executor, input.runId, existing.data.partitionCount);
     }
     return { runId: input.runId, removed: result.removed };
   });
