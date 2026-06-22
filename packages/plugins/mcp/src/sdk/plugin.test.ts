@@ -125,7 +125,6 @@ const seedCallToolExecutor = (input: { slug: string; callTool: CallToolResponder
         name: "Call tool fixture",
         endpoint: server.url("/mcp"),
         slug: input.slug,
-        remoteTransport: "streamable-http",
       });
       yield* executor.connections.create({
         owner: "org",

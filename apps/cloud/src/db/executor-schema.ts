@@ -184,6 +184,44 @@ export const definition = pgTable(
   ],
 );
 
+export const tool_schema_manifest = pgTable(
+  "tool_schema_manifest",
+  {
+    integration: varchar("integration", { length: 255 }).notNull(),
+    connection: varchar("connection", { length: 255 }).notNull(),
+    plugin_id: text("plugin_id").notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    path: varchar("path", { length: 255 }).notNull(),
+    description: text("description").notNull(),
+    descriptor_hash: text("descriptor_hash").notNull(),
+    input_schema_hash: text("input_schema_hash").notNull(),
+    output_schema_hash: text("output_schema_hash").notNull(),
+    definition_set_hash: text("definition_set_hash").notNull(),
+    index_fingerprint: text("index_fingerprint").notNull(),
+    fingerprint_version: text("fingerprint_version").notNull(),
+    source_revision: text("source_revision"),
+    created_at: timestamp("created_at").notNull(),
+    updated_at: timestamp("updated_at").notNull(),
+    row_id: varchar("row_id", { length: 255 })
+      .primaryKey()
+      .notNull()
+      .$defaultFn(() => createId()),
+    tenant: varchar("tenant", { length: 255 }).notNull(),
+    owner: varchar("owner", { length: 255 }).notNull(),
+    subject: varchar("subject", { length: 255 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("tool_schema_manifest_uidx").on(
+      table.tenant,
+      table.owner,
+      table.subject,
+      table.integration,
+      table.connection,
+      table.name,
+    ),
+  ],
+);
+
 export const tool_policy = pgTable(
   "tool_policy",
   {

@@ -62,6 +62,7 @@ export interface SessionDbHandle {
 export interface SessionMeta {
   readonly organizationId: string;
   readonly organizationName: string;
+  readonly organizationSlug?: string;
   readonly userId: string;
   readonly elicitationMode?: "browser" | "model" | "native";
   readonly webOrigin?: string;

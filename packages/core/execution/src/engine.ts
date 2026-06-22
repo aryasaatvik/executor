@@ -1,5 +1,5 @@
 import { Deferred, Effect, Fiber, Predicate, Queue } from "effect";
-import type * as Cause from "effect/Cause";
+import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 
 import type {

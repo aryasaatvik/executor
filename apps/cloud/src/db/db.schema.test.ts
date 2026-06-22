@@ -106,9 +106,14 @@ describe("combinedSchema", () => {
             provider: "postgresql",
           });
           const schemaTables = drizzleTableColumns(combinedSchema);
+          const missingTables: string[] = [];
           const missingColumns: string[] = [];
 
           for (const table of Object.values(fumaDbInternals(fuma.db).internal.tables)) {
+            if (schemaTables[table.names.drizzle] === undefined) {
+              missingTables.push(table.names.drizzle);
+              continue;
+            }
             const drizzleTable = drizzleTableColumns(schemaTables[table.names.drizzle]);
             for (const column of Object.values(table.columns)) {
               if (drizzleTable[column.names.drizzle] === undefined) {
@@ -119,6 +124,7 @@ describe("combinedSchema", () => {
             }
           }
 
+          expect(missingTables).toEqual([]);
           expect(missingColumns).toEqual([]);
         }),
       ),
