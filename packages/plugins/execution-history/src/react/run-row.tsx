@@ -35,6 +35,12 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
   const isLive = run.status === "running" || run.status === "waiting_for_interaction";
   const logErrors = run.logErrorCount;
   const logWarns = run.logWarnCount;
+  const approvalLabels = [
+    run.hadFormApproval ? "form" : null,
+    run.hadUrlApproval ? "url" : null,
+  ].filter((label): label is string => label !== null);
+  const approvalLabel =
+    approvalLabels.length > 0 ? approvalLabels.join(",") : run.hadInteraction ? "yes" : null;
 
   return (
     <tr
@@ -133,15 +139,15 @@ export function RunListRow({ run, selected, isPast, columns, onSelect }: RunList
         </td>
       ) : null}
 
-      {/* Interaction (centered, optional) */}
+      {/* Approval (centered, optional) */}
       {columns.interaction ? (
         <td className={cn(CELL, "text-center")}>
-          {run.hadInteraction ? (
+          {approvalLabel ? (
             <Badge
               variant="outline"
               className="border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
             >
-              yes
+              {approvalLabel}
             </Badge>
           ) : (
             <span className="text-muted-foreground/50">—</span>

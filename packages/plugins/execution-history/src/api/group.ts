@@ -43,6 +43,8 @@ const RunActorCount = Schema.Struct({
 const RunInteractionCounts = Schema.Struct({
   withInteraction: Schema.Number,
   withoutInteraction: Schema.Number,
+  formApproval: Schema.Number,
+  urlApproval: Schema.Number,
 });
 const RunChartBucket = Schema.Struct({
   bucketStart: Schema.Number,
@@ -118,6 +120,7 @@ const ListRunsQuery = Schema.Struct({
   from: Schema.optional(Schema.NumberFromString),
   to: Schema.optional(Schema.NumberFromString),
   interaction: Schema.optional(Schema.String),
+  approvalType: Schema.optional(Schema.Literals(["form", "url"])),
   // Live-tail floor: only runs newer than this `startedAt`.
   after: Schema.optional(Schema.NumberFromString),
   sort: Schema.optional(Schema.Literals(["startedAt", "durationMs"])),
