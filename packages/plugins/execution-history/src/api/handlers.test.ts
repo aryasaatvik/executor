@@ -46,6 +46,8 @@ const runRow = (overrides: Partial<RunRow>): RunRow => ({
   actorId: null,
   actorLabel: null,
   actorKind: null,
+  hadFormApproval: false,
+  hadUrlApproval: false,
   startedAt: 1000,
   completedAt: 2000,
   durationMs: 1000,
@@ -129,7 +131,7 @@ describe("ExecutionHistoryHandlers", () => {
 
       const res = yield* get(
         web,
-        "http://localhost/execution-history/runs?status=completed,failed&trigger=manual&from=100&to=900&interaction=true&after=50&limit=10&sort=startedAt&dir=asc",
+        "http://localhost/execution-history/runs?status=completed,failed&trigger=manual&from=100&to=900&interaction=true&approvalType=form&after=50&limit=10&sort=startedAt&dir=asc",
       );
       expect(res.status).toBe(200);
       const body = (yield* Effect.promise(() => res.json())) as {
@@ -147,6 +149,7 @@ describe("ExecutionHistoryHandlers", () => {
       expect(options?.triggerFilter).toEqual(["manual"]);
       expect(options?.timeRange).toEqual({ from: 100, to: 900 });
       expect(options?.hadInteraction).toBe(true);
+      expect(options?.approvalType).toBe("form");
       expect(options?.after).toBe(50);
       expect(options?.limit).toBe(10);
       expect(options?.sortField).toBe("startedAt");
@@ -168,6 +171,7 @@ describe("ExecutionHistoryHandlers", () => {
       expect(options?.triggerFilter).toBeUndefined();
       expect(options?.timeRange).toBeUndefined();
       expect(options?.hadInteraction).toBeUndefined();
+      expect(options?.approvalType).toBeUndefined();
     }),
   );
 

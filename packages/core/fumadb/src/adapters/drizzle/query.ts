@@ -362,6 +362,7 @@ export function fromDrizzle(
       );
     }
     if (filter.kind === "or") {
+      if (filter.items.length === 0) return Drizzle.sql`1 = 0`;
       return Drizzle.or(
         ...filter.items.map((item) => buildJsonFilter(jsonColumn, item)),
       );
@@ -435,6 +436,10 @@ export function fromDrizzle(
     },
     async upsertMany(table, v) {
       if (v.values.length === 0) return;
+      if (v.target.length === 0) {
+        // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
+        throw new Error("[FumaDB] upsertMany requires at least one target column.");
+      }
       if (v.update.length === 0) {
         // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
         throw new Error("[FumaDB] upsertMany requires at least one update column.");
