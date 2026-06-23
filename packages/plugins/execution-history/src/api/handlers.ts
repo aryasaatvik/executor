@@ -97,6 +97,7 @@ export const ExecutionHistoryHandlers = HttpApiBuilder.group(
               actorFilter: actorFilter.length > 0 ? actorFilter : undefined,
               timeRange,
               hadInteraction: parseBooleanFlag(query.interaction),
+              approvalType: query.approvalType,
               after: query.after,
               sortField: query.sort,
               sortDirection: query.dir,

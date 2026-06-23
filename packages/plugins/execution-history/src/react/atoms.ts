@@ -21,6 +21,7 @@ export interface RunsQuery {
   readonly from?: number;
   readonly to?: number;
   readonly interaction?: string;
+  readonly approvalType?: "form" | "url";
   readonly after?: number;
   readonly sort?: "startedAt" | "durationMs";
   readonly dir?: "asc" | "desc";
