@@ -26,6 +26,7 @@ import {
 } from "@executor-js/execution";
 
 import { makeMcpWorkerTransport, type McpWorkerTransport } from "./worker-transport";
+import { decideSessionAlarm, pausedLeaseExtensionLog } from "./session-alarm-policy";
 import {
   INTERNAL_ACCOUNT_ID_HEADER,
   INTERNAL_ORGANIZATION_ID_HEADER,
@@ -81,7 +82,6 @@ const resumeApprovalResult = (
 });
 
 const HEARTBEAT_MS = 30 * 1000;
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
 const TRANSPORT_STATE_KEY = "transport";
 const SESSION_META_KEY = "session-meta";
 const LAST_ACTIVITY_KEY = "last-activity-ms";
@@ -897,14 +897,38 @@ export abstract class McpSessionDOBase<
     );
   }
 
+  private async pausedExecutionCount(): Promise<number> {
+    if (!this.engine) return 0;
+    return Effect.runPromise(this.engine.pausedExecutionCount());
+  }
+
   private async runAlarm(): Promise<void> {
     const lastActivityMs = await this.loadLastActivity();
     const idleMs = Date.now() - lastActivityMs;
-    if (idleMs >= SESSION_TIMEOUT_MS) {
+    const pausedExecutionCount = await this.pausedExecutionCount();
+    const decision = decideSessionAlarm({ idleMs, pausedExecutionCount });
+
+    if (decision.kind === "extend_paused_lease") {
+      console.info(
+        JSON.stringify(
+          pausedLeaseExtensionLog({
+            sessionId: this.sessionId,
+            pausedExecutionCount,
+            idleMs,
+            leaseMs: decision.leaseMs,
+          }),
+        ),
+      );
+      await this.ctx.storage.setAlarm(Date.now() + decision.leaseMs);
+      return;
+    }
+
+    if (decision.kind === "destroy_idle_session") {
       await Effect.runPromise(this.closeRuntime());
       await this.ctx.storage.deleteAlarm();
       return;
     }
+
     await this.ctx.storage.setAlarm(Date.now() + HEARTBEAT_MS);
   }
 

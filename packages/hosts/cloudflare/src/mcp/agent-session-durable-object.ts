@@ -11,6 +11,11 @@ import {
 } from "@executor-js/execution";
 
 import type { IncomingPropagationHeaders, McpElicitationMode } from "./do-headers";
+import {
+  SESSION_TIMEOUT_MS,
+  decideSessionAlarm,
+  pausedLeaseExtensionLog,
+} from "./session-alarm-policy";
 
 export type IncomingTraceHeaders = IncomingPropagationHeaders;
 
@@ -80,7 +85,7 @@ export interface BrowserApprovalStore {
 
 const SESSION_META_KEY = "session-meta";
 const LAST_ACTIVITY_KEY = "last-activity-ms";
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+const PARTYSERVER_NAME_KEY = "__ps_name";
 const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
 
 const resumeApprovalResult = (
@@ -193,6 +198,22 @@ export abstract class McpAgentSessionDOBase<
     const stored = await this.ctx.storage.get<number>(LAST_ACTIVITY_KEY);
     this.lastActivityMs = stored ?? 0;
     return this.lastActivityMs;
+  }
+
+  private async hasPartyServerName(): Promise<boolean> {
+    if (this.ctx.id.name) return true;
+    const stored = await this.ctx.storage.get<string>(PARTYSERVER_NAME_KEY);
+    return !!stored;
+  }
+
+  private async cleanupUnaddressableSessionAlarm(): Promise<void> {
+    await Effect.runPromise(this.closeRuntime());
+    await Effect.runPromise(
+      Effect.all([
+        Effect.ignore(Effect.tryPromise(() => this.ctx.storage.deleteAlarm())),
+        Effect.ignore(Effect.tryPromise(() => this.ctx.storage.delete(LAST_ACTIVITY_KEY))),
+      ]),
+    );
   }
 
   private resolveAndStoreSessionMeta(token: McpSessionInit) {
@@ -425,13 +446,42 @@ export abstract class McpAgentSessionDOBase<
     await super.destroy();
   }
 
+  private async pausedExecutionCount(): Promise<number> {
+    if (!this.engine) return 0;
+    return Effect.runPromise(this.engine.pausedExecutionCount());
+  }
+
   override async alarm(): Promise<void> {
-    const lastActivityMs = await this.loadLastActivity();
-    if (lastActivityMs > 0 && Date.now() - lastActivityMs >= SESSION_TIMEOUT_MS) {
-      await this.destroy();
+    if (!(await this.hasPartyServerName())) {
+      await this.cleanupUnaddressableSessionAlarm();
       return;
     }
-    await super.alarm();
+    const lastActivityMs = await this.loadLastActivity();
+    const idleMs = lastActivityMs > 0 ? Date.now() - lastActivityMs : 0;
+    const pausedExecutionCount = await this.pausedExecutionCount();
+    const decision = decideSessionAlarm({ idleMs, pausedExecutionCount });
+
+    if (decision.kind === "idle_within_timeout") {
+      await super.alarm();
+      return;
+    }
+
+    if (decision.kind === "extend_paused_lease") {
+      console.info(
+        JSON.stringify(
+          pausedLeaseExtensionLog({
+            sessionId: this.sessionId,
+            pausedExecutionCount,
+            idleMs,
+            leaseMs: decision.leaseMs,
+          }),
+        ),
+      );
+      await this.ctx.storage.setAlarm(Date.now() + decision.leaseMs);
+      return;
+    }
+
+    await this.destroy();
   }
 
   private validateApprovalIdentity(
