@@ -3885,8 +3885,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           : policyForcesApproval && policy.pattern
             ? `Approve ${address}? (matched policy: ${policy.pattern})`
             : `Approve ${address}?`;
+        const preview = approvalArgumentPreview(args);
         const request = FormElicitation.make({
-          message: `${message}\n\nArguments:\n${approvalArgumentPreview(args)}`,
+          message: `${message}\n\nArguments:\n${preview}`,
           requestedSchema: { type: "object", properties: {} },
         });
         const response = yield* handler({ address, args, request });
