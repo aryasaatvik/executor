@@ -135,6 +135,21 @@ export interface PluginStorageCollectionScopedKeyInput extends PluginStorageColl
   readonly owner: Owner;
 }
 
+export interface PluginStorageCollectionPutManyEntry<TData extends object> {
+  readonly key: string;
+  readonly data: TData;
+}
+
+export interface PluginStorageCollectionPutManyInput<TData extends object> {
+  readonly owner: Owner;
+  readonly entries: readonly PluginStorageCollectionPutManyEntry<TData>[];
+}
+
+export interface PluginStorageCollectionRemoveManyInput {
+  readonly owner: Owner;
+  readonly keys: readonly string[];
+}
+
 export interface PluginStorageCollectionListInput {
   readonly keyPrefix?: string;
 }
@@ -291,6 +306,9 @@ export interface PluginStorageCollectionFacade<
   readonly put: (
     input: PluginStorageCollectionPutInput<PluginStorageCollectionData<TDefinition>>,
   ) => Effect.Effect<PluginStorageEntry<PluginStorageCollectionData<TDefinition>>, StorageFailure>;
+  readonly putMany: (
+    input: PluginStorageCollectionPutManyInput<PluginStorageCollectionData<TDefinition>>,
+  ) => Effect.Effect<void, StorageFailure>;
   readonly query: (
     input?: PluginStorageCollectionQueryInput<TDefinition>,
   ) => Effect.Effect<
@@ -311,6 +329,9 @@ export interface PluginStorageCollectionFacade<
   readonly aggregate: PluginStorageAggregateFacade<TDefinition>;
   readonly remove: (
     input: PluginStorageCollectionScopedKeyInput,
+  ) => Effect.Effect<void, StorageFailure>;
+  readonly removeMany: (
+    input: PluginStorageCollectionRemoveManyInput,
   ) => Effect.Effect<void, StorageFailure>;
 }
 
