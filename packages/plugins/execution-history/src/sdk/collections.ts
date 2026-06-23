@@ -85,11 +85,26 @@ export const RunRow = Schema.Struct({
   durationMs: Schema.NullOr(Schema.Number),
   toolCallCount: Schema.Number,
   hadInteraction: Schema.Boolean,
+  hadFormApproval: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(false)),
+  ),
+  hadUrlApproval: Schema.optional(Schema.Boolean).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(false)),
+  ),
 });
 export type RunRow = typeof RunRow.Type;
 
 export const runs = definePluginStorageCollection("runs", RunRow, {
-  indexes: ["status", "triggerKind", "actorId", "startedAt", "durationMs", "hadInteraction"],
+  indexes: [
+    "status",
+    "triggerKind",
+    "actorId",
+    "startedAt",
+    "durationMs",
+    "hadInteraction",
+    "hadFormApproval",
+    "hadUrlApproval",
+  ],
 });
 
 // Per-tool-call and per-interaction detail rows. No longer their own D1
