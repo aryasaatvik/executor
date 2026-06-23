@@ -23,6 +23,7 @@ export interface RunsFilters {
   readonly trigger: readonly string[];
   readonly actor: readonly string[];
   readonly interaction: "true" | "false" | null;
+  readonly approvalType: "form" | "url" | null;
   readonly from: number | null;
   readonly to: number | null;
   readonly sortField: RunsSortField;
@@ -37,6 +38,7 @@ export const emptyRunsFilters: RunsFilters = {
   trigger: [],
   actor: [],
   interaction: null,
+  approvalType: null,
   from: null,
   to: null,
   sortField: "startedAt",
@@ -51,6 +53,7 @@ export const buildRunsQuery = (filters: RunsFilters, cursor: string | undefined)
   ...(filters.trigger.length > 0 ? { trigger: filters.trigger.join(",") } : {}),
   ...(filters.actor.length > 0 ? { actor: filters.actor.join(",") } : {}),
   ...(filters.interaction != null ? { interaction: filters.interaction } : {}),
+  ...(filters.approvalType != null ? { approvalType: filters.approvalType } : {}),
   ...(filters.from != null ? { from: filters.from } : {}),
   ...(filters.to != null ? { to: filters.to } : {}),
   ...(cursor !== undefined ? { cursor } : {}),
@@ -62,6 +65,7 @@ const filtersKey = (filters: RunsFilters): string =>
     filters.trigger,
     filters.actor,
     filters.interaction,
+    filters.approvalType,
     filters.from,
     filters.to,
     filters.sortField,
