@@ -2,7 +2,7 @@ import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CfWorkerJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/cfworker";
-import { Effect } from "effect";
+import { Effect, Predicate } from "effect";
 
 // NOTE: `StdioClientTransport` is NOT imported eagerly. The upstream module
 // (`@modelcontextprotocol/sdk/client/stdio.js`) touches `node:child_process`
@@ -13,7 +13,7 @@ import { Effect } from "effect";
 // stdio branch of `createMcpConnector`.
 
 import type { McpRemoteIntegrationConfig, McpStdioIntegrationConfig } from "./types";
-import { McpConnectionError } from "./errors";
+import { McpConnectionError, McpOAuthReauthorizationRequired } from "./errors";
 
 // ---------------------------------------------------------------------------
 // Connection type
@@ -24,7 +24,10 @@ export type McpConnection = {
   readonly close: () => Promise<void>;
 };
 
-export type McpConnector = Effect.Effect<McpConnection, McpConnectionError>;
+export type McpConnector = Effect.Effect<
+  McpConnection,
+  McpConnectionError | McpOAuthReauthorizationRequired
+>;
 
 // ---------------------------------------------------------------------------
 // Connector input — extends stored source data with resolved auth
@@ -75,21 +78,29 @@ const connectionFromClient = (client: Client): McpConnection => ({
   close: () => client.close(),
 });
 
+const connectionFailure = (
+  transport: string,
+  message: string,
+  cause: unknown,
+): McpConnectionError | McpOAuthReauthorizationRequired => {
+  if (Predicate.isTagged(cause, "McpOAuthReauthorizationRequired")) {
+    return new McpOAuthReauthorizationRequired({ message: "MCP OAuth re-authorization required" });
+  }
+  return new McpConnectionError({ transport, message });
+};
+
 const connectClient = (input: {
   transport: string;
   createTransport: () => Parameters<Client["connect"]>[0];
-}): Effect.Effect<McpConnection, McpConnectionError> =>
+}): Effect.Effect<McpConnection, McpConnectionError | McpOAuthReauthorizationRequired> =>
   Effect.gen(function* () {
     const client = createClient();
     const transportInstance = input.createTransport();
 
     yield* Effect.tryPromise({
       try: () => client.connect(transportInstance),
-      catch: () =>
-        new McpConnectionError({
-          transport: input.transport,
-          message: `Failed connecting via ${input.transport}`,
-        }),
+      catch: (cause) =>
+        connectionFailure(input.transport, `Failed connecting via ${input.transport}`, cause),
     }).pipe(
       Effect.withSpan("plugin.mcp.connection.handshake", {
         attributes: { "plugin.mcp.transport": input.transport },

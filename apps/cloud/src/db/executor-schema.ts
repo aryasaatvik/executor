@@ -15,7 +15,9 @@ export const integration = pgTable(
   {
     slug: varchar("slug", { length: 255 }).notNull(),
     plugin_id: text("plugin_id").notNull(),
-    description: text("description").notNull(),
+    name: text("name"),
+    description: text("description"),
+    config_revised_at: bigint("config_revised_at", { mode: "bigint" }),
     config: json("config"),
     can_remove: boolean("can_remove").notNull().default(true),
     can_refresh: boolean("can_refresh").notNull().default(false),
@@ -39,11 +41,14 @@ export const connection = pgTable(
     provider: text("provider").notNull(),
     item_ids: json("item_ids").notNull(),
     identity_label: text("identity_label"),
+    description: text("description"),
+    tools_synced_at: bigint("tools_synced_at", { mode: "bigint" }),
     oauth_client: text("oauth_client"),
     oauth_client_owner: text("oauth_client_owner"),
     refresh_item_id: text("refresh_item_id"),
     expires_at: bigint("expires_at", { mode: "bigint" }),
     oauth_scope: text("oauth_scope"),
+    oauth_token_url: text("oauth_token_url"),
     provider_state: json("provider_state"),
     created_at: timestamp("created_at").notNull(),
     updated_at: timestamp("updated_at").notNull(),
@@ -169,6 +174,44 @@ export const definition = pgTable(
   },
   (table) => [
     uniqueIndex("definition_uidx").on(
+      table.tenant,
+      table.owner,
+      table.subject,
+      table.integration,
+      table.connection,
+      table.name,
+    ),
+  ],
+);
+
+export const tool_schema_manifest = pgTable(
+  "tool_schema_manifest",
+  {
+    integration: varchar("integration", { length: 255 }).notNull(),
+    connection: varchar("connection", { length: 255 }).notNull(),
+    plugin_id: text("plugin_id").notNull(),
+    name: varchar("name", { length: 255 }).notNull(),
+    path: varchar("path", { length: 255 }).notNull(),
+    description: text("description").notNull(),
+    descriptor_hash: text("descriptor_hash").notNull(),
+    input_schema_hash: text("input_schema_hash").notNull(),
+    output_schema_hash: text("output_schema_hash").notNull(),
+    definition_set_hash: text("definition_set_hash").notNull(),
+    index_fingerprint: text("index_fingerprint").notNull(),
+    fingerprint_version: text("fingerprint_version").notNull(),
+    source_revision: text("source_revision"),
+    created_at: timestamp("created_at").notNull(),
+    updated_at: timestamp("updated_at").notNull(),
+    row_id: varchar("row_id", { length: 255 })
+      .primaryKey()
+      .notNull()
+      .$defaultFn(() => createId()),
+    tenant: varchar("tenant", { length: 255 }).notNull(),
+    owner: varchar("owner", { length: 255 }).notNull(),
+    subject: varchar("subject", { length: 255 }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("tool_schema_manifest_uidx").on(
       table.tenant,
       table.owner,
       table.subject,

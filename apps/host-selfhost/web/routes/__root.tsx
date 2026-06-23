@@ -11,6 +11,8 @@ import { Shell, defaultShellNavItems } from "@executor-js/react/multiplayer/shel
 import { plugins as clientPlugins } from "virtual:executor/plugins-client";
 
 import { authClient } from "../auth-client";
+import { DevicePage } from "../device";
+import { McpConsentPage } from "../mcp-consent";
 import { LoginPage } from "../login";
 import { SetupPage } from "../setup";
 import { fetchNeedsSetup } from "../setup-status";
@@ -26,10 +28,14 @@ export const Route = createRootRoute({
   component: RootComponent,
 });
 
-// Self-host adds the instance Admin page (members + invite links) to the shared
-// nav. The page and its API gate to owner/admin, so a non-admin who opens it
-// just sees the access notice.
-const selfHostNavItems = [...defaultShellNavItems, { to: "/admin", label: "Admin" }];
+// Self-host adds the account's API keys and the instance Admin page (members +
+// invite links) to the shared nav. The Admin page and its API gate to
+// owner/admin, so a non-admin who opens it just sees the access notice.
+const selfHostNavItems = [
+  ...defaultShellNavItems,
+  { to: "/api-keys", label: "API keys" },
+  { to: "/admin", label: "Admin" },
+];
 
 const signOut = async () => {
   await authClient.signOut();
@@ -104,6 +110,35 @@ function RootComponent() {
         <Outlet />
         <Toaster />
       </>
+    );
+  }
+
+  // The MCP OAuth approval screen: chromeless (no shell) but inside the auth
+  // gate — the user is already signed in (Better Auth's authorize requires a
+  // session before redirecting here). Rendered directly (static import), not as
+  // a lazy route, so it can't hit Vite's dynamic-import dep flake.
+  if (pathname === "/mcp-consent") {
+    return (
+      <AuthProvider>
+        <AuthGate>
+          <McpConsentPage />
+          <Toaster />
+        </AuthGate>
+      </AuthProvider>
+    );
+  }
+
+  // The CLI device-login verification page: chromeless, inside the auth gate
+  // (the user signs in here if needed, then authorizes the code). Same
+  // static-import + pathname-branch convention as /mcp-consent.
+  if (pathname === "/device") {
+    return (
+      <AuthProvider>
+        <AuthGate>
+          <DevicePage />
+          <Toaster />
+        </AuthGate>
+      </AuthProvider>
     );
   }
 

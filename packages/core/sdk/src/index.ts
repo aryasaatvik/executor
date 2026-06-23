@@ -91,6 +91,7 @@ export type {
   ConnectionRef,
   ConnectionValueInput,
   CreateConnectionInput,
+  UpdateConnectionInput,
 } from "./connection";
 export type { Tool, ToolDef, ToolListFilter, ToolAnnotations } from "./tool";
 
@@ -360,7 +361,18 @@ export { buildToolTypeScriptPreview } from "./schema-types";
 export { InternalError } from "./api-errors";
 
 // ToolResult — typed value-based discriminated union for tool outcomes.
-export { ToolResult, isToolResult, type ToolError, type ToolHttpMeta } from "./tool-result";
+export {
+  ToolFileSchema,
+  ToolFileJsonSchema,
+  ToolResult,
+  annotateToolResultOutcome,
+  isToolFile,
+  isToolResult,
+  type ToolFile,
+  type ToolFile as ToolFileValue,
+  type ToolError,
+  type ToolHttpMeta,
+} from "./tool-result";
 
 // Stamped boot-time data-migration ledger for the libSQL-backed apps.
 export {

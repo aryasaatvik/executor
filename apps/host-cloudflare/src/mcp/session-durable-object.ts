@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 
 import { createExecutorMcpServer } from "@executor-js/host-mcp/tool-server";
+import { buildResumeApprovalUrl } from "@executor-js/host-mcp/browser-approval";
 import type { ExecutorDbHandle } from "@executor-js/api/server";
 import {
   McpAgentSessionDOBase,
@@ -58,6 +59,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
     return Effect.succeed({
       organizationId: token.organizationId,
       organizationName: this.cfConfig.organizationName,
+      organizationSlug: this.cfConfig.organizationSlug,
       userId: token.userId,
       elicitationMode: token.elicitationMode,
     } satisfies SessionMeta);
@@ -68,6 +70,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
     dbHandle: CfSessionDbHandle,
   ): Effect.Effect<BuiltMcpServer> {
     const config = this.cfConfig;
+    const self = this;
     return Effect.gen(function* () {
       // QuickJS-WASM must be loaded before the executor layer builds it (the
       // default variant can't fetch its .wasm on Workers). Idempotent per isolate.
@@ -81,9 +84,39 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
       // gate's principal (a host that sets a non-user actor, e.g. a service token)
       // when present, else the session user. Makes MCP runs filterable by actor.
       const actor = sessionMeta.actor ?? { kind: "user", id: sessionMeta.userId, label: null };
+      // Browser elicitation mode (the base owns the approval store + the HTTP
+      // approval RPCs): a gated execution pauses and returns an approvalUrl into
+      // the console resume page. The URL origin is the create request's origin
+      // (captured by the base), falling back to the configured site URL.
+      const elicitationMode = sessionMeta.elicitationMode ?? "model";
       const mcpServer = yield* createExecutorMcpServer({
         engine,
         trigger: { kind: "mcp", actor },
+        browserApprovalStore: self.browserApprovalStore,
+        elicitationMode:
+          elicitationMode === "browser"
+            ? {
+                mode: "browser" as const,
+                approvalUrl: (executionId) => {
+                  // webOrigin is captured per-request at session create; for a
+                  // legacy session cold-restored without it, fall back to the
+                  // pinned site URL. If neither exists, the link would be
+                  // unreachable — fail VISIBLY (a logged, obviously-invalid host)
+                  // instead of silently pointing the human at http://localhost.
+                  const origin = sessionMeta.webOrigin ?? config.webBaseUrl;
+                  if (!origin) {
+                    console.error(
+                      "[executor-cloudflare] cannot build MCP approval URL: no session web origin and VITE_PUBLIC_SITE_URL is unset. Set VITE_PUBLIC_SITE_URL so approval links are reachable.",
+                    );
+                  }
+                  return buildResumeApprovalUrl({
+                    origin: origin ?? "https://unconfigured-origin.invalid",
+                    executionId,
+                    sessionId: self.sessionId,
+                  });
+                },
+              }
+            : { mode: elicitationMode },
       });
       return { mcpServer, engine } satisfies BuiltMcpServer;
     }).pipe(

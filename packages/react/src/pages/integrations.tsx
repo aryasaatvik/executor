@@ -44,7 +44,7 @@ const KIND_TO_PLUGIN_KEY: Record<string, string> = {
   openapi: "openapi",
   mcp: "mcp",
   graphql: "graphql",
-  googleDiscovery: "openapi",
+  googleDiscovery: "google",
 };
 
 const detectionRank: Record<IntegrationDetectionResult["confidence"], number> = {
@@ -435,7 +435,7 @@ function IntegrationGrid(props: { integrations: readonly Integration[] }) {
           const plugin = pluginByKind.get(pluginKey);
           const SummaryComponent = plugin?.summary;
           const slug = String(integration.slug);
-          const name = integration.description || slug;
+          const name = integration.name || slug;
           return (
             <CardStackEntry key={slug} asChild searchText={`${name} ${slug} ${integration.kind}`}>
               <Link to="/{-$orgSlug}/integrations/$namespace" params={{ namespace: slug }}>

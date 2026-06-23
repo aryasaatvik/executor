@@ -11,6 +11,8 @@ import {
   toolsAllAtom,
 } from "@executor-js/react/api/atoms";
 import { Button } from "@executor-js/react/components/button";
+import { toast } from "@executor-js/react/components/sonner";
+import { copyToClipboard } from "@executor-js/react/lib/clipboard";
 import { integrationPresetIconUrl } from "@executor-js/react/components/integration-favicon";
 import { IntegrationIconWithAccount } from "@executor-js/react/components/integration-icon-with-account";
 import { CommandPalette } from "@executor-js/react/components/command-palette";
@@ -134,7 +136,11 @@ function UpdateCard(props: { latestVersion: string; channel: UpdateChannel }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
-    void navigator.clipboard.writeText(command).then(() => {
+    void copyToClipboard(command).then((ok) => {
+      if (!ok) {
+        toast.error("Failed to copy to clipboard");
+        return;
+      }
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -289,7 +295,7 @@ function IntegrationList(props: { pathname: string; onNavigate?: () => void }) {
         <div className="flex flex-col gap-px">
           {value.map((integration: Integration) => {
             const slug = String(integration.slug);
-            const name = integration.description || slug;
+            const name = integration.name || slug;
             const detailPath = `/integrations/${slug}`;
             const active =
               props.pathname === detailPath || props.pathname.startsWith(`${detailPath}/`);
@@ -343,14 +349,17 @@ function SidebarContent(props: {
   return (
     <>
       {props.showBrand !== false && (
-        <div className="flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-border px-4">
-          <Link to="/{-$orgSlug}" className="flex shrink-0 items-center gap-1.5">
+        <div className="desktop-macos-sidebar-header flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-border px-4">
+          <Link
+            to="/{-$orgSlug}"
+            className="desktop-macos-no-drag flex shrink-0 items-center gap-1.5"
+          >
             <span className="font-display text-base tracking-tight text-foreground">executor</span>
             <span className="rounded bg-primary/15 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wider text-primary">
               Beta
             </span>
           </Link>
-          <div className="ml-auto flex min-w-0 flex-1 justify-end">
+          <div className="desktop-macos-no-drag ml-auto flex min-w-0 flex-1 justify-end pl-3">
             <ServerConnectionMenu variant="header" />
           </div>
         </div>

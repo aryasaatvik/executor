@@ -12,6 +12,7 @@ import {
   openApiSpecBlobDataMigration,
 } from "@executor-js/plugin-openapi";
 import { graphqlIntrospectionBlobDataMigration } from "@executor-js/plugin-graphql";
+import { googleOpenApiOwnershipDataMigration } from "@executor-js/plugin-google";
 
 import { authConfigTransforms } from "./auth-config-migration";
 
@@ -37,4 +38,5 @@ export const selfHostDataMigrations: readonly SqliteDataMigration[] = [
   sqliteDataMigration("2026-06-15-clear-execution-history-for-r2", (client) =>
     client.execute("DELETE FROM plugin_storage WHERE plugin_id = 'executionHistory'"),
   ),
+  googleOpenApiOwnershipDataMigration,
 ];

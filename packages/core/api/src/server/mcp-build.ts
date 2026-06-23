@@ -4,6 +4,7 @@ import { McpErrorReporter, type Principal } from "@executor-js/host-mcp";
 import {
   McpEngineBuildError,
   type McpBuildServer,
+  type McpBuildServerOptions,
 } from "@executor-js/host-mcp/in-memory-session-store";
 import { createExecutorMcpServer } from "@executor-js/host-mcp/tool-server";
 
@@ -11,7 +12,7 @@ import { ErrorCapture } from "../observability";
 import { CodeExecutorProvider, EngineDecorator, makeExecutionStack } from "./execution-stack";
 import { DbProvider } from "./executor-fuma-db";
 import { executionActorFromPrincipal } from "./identity";
-import { HostConfig, PluginsProvider } from "./scoped-executor";
+import { HostConfig, PluginsProvider, RequestOrgSlug } from "./scoped-executor";
 
 // ---------------------------------------------------------------------------
 // Shared in-process MCP host helpers.
@@ -38,13 +39,18 @@ export type McpExecutionStackLayer = Layer.Layer<
  */
 export const makeMcpBuildServer =
   (executionStack: McpExecutionStackLayer): McpBuildServer =>
-  (principal: Principal) =>
+  (principal: Principal, options?: McpBuildServerOptions) =>
     makeExecutionStack(
       principal.accountId,
       principal.organizationId,
       principal.organizationName,
     ).pipe(
       Effect.map(({ engine }) => engine),
+      // Pin browser-handoff URLs to the principal's org slug when present;
+      // absent slug leaves the service unprovided and the URL stays bare.
+      principal.organizationSlug !== undefined
+        ? Effect.provideService(RequestOrgSlug, { slug: principal.organizationSlug })
+        : (effect) => effect,
       Effect.provide(executionStack),
       Effect.mapError((cause) => new McpEngineBuildError({ cause })),
       Effect.flatMap((engine) =>
@@ -52,8 +58,9 @@ export const makeMcpBuildServer =
         // session's principal (a user, or a host-supplied service-token actor).
         createExecutorMcpServer({
           engine,
+          ...(options ?? {}),
           trigger: { kind: "mcp", actor: executionActorFromPrincipal(principal) },
-        }),
+        }).pipe(Effect.map((mcpServer) => ({ mcpServer, engine }))),
       ),
     );
 

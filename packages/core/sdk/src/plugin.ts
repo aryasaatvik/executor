@@ -6,7 +6,12 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/sp
 import type { StorageFailure } from "./fuma-runtime";
 
 import type { PluginBlobStore } from "./blob";
-import type { Connection, ConnectionRef, CreateConnectionInput } from "./connection";
+import type {
+  Connection,
+  ConnectionRef,
+  CreateConnectionInput,
+  UpdateConnectionInput,
+} from "./connection";
 import type {
   AuthMethodDescriptor,
   Integration,
@@ -113,7 +118,11 @@ export interface PluginCtx<TStore = unknown> {
       readonly register: (input: RegisterIntegrationInput) => Effect.Effect<void, StorageFailure>;
       readonly update: (
         slug: IntegrationSlug,
-        patch: { readonly description?: string; readonly config?: IntegrationConfig },
+        patch: {
+          readonly name?: string;
+          readonly description?: string;
+          readonly config?: IntegrationConfig;
+        },
       ) => Effect.Effect<void, StorageFailure>;
       readonly list: () => Effect.Effect<readonly Integration[], StorageFailure>;
       readonly get: (
@@ -153,6 +162,11 @@ export interface PluginCtx<TStore = unknown> {
       readonly owner?: Owner;
     }) => Effect.Effect<readonly Connection[], StorageFailure>;
     readonly get: (ref: ConnectionRef) => Effect.Effect<Connection | null, StorageFailure>;
+    /** Edit user-curated metadata (description, identityLabel). */
+    readonly update: (
+      ref: ConnectionRef,
+      input: UpdateConnectionInput,
+    ) => Effect.Effect<Connection, ConnectionNotFoundError | StorageFailure>;
     readonly remove: (
       ref: ConnectionRef,
     ) => Effect.Effect<void, ConnectionNotFoundError | StorageFailure>;

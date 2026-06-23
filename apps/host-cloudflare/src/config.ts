@@ -8,6 +8,9 @@ import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metri
 import type { VectorizeIndex } from "@executor-js/plugin-semantic-search";
 
 import { isValidOrgSlug } from "@executor-js/api";
+import { missingPublicOriginWarning, resolvePublicOrigin } from "@executor-js/sdk/public-origin";
+
+let warnedNoCloudflareOrigin = false;
 
 // ---------------------------------------------------------------------------
 // Cloudflare host config. Unlike self-host (process.env + a data dir), a Worker
@@ -122,6 +125,17 @@ export const loadConfig = (env: CloudflareEnv): CloudflareConfig => {
       "EXECUTOR_SECRET_KEY must be set (wrangler secret put EXECUTOR_SECRET_KEY) — it encrypts stored secrets at rest in D1",
     );
   }
+  const enableDevAuth = env.ENABLE_DEV_AUTH === "true";
+  const webBaseUrl = resolvePublicOrigin({ explicit: env.VITE_PUBLIC_SITE_URL, env: {} });
+  if (!webBaseUrl && !enableDevAuth && !warnedNoCloudflareOrigin) {
+    warnedNoCloudflareOrigin = true;
+    console.warn(
+      missingPublicOriginWarning({
+        varName: "VITE_PUBLIC_SITE_URL",
+        fallback: "the per-request origin",
+      }),
+    );
+  }
   return {
     accessTeamDomain: env.ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, "").replace(/\/+$/, ""),
     accessAud: env.ACCESS_AUD,
@@ -134,9 +148,13 @@ export const loadConfig = (env: CloudflareEnv): CloudflareConfig => {
     secretKey,
     geminiApiKey: env.GEMINI_API_KEY?.trim() || undefined,
     allowLocalNetwork: env.ALLOW_LOCAL_NETWORK === "true",
-    // No static URL on a Worker — leave unset when VITE_PUBLIC_SITE_URL is absent
-    // and let the request origin drive it (RequestWebOrigin). Explicit still wins.
-    webBaseUrl: env.VITE_PUBLIC_SITE_URL,
-    enableDevAuth: env.ENABLE_DEV_AUTH === "true",
+    // Pinned origin via the shared resolver. A Worker receives no PaaS platform
+    // vars (env: {} — there is nothing to detect), so only the explicit
+    // VITE_PUBLIC_SITE_URL applies; when it's unset we leave webBaseUrl undefined
+    // and let the per-request origin drive it (request.url — Cloudflare-set, not
+    // spoofable via Host). Warn once on a real deployment so the operator pins it,
+    // mirroring self-host (gated on enableDevAuth = local `wrangler dev`).
+    webBaseUrl,
+    enableDevAuth,
   };
 };

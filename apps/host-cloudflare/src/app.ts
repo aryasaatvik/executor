@@ -1,4 +1,5 @@
 import { Effect, Layer } from "effect";
+import { HttpEffect, HttpRouter } from "effect/unstable/http";
 
 import { dbProviderLayer, ExecutorApp, textFailureStrategy } from "@executor-js/api/server";
 import { layerCloudflareKeyValueStore } from "@executor-js/cloudflare/key-value-store";
@@ -15,6 +16,7 @@ import {
 } from "./execution";
 import { ErrorCaptureLive } from "./observability";
 import { cloudflareAccountMiddleware } from "./account/account-provider";
+import { makeCloudflareApprovalHandler } from "./mcp";
 import { makeCloudflareMcpAgentHandler } from "./mcp/agent-handler";
 import { preloadQuickJs } from "./quickjs";
 
@@ -63,6 +65,7 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   // `/mcp` is mounted in worker.ts through the Agents Streamable HTTP bridge
   // because it needs the Cloudflare ExecutionContext.
   const mcpAgentHandler = makeCloudflareMcpAgentHandler(config, aliasLookup);
+  const approvalHandler = makeCloudflareApprovalHandler(config, env);
 
   const { appLayer, toWebHandler } = ExecutorApp.make({
     plugins,
@@ -79,6 +82,14 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
       // auth context; `me` reflects the Access principal. Members/keys are
       // Access-managed, so the rest of the surface is stubbed.
       account: cloudflareAccountMiddleware(config, aliasLookup),
+    },
+    extensions: {
+      routes: [
+        // Browser approval of paused MCP executions: the console resume page
+        // reads paused detail (GET) and records the decision (POST .../resume),
+        // Access-gated, routed to the owning session's Durable Object.
+        HttpRouter.add("*", "/api/mcp-sessions/*", HttpEffect.fromWebHandler(approvalHandler)),
+      ],
     },
     config: { mountPrefix: "/api", failure: textFailureStrategy },
     boot: bootLayer,
