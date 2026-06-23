@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Pure parser for the runs filter command palette. Splits a free-text query
 // into `key:value` tokens and produces a partial filter set. Adapted to the
-// plugin's contract: only the 4 statuses, no tool/code/duration facets — the
-// keys are status, trigger, interaction, after, and before.
+// plugin's contract: only the 4 statuses, no tool/code/duration facets. The
+// keys are status, trigger, interaction, approval, after, and before.
 //
 // Parsing is forgiving by design: unknown keys, empty values, and unparsable
 // dates are silently dropped (never throws). Relative durations like "1h" /
@@ -14,6 +14,7 @@ export interface RunsFilterTokens {
   readonly status: string[];
   readonly trigger: string[];
   readonly interaction: "true" | "false" | null;
+  readonly approvalType: "form" | "url" | null;
   readonly from: number | null;
   readonly to: number | null;
 }
@@ -27,6 +28,7 @@ export const FILTER_KEYS: readonly FilterKey[] = [
   { key: "status", hint: "completed,failed,running,waiting" },
   { key: "trigger", hint: "mcp, http, cli, manual" },
   { key: "interaction", hint: "true | false" },
+  { key: "approval", hint: "form | url" },
   { key: "after", hint: "1h · 30m · 7d · ISO date" },
   { key: "before", hint: "1h · 7d · ISO date" },
 ];
@@ -64,6 +66,7 @@ export const parseRunsFilter = (text: string): RunsFilterTokens => {
   const status: string[] = [];
   const trigger: string[] = [];
   let interaction: "true" | "false" | null = null;
+  let approvalType: "form" | "url" | null = null;
   let from: number | null = null;
   let to: number | null = null;
 
@@ -82,6 +85,8 @@ export const parseRunsFilter = (text: string): RunsFilterTokens => {
       trigger.push(...value.split(",").filter(Boolean));
     } else if (key === "interaction") {
       if (value === "true" || value === "false") interaction = value;
+    } else if (key === "approval" || key === "approvalType") {
+      if (value === "form" || value === "url") approvalType = value;
     } else if (key === "after") {
       const epoch = tokenToEpochMs(value);
       if (epoch !== null) from = epoch;
@@ -92,5 +97,5 @@ export const parseRunsFilter = (text: string): RunsFilterTokens => {
     // Unknown keys are silently dropped so the input stays forgiving.
   }
 
-  return { status, trigger, interaction, from, to };
+  return { status, trigger, interaction, approvalType, from, to };
 };

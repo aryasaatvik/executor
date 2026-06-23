@@ -4,10 +4,14 @@ import { Effect } from "effect";
 import {
   ExecutionFinished,
   ExecutionId,
+  ExecutionInteractionId,
   ExecutionStarted,
   ExecutionToolCallId,
+  FormElicitation,
+  InteractionStarted,
   Subject,
   Tenant,
+  ToolAddress,
   ToolCallFinished,
   ToolCallStarted,
 } from "@executor-js/sdk";
@@ -83,6 +87,8 @@ describe("execution-history store", () => {
       expect(run?.toolCallCount).toBe(1);
       expect(run?.durationMs).toBe(2000);
       expect(run?.hadInteraction).toBe(false);
+      expect(run?.hadFormApproval).toBe(false);
+      expect(run?.hadUrlApproval).toBe(false);
       // codePreview + trigger from ExecutionStarted survive the terminal re-write.
       expect(run?.codePreview).toBe("await tools.shell({ command: 'ls' })");
       expect(run?.triggerKind).toBe("manual");
@@ -97,6 +103,72 @@ describe("execution-history store", () => {
       expect(detail?.toolCalls[0]?.durationMs).toBe(1000);
       expect(detail?.toolCalls[0]?.path).toBe("tools.shell.org.default.run");
       expect(detail?.interactions).toHaveLength(0);
+    }),
+  );
+
+  it.effect("indexes approval kind for list filtering and facets", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeTestExecutor({
+        backend: "sqlite",
+        plugins: [executionHistoryPlugin()] as const,
+      });
+
+      const executionId = ExecutionId.make("exec_form");
+      const interactionId = ExecutionInteractionId.make("approval_1");
+      const startedAt = new Date("2026-05-29T10:00:00.000Z");
+      const approvalAt = new Date("2026-05-29T10:00:01.000Z");
+      const completedAt = new Date("2026-05-29T10:00:02.000Z");
+
+      yield* executor.executionHistory.handleEvent(
+        new ExecutionStarted({
+          executionId,
+          owner,
+          code: "await tools.policy.requireApproval({ reason: 'deploy' })",
+          trigger: { kind: "manual" },
+          startedAt,
+        }),
+      );
+      yield* executor.executionHistory.handleEvent(
+        new InteractionStarted({
+          executionId,
+          interactionId,
+          owner,
+          context: {
+            address: ToolAddress.make("tools.policies.org.default.requireApproval"),
+            args: { reason: "deploy" },
+            request: FormElicitation.make({ message: "Approve deploy?", requestedSchema: {} }),
+          },
+          startedAt: approvalAt,
+        }),
+      );
+      yield* executor.executionHistory.handleEvent(
+        new ExecutionFinished({
+          executionId,
+          owner,
+          status: "completed",
+          result: { ok: true },
+          logs: [],
+          completedAt,
+        }),
+      );
+
+      const listed = yield* executor.executionHistory.list({
+        approvalType: "form",
+        limit: 50,
+      });
+      expect(listed.runs.map((run) => run.executionId)).toEqual(["exec_form"]);
+      expect(listed.runs[0]?.hadInteraction).toBe(true);
+      expect(listed.runs[0]?.hadFormApproval).toBe(true);
+      expect(listed.runs[0]?.hadUrlApproval).toBe(false);
+      expect(listed.meta?.interactionCounts).toMatchObject({
+        withInteraction: 1,
+        withoutInteraction: 0,
+        formApproval: 1,
+        urlApproval: 0,
+      });
+
+      const detail = yield* executor.executionHistory.get("exec_form");
+      expect(detail?.interactions[0]?.kind).toBe("FormElicitation");
     }),
   );
 });

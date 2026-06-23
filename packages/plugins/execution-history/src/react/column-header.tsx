@@ -114,10 +114,10 @@ export function RunsColumnHeader({
         </th>
       ) : null}
 
-      {/* Interaction (centered) */}
+      {/* Approval (centered) */}
       {columns.interaction ? (
         <th scope="col" className={cn(HEAD, "text-center")}>
-          interaction
+          approval
         </th>
       ) : null}
 
