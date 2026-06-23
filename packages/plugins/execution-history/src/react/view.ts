@@ -29,6 +29,6 @@ export const RUN_COLUMN_LABELS: Record<RunColumnKey, string> = {
   actor: "Actor",
   duration: "Duration",
   tools: "Tools",
-  interaction: "Interaction",
+  interaction: "Approval",
   log: "Log",
 };

@@ -40,6 +40,8 @@ describe("RunRow legacy-document tolerance", () => {
     expect(decoded.actorId).toBeNull();
     expect(decoded.actorLabel).toBeNull();
     expect(decoded.actorKind).toBeNull();
+    expect(decoded.hadFormApproval).toBe(false);
+    expect(decoded.hadUrlApproval).toBe(false);
     // The decoded type is `string | null` (always present) — readers treat it as
     // required; it just defaults to null for pre-actor runs.
     expect(decoded.executionId).toBe("exec_legacy");
@@ -55,6 +57,8 @@ describe("RunRow legacy-document tolerance", () => {
     expect(encoded.actorId ?? null).toBeNull();
     expect(encoded.actorLabel ?? null).toBeNull();
     expect(encoded.actorKind ?? null).toBeNull();
+    expect(encoded.hadFormApproval ?? false).toBe(false);
+    expect(encoded.hadUrlApproval ?? false).toBe(false);
   });
 
   it("round-trips a run that DOES carry an actor through decode AND encode", () => {
