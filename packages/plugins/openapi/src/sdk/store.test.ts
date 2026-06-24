@@ -49,6 +49,7 @@ describe("OpenAPI operation store", () => {
                 data: input.data,
               }),
             ),
+          putMany: () => Effect.void,
           query: () => Effect.succeed([]),
           count: () => Effect.succeed(0),
           queryKeyset: () => Effect.succeed({ entries: [], nextCursor: null }),
@@ -59,6 +60,7 @@ describe("OpenAPI operation store", () => {
             stats: () => Effect.succeed({ count: 0, min: null, max: null, percentiles: [] }),
           },
           remove: () => Effect.void,
+          removeMany: () => Effect.void,
         }),
         get: <T = unknown>(input: { readonly collection: string; readonly key: string }) =>
           Effect.succeed(
