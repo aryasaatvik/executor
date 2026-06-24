@@ -1032,6 +1032,44 @@ describe("ToolSearchIndex manifest snapshot", () => {
     }),
   );
 
+  it.effect("scans the create-time manifest snapshot when the live manifest changes", () =>
+    Effect.gen(function* () {
+      const [tool] = makeTools(1);
+      if (tool === undefined) return;
+      let liveManifests = [manifestForTool(tool, "fp-at-create", "source-at-create")];
+      const counters = { manifest: 0 };
+      const executor: Pick<Executor, "tools" | "cache"> = {
+        tools: {
+          list: () => Effect.succeed([tool]),
+          manifest: () => {
+            counters.manifest++;
+            return Effect.succeed(liveManifests);
+          },
+          schema: () => Effect.succeed(null),
+        },
+        cache: makeMemoryCache(),
+      };
+      const base = makeBase(executor as Executor);
+
+      yield* create({ ...base, runId: "run-snapshot-stability", partitionCount: 1 });
+      liveManifests = [manifestForTool(tool, "fp-after-create", "source-after-create")];
+
+      const scanned = yield* scan({
+        ...base,
+        runId: "run-snapshot-stability",
+        partition: 0,
+        limit: 10,
+      });
+
+      expect(scanned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect(counters.manifest).toBe(1);
+      expect([...base.jobs.data.values()][0]).toMatchObject({
+        fingerprint: "fp-at-create",
+        sourceRevision: "source-at-create",
+      });
+    }),
+  );
+
   it.effect("fails the scan when the run snapshot is missing (no D1 fallback)", () =>
     Effect.gen(function* () {
       const { executor, counters } = makeCountingExecutor(makeTools(2));
