@@ -24,6 +24,8 @@ const row = (id: string, startedAt: number): RunRow => ({
   durationMs: 100,
   toolCallCount: 0,
   hadInteraction: false,
+  hadFormApproval: false,
+  hadUrlApproval: false,
 });
 
 const run = (actions: readonly RunsListAction[], from: RunsListState = initialRunsListState) =>
