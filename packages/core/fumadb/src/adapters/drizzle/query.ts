@@ -436,6 +436,10 @@ export function fromDrizzle(
     },
     async upsertMany(table, v) {
       if (v.values.length === 0) return;
+      if (v.target.length === 0) {
+        // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
+        throw new Error("[FumaDB] upsertMany requires at least one target column.");
+      }
       if (v.update.length === 0) {
         // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
         throw new Error("[FumaDB] upsertMany requires at least one update column.");
@@ -488,14 +492,18 @@ export function fromDrizzle(
 
       for (let i = 0; i < values.length; i += batchSize) {
         const batch = values.slice(i, i + batchSize);
-        await (db as any)
-          .insert(drizzleTable)
-          .values(batch)
-          .onConflictDoUpdate({
-            target,
-            set,
-            ...(where === undefined ? {} : { where }),
-          });
+        const insert = db.insert(drizzleTable).values(batch) as unknown as {
+          onConflictDoUpdate: (input: {
+            readonly target: typeof target;
+            readonly set: typeof set;
+            readonly where?: typeof where;
+          }) => Promise<unknown>;
+        };
+        await insert.onConflictDoUpdate({
+          target,
+          set,
+          ...(where === undefined ? {} : { where }),
+        });
       }
     },
     async findMany(table, v) {
