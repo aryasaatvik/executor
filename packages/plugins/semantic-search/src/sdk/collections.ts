@@ -70,6 +70,7 @@ export const IndexJob = Schema.Struct({
   name: Schema.String,
   integration: Schema.String,
   description: Schema.String,
+  sourceRevision: Schema.optional(Schema.String),
   status: IndexJobStatus,
   fingerprint: Schema.optional(Schema.String),
   oldFingerprint: Schema.optional(Schema.String),
