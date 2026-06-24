@@ -232,6 +232,11 @@ export interface ResolveToolsResult {
   readonly tools: readonly ToolDef[];
   /** Shared JSON-schema `$defs` reachable from the tools' `$ref`s. */
   readonly definitions?: Record<string, unknown>;
+  /** Optional plugin-owned source revision for the produced catalog. Spec-backed
+   *  plugins should provide their content hash; discovery-backed plugins can
+   *  provide a hash of the discovered manifest. The executor falls back to a
+   *  generic integration/connection revision when absent. */
+  readonly sourceRevision?: string;
 }
 
 // ---------------------------------------------------------------------------

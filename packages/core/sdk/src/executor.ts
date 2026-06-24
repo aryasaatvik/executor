@@ -2724,7 +2724,9 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           created_at: now,
         }));
         const definitionMap = new Map(Object.entries(result.definitions ?? {}));
-        const sourceRevision = yield* connectionToolSourceRevision(integrationRow, existingRow);
+        const sourceRevision =
+          result.sourceRevision ??
+          (yield* connectionToolSourceRevision(integrationRow, existingRow));
         const manifestRows = yield* Effect.forEach(
           result.tools,
           (tool: ToolDef) =>
@@ -3487,6 +3489,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       filter?: ToolListFilter,
     ): Effect.Effect<readonly ToolSchemaManifest[], StorageFailure> =>
       Effect.gen(function* () {
+        yield* syncStaleConnectionTools;
         const rows = yield* core.findMany("tool_schema_manifest", {
           where: (b: AnyCb) =>
             b.and(

@@ -527,7 +527,11 @@ export const resolveOpenApiBackedTools = ({
         const definitions = Option.getOrNull(decodeDefsJson(defsJson));
         if (definitions != null) {
           const ops = yield* storage.listOperations(String(integration.slug));
-          return { tools: ops.map(toolDefFromStoredOperation), definitions };
+          return {
+            tools: ops.map(toolDefFromStoredOperation),
+            definitions,
+            sourceRevision: openApiConfig.specHash,
+          };
         }
       }
     }
@@ -540,6 +544,7 @@ export const resolveOpenApiBackedTools = ({
     return {
       tools: openApiToolDefsFromCompiled(compiled),
       definitions: compiled.hoistedDefs,
+      sourceRevision: openApiConfig.specHash,
     };
   });
 
