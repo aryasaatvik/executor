@@ -69,6 +69,7 @@ const isFiltersActive = (filters: RunsFilters): boolean =>
   filters.trigger.length > 0 ||
   filters.actor.length > 0 ||
   filters.interaction !== null ||
+  filters.approvalType !== null ||
   filters.from !== null ||
   filters.to !== null;
 
@@ -329,8 +330,8 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
             </FacetSection>
           ) : null}
 
-          {/* Interaction facet */}
-          <FacetSection value="interaction" label="Interactions">
+          {/* Approval facet */}
+          <FacetSection value="interaction" label="Approvals">
             <ul className="space-y-0">
               <li>
                 <FacetRow
@@ -339,10 +340,11 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
                     onChange({
                       ...filters,
                       interaction: filters.interaction === "true" ? null : "true",
+                      approvalType: null,
                     })
                   }
                   dotClass="bg-amber-500"
-                  label="With interaction"
+                  label="With approval"
                   count={meta?.interactionCounts.withInteraction}
                 />
               </li>
@@ -353,11 +355,42 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
                     onChange({
                       ...filters,
                       interaction: filters.interaction === "false" ? null : "false",
+                      approvalType: null,
                     })
                   }
                   dotClass="bg-muted-foreground/40"
-                  label="Without interaction"
+                  label="No approval"
                   count={meta?.interactionCounts.withoutInteraction}
+                />
+              </li>
+              <li>
+                <FacetRow
+                  checked={filters.approvalType === "form"}
+                  onToggle={() =>
+                    onChange({
+                      ...filters,
+                      interaction: null,
+                      approvalType: filters.approvalType === "form" ? null : "form",
+                    })
+                  }
+                  dotClass="bg-violet-500"
+                  label="Form approval"
+                  count={meta?.interactionCounts.formApproval}
+                />
+              </li>
+              <li>
+                <FacetRow
+                  checked={filters.approvalType === "url"}
+                  onToggle={() =>
+                    onChange({
+                      ...filters,
+                      interaction: null,
+                      approvalType: filters.approvalType === "url" ? null : "url",
+                    })
+                  }
+                  dotClass="bg-sky-500"
+                  label="URL approval"
+                  count={meta?.interactionCounts.urlApproval}
                 />
               </li>
             </ul>

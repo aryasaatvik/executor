@@ -53,9 +53,9 @@ const toggleFacet = (current: readonly string[], value: string): string[] =>
   current.includes(value) ? current.filter((entry) => entry !== value) : [...current, value];
 
 /** Merge parsed tokens onto the current filters: status/trigger REPLACE (only
- *  when present and valid), interaction/from/to are set only when the token was
- *  actually typed — so applying a command never wipes a time range or
- *  interaction filter set elsewhere (the rail, the timeline drag). The palette
+ *  when present and valid), interaction/approval/from/to are set only when the
+ *  token was actually typed, so applying a command never wipes a time range or
+ *  approval filter set elsewhere (the rail, the timeline drag). The palette
  *  sets filters; clearing is done from the rail. Status tokens are normalized to
  *  canonical RunStatus values; an all-invalid status token leaves status
  *  untouched. */
@@ -68,6 +68,7 @@ const mergeTokens = (filters: RunsFilters, tokens: RunsFilterTokens): RunsFilter
     status: statuses.length > 0 ? statuses : filters.status,
     trigger: tokens.trigger.length > 0 ? tokens.trigger : filters.trigger,
     interaction: tokens.interaction !== null ? tokens.interaction : filters.interaction,
+    approvalType: tokens.approvalType !== null ? tokens.approvalType : filters.approvalType,
     from: tokens.from !== null ? tokens.from : filters.from,
     to: tokens.to !== null ? tokens.to : filters.to,
   };
@@ -163,7 +164,7 @@ export const RunsFilterCommand = forwardRef<HTMLInputElement, RunsFilterCommandP
               value={value}
               onValueChange={setValue}
               onFocus={() => onOpenChange(true)}
-              placeholder="Filter runs — status:… trigger:… interaction:… after:…"
+              placeholder="Filter runs — status:… trigger:… approval:… after:…"
               className="font-mono text-xs"
             />
           </Command>
@@ -192,7 +193,7 @@ export const RunsFilterCommand = forwardRef<HTMLInputElement, RunsFilterCommandP
             value={value}
             onValueChange={setValue}
             onFocus={() => onOpenChange(true)}
-            placeholder="Filter runs — status:… trigger:… interaction:… after:…"
+            placeholder="Filter runs — status:… trigger:… approval:… after:…"
             className="font-mono text-xs"
           />
 
