@@ -12,14 +12,10 @@ import {
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
-import {
-  makeVectorizeStore,
-  withCloudflareLimits,
-  type VectorizeIndex,
-} from "@executor-js/plugin-semantic-search";
+import type { AiSearchInstance } from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
-// The Cloudflare host's plugin list — the same protocol/provider plugins as
+// The Cloudflare host's plugin list - the same protocol/provider plugins as
 // self-host (no WorkOS Vault). Built as a factory because the encrypted-secrets
 // master key arrives via `env` at request time (no process.env on a Worker), so
 // the plugin set is constructed per app-build with the resolved key. The tuple
@@ -28,7 +24,7 @@ import {
 // `dangerouslyAllowStdioMCP` is false: a multi-user instance must not let a user
 // spawn arbitrary stdio MCP processes.
 //
-// Execution metrics ship to Workers Analytics Engine — opt-in via the wrangler
+// Execution metrics ship to Workers Analytics Engine - opt-in via the wrangler
 // `ANALYTICS` binding. The plugin is always in the tuple (it has no tables/API,
 // so the shape is stable), but its observer is a no-op until `env.ANALYTICS` is
 // bound. Effect's Metric registry is per-isolate (meaningless on a Worker
@@ -37,20 +33,16 @@ import {
 // wrangler.jsonc.
 //
 // Semantic search follows the same opt-in-by-binding shape: the plugin is
-// always in the tuple (its reindex route keeps the API shape stable), but it is
-// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
-// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
-// Vectorize index + add the binding in wrangler.jsonc and set the secret.
+// always in the tuple, but it is inert until the AI Search instance binding is
+// present. To enable, create an AI Search instance and bind it in wrangler.jsonc.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
   secretKey: string,
   analytics?: AnalyticsEngineDataset,
-  vectorize?: VectorizeIndex,
-  geminiApiKey?: string,
+  aiSearch?: AiSearchInstance,
   searchNamespace?: string,
 ) => {
-  const store = vectorize ? withCloudflareLimits(makeVectorizeStore(vectorize)) : undefined;
   return [
     openApiHttpPlugin(),
     googleHttpPlugin(),
@@ -62,7 +54,7 @@ export const makeCloudflarePlugins = (
       observer: () => (analytics ? createWaeMetricsObserver(analytics) : noopExecutionObserver),
     }),
     serviceTokensPlugin(),
-    semanticSearchHttpPlugin({ store, geminiApiKey, namespace: searchNamespace }),
+    semanticSearchHttpPlugin({ aiSearch, namespace: searchNamespace }),
   ] as const;
 };
 

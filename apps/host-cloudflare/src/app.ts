@@ -21,11 +21,11 @@ import { makeCloudflareMcpAgentHandler } from "./mcp/agent-handler";
 import { preloadQuickJs } from "./quickjs";
 
 // ===========================================================================
-// The Cloudflare host, as ONE `ExecutorApp.make` call — the 4th app alongside
+// The Cloudflare host, as ONE `ExecutorApp.make` call - the 4th app alongside
 // cloud / self-host / local, differing only by the injected Layers.
 //
 // The whole scenario in 60 seconds: Cloudflare Access is the identity (validate
-// the Cf-Access-Jwt-Assertion JWT — no Better Auth, no WorkOS, no app login),
+// the Cf-Access-Jwt-Assertion JWT - no Better Auth, no WorkOS, no app login),
 // D1 is the SQLite store (same FumaDB assembly as self-host), QuickJS is the
 // in-process code substrate, no billing, single-tenant. `diff` against
 // host-selfhost/src/app.ts is three injected Layers: identity, db, plugins/config.
@@ -40,13 +40,12 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   const plugins = makeCloudflarePlugins(
     config.secretKey,
     env.ANALYTICS,
-    env.VECTORIZE,
-    config.geminiApiKey,
+    config.aiSearch,
     config.organizationId,
   );
 
   // Load the Workers-compatible (WASM-inlined) QuickJS variant before any
-  // executor is built — the default variant can't fetch its .wasm on Workers.
+  // executor is built - the default variant can't fetch its .wasm on Workers.
   await preloadQuickJs();
 
   // Open + idempotently bring up the D1 schema once (the long-lived handle the

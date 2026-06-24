@@ -6,7 +6,7 @@ import type { AnyPlugin, PluginExtensions } from "./plugin";
 /* The tool-discovery contract: the backend behind the sandbox `tools.search`
  * call. The engine holds a single provider. Plugins opt in via
  * `plugin.runtime.toolDiscoveryProvider` (mirroring `executionObserver`) to
- * supply a custom one — e.g. a semantic, Vectorize-backed search. When no
+ * supply a custom one, for example semantic search backed by a host service. When no
  * plugin provides one the engine keeps its built-in lexical scorer.
  *
  * This contract lives in `sdk` (not `execution`) so the plugin spec can name it
@@ -39,11 +39,11 @@ export type ToolDiscoveryInput = {
  * Page of results from a list-style discovery tool. Shared by `tools.search`
  * and `tools.executor.sources.list` so the model sees one consistent shape:
  *
- *   - `items`      — the page (slice).
- *   - `total`      — count after filtering, before pagination. The model can
+ *   - `items`      - the page (slice).
+ *   - `total`      - count after filtering, before pagination. The model can
  *                    use this to detect truncation.
- *   - `hasMore`    — convenience flag for `(offset + items.length) < total`.
- *   - `nextOffset` — concrete offset for the next page when `hasMore`, `null`
+ *   - `hasMore`    - convenience flag for `(offset + items.length) < total`.
+ *   - `nextOffset` - concrete offset for the next page when `hasMore`, `null`
  *                    otherwise. Pre-computing it removes a class of off-by-one
  *                    mistakes when the model paginates.
  */
@@ -64,7 +64,7 @@ export interface ToolDiscoveryProvider {
  * Pick the tool-discovery provider a plugin contributes via
  * `runtime.toolDiscoveryProvider`, bound to that plugin's extension. Returns
  * the FIRST plugin (in registration order) that supplies one, or `undefined`
- * when none do — in which case the engine keeps its built-in lexical scorer.
+ * when none do - in which case the engine keeps its built-in lexical scorer.
  *
  * Unlike observers, search is singular: one provider answers `tools.search`, so
  * providers do not compose/fan out. Registration order is the tiebreak; a host

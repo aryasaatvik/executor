@@ -20,9 +20,8 @@ import { reindexMutation, searchAtom, statusAtom } from "./atoms";
 const SEARCH_LIMIT = 25;
 
 // Operator/debug page for the semantic-search plugin: a live `tools.search` box
-// over the engine's discovery provider (Vectorize + FTS5/BM25 hybrid), an index
-// status line, and an explicit reindex trigger. Read-only against the catalog —
-// the only mutation is reindex.
+// over the engine's AI Search provider, an item status line, and an explicit
+// reindex trigger. Read-only against the catalog, except for reindex.
 export function SearchPage() {
   const [input, setInput] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -68,10 +67,10 @@ export function SearchPage() {
     const exit = await doReindex({ reactivityKeys: [] });
     setReindexing(false);
     if (Exit.isFailure(exit)) {
-      setNotice("Reindex failed — a full-catalog index run can exceed the Worker CPU limit.");
+      setNotice("Reindex failed. Check the Worker logs for the AI Search upload error.");
       return;
     }
-    setNotice("Reindex complete.");
+    setNotice("Reindex queued.");
     refreshStatus();
   };
 
@@ -85,8 +84,7 @@ export function SearchPage() {
             </h1>
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
               Run a live <span className="font-mono text-[12px]">tools.search</span> through the
-              engine's discovery provider — semantic (Vectorize) fused with lexical (FTS5/BM25) when
-              both are indexed. This is what the agent sees.
+              engine's Cloudflare AI Search provider. This is what the agent sees.
             </p>
           </div>
           <Button
@@ -123,8 +121,11 @@ export function SearchPage() {
           {status ? (
             <>
               namespace <span className="font-mono">{status.namespace}</span> · indexed{" "}
-              {status.indexed.toLocaleString()}
-              {status.lexical !== null ? ` · lexical ${status.lexical.toLocaleString()}` : ""}
+              {status.indexed.toLocaleString()} · completed {status.completed.toLocaleString()} ·
+              queued {status.queued.toLocaleString()} · running {status.running.toLocaleString()} ·
+              errors {status.error.toLocaleString()}
+              {status.skipped > 0 ? ` · skipped ${status.skipped.toLocaleString()}` : ""}
+              {status.outdated > 0 ? ` · outdated ${status.outdated.toLocaleString()}` : ""}
             </>
           ) : (
             "index status unavailable"
@@ -145,7 +146,7 @@ export function SearchPage() {
         ) : items.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
             No tools matched <span className="font-mono">{submitted}</span>. The index may be empty
-            — run a reindex.
+            or still processing. Run a reindex if the catalog changed.
           </div>
         ) : (
           <Table>

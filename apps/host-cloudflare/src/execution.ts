@@ -16,13 +16,13 @@ import type { CloudflareConfig } from "./config";
 import { makeCloudflarePlugins } from "./plugins";
 
 // ---------------------------------------------------------------------------
-// Cloudflare execution-stack seams — the same shape as self-host (QuickJS code
+// Cloudflare execution-stack seams - the same shape as self-host (QuickJS code
 // substrate, no-op engine decorator), with the plugins + host config built from
 // the per-request `env`-derived config rather than process.env.
 //
 // QuickJS-wasm is the default code substrate because it runs in a single Worker
 // with no extra binding. When Cloudflare's dynamic Worker Loader leaves closed
-// beta, swap CodeExecutorProvider for the dynamic-worker executor (cloud's) —
+// beta, swap CodeExecutorProvider for the dynamic-worker executor (cloud's) -
 // it's a one-Layer change behind this same seam.
 // ---------------------------------------------------------------------------
 
@@ -38,7 +38,7 @@ export const makeCloudflarePluginsProvider = (
   config: CloudflareConfig,
 ): Layer.Layer<PluginsProvider> =>
   Layer.succeed(PluginsProvider)({
-    plugins: () => makeCloudflarePlugins(config.secretKey),
+    plugins: () => makeCloudflarePlugins(config.secretKey, undefined, config.aiSearch),
   });
 
 export const makeCloudflareHostConfig = (config: CloudflareConfig): Layer.Layer<HostConfig> =>

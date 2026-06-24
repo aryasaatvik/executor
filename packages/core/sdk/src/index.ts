@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// @executor-js/sdk — public surface (v2)
+// @executor-js/sdk - public surface (v2)
 // ---------------------------------------------------------------------------
 
 // Re-export the Effect/Schema/HttpApi primitives plugin authors need so a
@@ -38,7 +38,7 @@ export type {
 } from "./fuma-runtime";
 export { StorageError, UniqueViolationError, isStorageFailure } from "./fuma-runtime";
 
-// IDs (branded) — the v2 set.
+// IDs (branded) - the v2 set.
 export {
   IntegrationSlug,
   AuthTemplateSlug,
@@ -58,7 +58,7 @@ export {
 } from "./ids";
 export { connectionIdentifier, isConnectionIdentifier } from "./connection-name-identifier";
 
-// Errors (tagged) — the ExecuteError set + integration lifecycle.
+// Errors (tagged) - the ExecuteError set + integration lifecycle.
 export {
   ToolNotFoundError,
   ToolInvocationError,
@@ -169,7 +169,7 @@ export {
   type InvokeOptions,
 } from "./elicitation";
 
-// Execution observers — the engine lifecycle stream history/metrics/tracing build on.
+// Execution observers - the engine lifecycle stream history/metrics/tracing build on.
 export {
   ExecutionId,
   ExecutionToolCallId,
@@ -193,8 +193,8 @@ export {
   type ExecutionObserver,
 } from "./execution-observer";
 
-// Tool discovery — the backend behind the sandbox `tools.search` call. Plugins
-// supply a custom provider (e.g. semantic Vectorize search) via
+// Tool discovery - the backend behind the sandbox `tools.search` call. Plugins
+// supply a custom provider, for example semantic search backed by a host service, via
 // `runtime.toolDiscoveryProvider`; `composeToolDiscoveryProviders` picks it.
 export {
   ExecutionToolError,
@@ -205,7 +205,7 @@ export {
   type PagedResult,
 } from "./tool-discovery";
 
-// Blob store — the plugin-facing contract (`BlobStore`/`PluginBlobStore`)
+// Blob store - the plugin-facing contract (`BlobStore`/`PluginBlobStore`)
 // plus the platform-neutral backends (`makeFumaBlobStore` default,
 // `makeInMemoryBlobStore` for tests). Platform-specific backends live with
 // their host (R2: `@executor-js/cloudflare/blob-store`).
@@ -274,7 +274,7 @@ export {
 
 // NOTE: the OAuth 2.1 implementation helpers (`./oauth-helpers`,
 // `makeOAuthService` in `./oauth-service`, discovery in `./oauth-discovery`)
-// are SDK-internal — consumed only by `createExecutor`. The hosted HTTP client
+// are SDK-internal - consumed only by `createExecutor`. The hosted HTTP client
 // builder is host-internal and reachable via `@executor-js/sdk/host-internal`.
 
 export {
@@ -361,7 +361,7 @@ export { buildToolTypeScriptPreview } from "./schema-types";
 // Wire-level HTTP error schemas usable by plugin HttpApiGroup definitions.
 export { InternalError } from "./api-errors";
 
-// ToolResult — typed value-based discriminated union for tool outcomes.
+// ToolResult - typed value-based discriminated union for tool outcomes.
 export {
   ToolFileSchema,
   ToolFileJsonSchema,

@@ -13,13 +13,10 @@
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "eval": "bun run src/sdk/eval.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.80",
-    "@executor-js/sdk": "workspace:*",
-    "ai": "^6.0.191"
+    "@executor-js/sdk": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250620.0",
@@ -27,10 +24,8 @@
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
     "@executor-js/react": "workspace:*",
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "catalog:",
     "@types/react": "catalog:",
-    "@zvec/zvec": "^0.4.1",
     "bun-types": "catalog:",
     "effect": "catalog:",
     "lucide-react": "^1.7.0",
@@ -62,9 +57,5 @@
     "react": {
       "optional": true
     }
-  },
-  "optionalDependencies": {
-    "better-sqlite3": "^11.10.0",
-    "sqlite-vec": "^0.1.7"
   }
 }

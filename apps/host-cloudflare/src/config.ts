@@ -5,7 +5,7 @@ import type {
   R2Bucket,
 } from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
-import type { VectorizeIndex } from "@executor-js/plugin-semantic-search";
+import type { AiSearchInstance } from "@executor-js/plugin-semantic-search";
 
 import { isValidOrgSlug } from "@executor-js/api";
 import { missingPublicOriginWarning, resolvePublicOrigin } from "@executor-js/sdk/public-origin";
@@ -15,7 +15,7 @@ let warnedNoCloudflareOrigin = false;
 // ---------------------------------------------------------------------------
 // Cloudflare host config. Unlike self-host (process.env + a data dir), a Worker
 // receives its bindings + vars per request as `env`, so config is derived from
-// that object — there is no process.env, no filesystem, no boot-time secret
+// that object - there is no process.env, no filesystem, no boot-time secret
 // generation. Identity comes entirely from Cloudflare Access in front of the
 // Worker; the only real secret is the at-rest secret-encryption key.
 // ---------------------------------------------------------------------------
@@ -24,26 +24,19 @@ export const CLOUDFLARE_NAMESPACE = "executor_cloudflare";
 export const CLOUDFLARE_SCHEMA_VERSION = "1.0.0";
 
 export interface CloudflareEnv {
-  /** D1 database binding — the app's SQLite store. */
+  /** D1 database binding - the app's SQLite store. */
   readonly DB: D1Database;
-  /** R2 bucket binding — holds values too large for a D1 row (~1-2MB cap). */
+  /** R2 bucket binding - holds values too large for a D1 row (~1-2MB cap). */
   readonly BLOBS?: R2Bucket;
-  /** KV namespace binding — durable cache for derived executor artifacts. */
+  /** KV namespace binding - durable cache for derived executor artifacts. */
   readonly CACHE?: KVNamespace;
-  /** Workers Analytics Engine binding — opt-in sink for execution metrics. When
+  /** Workers Analytics Engine binding - opt-in sink for execution metrics. When
    *  bound (uncomment `analytics_engine_datasets` in wrangler.jsonc), each
    *  finished execution/tool call writes a data point; absent, metrics are off. */
   readonly ANALYTICS?: AnalyticsEngineDataset;
-  /** Vectorize index binding — opt-in semantic `tools.search`. When bound (add a
-   *  `vectorize` binding in wrangler.jsonc) the semantic-search plugin embeds
-   *  the tool catalog and answers `tools.search` from it; absent, the engine
-   *  keeps its built-in lexical search. */
-  readonly VECTORIZE?: VectorizeIndex;
-  /** Gemini API key (a `wrangler secret`) powering the embeddings for the
-   *  Vectorize search. Absent → semantic search stays inert even if the index
-   *  is bound. */
-  readonly GEMINI_API_KEY?: string;
-  /** MCP session Durable Object namespace — one addressable isolate per MCP
+  /** AI Search instance binding for semantic `tools.search`. */
+  readonly AI_SEARCH?: AiSearchInstance;
+  /** MCP session Durable Object namespace - one addressable isolate per MCP
    *  session (the DO id IS the session id), so a session survives across the
    *  Worker's stateless isolates. */
   readonly MCP_SESSION: DurableObjectNamespace;
@@ -69,7 +62,7 @@ export interface CloudflareEnv {
   /**
    * Dev/single-user escape hatch: when "true", skip Cloudflare Access entirely
    * and treat every request as a fixed admin. For local `wrangler dev` and
-   * unattended validation only — NEVER set on a deployment that isn't already
+   * unattended validation only - NEVER set on a deployment that isn't already
    * behind Access, or the instance is wide open.
    */
   readonly ENABLE_DEV_AUTH?: string;
@@ -86,12 +79,10 @@ export interface CloudflareConfig {
   /** URL slug for org-prefixed console paths (`/<slug>/policies`). */
   readonly organizationSlug: string;
   readonly secretKey: string;
-  /** Gemini API key for the Vectorize search embeddings (a `wrangler secret`).
-   *  Unset → vectorize search is inert. */
-  readonly geminiApiKey?: string;
+  readonly aiSearch?: AiSearchInstance;
   readonly allowLocalNetwork: boolean;
   /** Explicit web base URL (`VITE_PUBLIC_SITE_URL`). Unset on a Worker with no
-   *  static URL — the per-request origin is used instead (see RequestWebOrigin). */
+   *  static URL - the per-request origin is used instead (see RequestWebOrigin). */
   readonly webBaseUrl?: string;
   readonly enableDevAuth: boolean;
 }
@@ -104,7 +95,7 @@ const splitLower = (value: string | undefined): readonly string[] =>
 
 // The org slug doubles as a URL segment (`/<slug>/policies`), so an
 // operator-set value must fit the shared grammar and avoid reserved root
-// segments — a colliding slug would shadow real routes (notably /api, /mcp,
+// segments - a colliding slug would shadow real routes (notably /api, /mcp,
 // and Cloudflare's /cdn-cgi).
 const resolveOrgSlug = (value: string | undefined): string => {
   if (!value) return "default";
@@ -122,7 +113,7 @@ export const loadConfig = (env: CloudflareEnv): CloudflareConfig => {
   if (!secretKey || secretKey.length < 16) {
     // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: the Worker must not boot without the at-rest secret key
     throw new Error(
-      "EXECUTOR_SECRET_KEY must be set (wrangler secret put EXECUTOR_SECRET_KEY) — it encrypts stored secrets at rest in D1",
+      "EXECUTOR_SECRET_KEY must be set (wrangler secret put EXECUTOR_SECRET_KEY) - it encrypts stored secrets at rest in D1",
     );
   }
   const enableDevAuth = env.ENABLE_DEV_AUTH === "true";
@@ -146,12 +137,12 @@ export const loadConfig = (env: CloudflareEnv): CloudflareConfig => {
     organizationName: env.SELF_HOSTED_ORG_NAME ?? "Default",
     organizationSlug: resolveOrgSlug(env.SELF_HOSTED_ORG_SLUG),
     secretKey,
-    geminiApiKey: env.GEMINI_API_KEY?.trim() || undefined,
+    aiSearch: env.AI_SEARCH,
     allowLocalNetwork: env.ALLOW_LOCAL_NETWORK === "true",
     // Pinned origin via the shared resolver. A Worker receives no PaaS platform
-    // vars (env: {} — there is nothing to detect), so only the explicit
+    // vars (env: {} - there is nothing to detect), so only the explicit
     // VITE_PUBLIC_SITE_URL applies; when it's unset we leave webBaseUrl undefined
-    // and let the per-request origin drive it (request.url — Cloudflare-set, not
+    // and let the per-request origin drive it (request.url - Cloudflare-set, not
     // spoofable via Host). Warn once on a real deployment so the operator pins it,
     // mirroring self-host (gated on enableDevAuth = local `wrangler dev`).
     webBaseUrl,

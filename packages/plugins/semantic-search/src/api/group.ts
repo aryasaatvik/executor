@@ -4,17 +4,16 @@ import { HttpApiEndpoint, HttpApiGroup } from "effect/unstable/httpapi";
 import { InternalError } from "@executor-js/api";
 
 // ---------------------------------------------------------------------------
-// HTTP surface for the Semantic search plugin: index + operator search/status.
+// HTTP surface for the Semantic search plugin: reindex + operator search/status.
 //
 // Routes are flat and plugin-id-prefixed (`/semantic-search/...`), matching the
-// execution-history/graphql convention — the per-request executor is already
+// execution-history/graphql convention - the per-request executor is already
 // owner-scoped at the host edge, so there is no `:scopeId` segment.
 //
-//   - reindex (POST) indexes the whole tool catalog for the scoped tenant
-//     through the same index refresh/chunk/embed pipeline.
+//   - reindex (POST) uploads the current tool catalog projection into AI Search.
 //   - search (GET) runs a live `tools.search` through the SAME provider the
 //     engine uses, so the operator console sees what the agent would.
-//   - status (GET) reports index population (vector fingerprints + lexical docs).
+//   - status (GET) reports local item rows plus remote AI Search item states.
 //
 // `SemanticSearchError` on the extension flows through the typed channel and
 // `capture` downgrades it to `InternalError`.
@@ -29,7 +28,7 @@ export const ReindexResponse = Schema.Struct({
   removed: Schema.Number,
 });
 
-/** One live `tools.search` match (fused vector/lexical score; higher is better). */
+/** One live `tools.search` match from AI Search, higher score is better. */
 export const SearchResultItem = Schema.Struct({
   path: Schema.String,
   name: Schema.String,
@@ -52,11 +51,17 @@ const SearchQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString),
 });
 
-/** Operator index status — vector (fingerprint) + lexical document counts. */
+/** Operator index status, keyed by AI Search item lifecycle. */
 export const StatusResponse = Schema.Struct({
   namespace: Schema.String,
   indexed: Schema.Number,
-  lexical: Schema.NullOr(Schema.Number),
+  queued: Schema.Number,
+  running: Schema.Number,
+  completed: Schema.Number,
+  error: Schema.Number,
+  skipped: Schema.Number,
+  outdated: Schema.Number,
+  lastActivity: Schema.optional(Schema.String),
 });
 
 export type SearchResultItemType = typeof SearchResultItem.Type;

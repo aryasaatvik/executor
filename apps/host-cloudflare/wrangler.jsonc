@@ -5,7 +5,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "src/worker.ts",
   "observability": { "enabled": true },
-  // The web UI (Workers Static Assets) — the shared multiplayer SPA built by
+  // The web UI (Workers Static Assets) - the shared multiplayer SPA built by
   // `vite build` into ./dist. `single-page-application` serves index.html for
   // client routes (e.g. /policies); `run_worker_first` forces the API + MCP
   // paths to the Worker instead of the SPA fallback.
@@ -39,16 +39,19 @@
   // "kv_namespaces": [
   //   { "binding": "CACHE", "id": "..." },
   // ],
-  // Workers Analytics Engine — the opt-in sink for execution metrics. Uncomment
+  // Workers Analytics Engine - the opt-in sink for execution metrics. Uncomment
   // to enable: each finished execution/tool call writes a data point (queryable
   // via Cloudflare's GraphQL Analytics API). The plugin is inert until this
   // binding is present. Requires a paid Workers plan.
   // "analytics_engine_datasets": [
   //   { "binding": "ANALYTICS", "dataset": "executor_executions" },
   // ],
+  // Cloudflare AI Search backs semantic `tools.search`. Create the instance with
+  // `wrangler ai-search create executor-tool-search`.
+  "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "executor-tool-search" }],
   // The MCP session Durable Object: one addressable isolate per MCP session (the
   // DO id IS the session id) so a session survives across the Worker's stateless
-  // isolates — without it, `tools/list` after `initialize` can land on a fresh
+  // isolates - without it, `tools/list` after `initialize` can land on a fresh
   // isolate that never saw the session ("Not connected"). `new_sqlite_classes`
   // is the free-tier-eligible SQLite-backed DO storage.
   "durable_objects": {
@@ -58,7 +61,7 @@
   // Cloudflare Access is the entire auth layer: the Worker validates the
   // Cf-Access-Jwt-Assertion JWT against the team JWKS. Set these to your Zero
   // Trust team domain + the Access application's AUD tag. EXECUTOR_SECRET_KEY
-  // (the at-rest secret-encryption key) is a SECRET — set it with
+  // (the at-rest secret-encryption key) is a SECRET - set it with
   // `wrangler secret put EXECUTOR_SECRET_KEY`, never in vars.
   "vars": {
     "ACCESS_TEAM_DOMAIN": "your-team.cloudflareaccess.com",

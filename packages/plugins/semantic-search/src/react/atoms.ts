@@ -18,11 +18,11 @@ export const searchAtom = Atom.family((input: SearchInput) =>
   }),
 );
 
-// Index status — vector (fingerprint) + lexical document counts.
+// Index status from local item rows and remote AI Search item states.
 export const statusAtom = SemanticSearchClient.query("semanticSearch", "status", {
   timeToLive: "10 seconds",
   reactivityKeys: [],
 });
 
-// Explicit index run (index fingerprint/materialize/embed pipeline).
+// Explicit catalog upload into AI Search.
 export const reindexMutation = SemanticSearchClient.mutation("semanticSearch", "reindex");
