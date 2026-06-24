@@ -1,5 +1,6 @@
-import { Cause, Deferred, Effect } from "effect";
+import { Cause, Deferred, Effect, Exit, Option, Schema } from "effect";
 import type * as Tracer from "effect/Tracer";
+import type { Connection, ConnectionContext } from "agents";
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
@@ -10,8 +11,17 @@ import {
   type ExecutionEngine,
   type ResumeResponse,
 } from "@executor-js/execution";
+import {
+  PAUSED_APPROVAL_TIMEOUT_MS,
+  type PausedExecutionHooks,
+} from "@executor-js/host-mcp/tool-server";
 
 import type { IncomingPropagationHeaders, McpElicitationMode } from "./do-headers";
+import {
+  SESSION_TIMEOUT_MS,
+  decideSessionAlarm,
+  pausedLeaseExtensionLog,
+} from "./session-alarm-policy";
 
 export type IncomingTraceHeaders = IncomingPropagationHeaders;
 
@@ -36,6 +46,12 @@ export type McpApprovalOwner = {
 type McpSessionApprovalErrorResult =
   | { readonly status: "not_found" }
   | { readonly status: "forbidden" };
+
+type PendingApprovalLease = {
+  readonly disposeKeepAlive: () => void;
+  timeout: ReturnType<typeof setTimeout> | null;
+  expiring: boolean;
+};
 
 export type McpSessionApprovalResult =
   | {
@@ -81,8 +97,21 @@ export interface BrowserApprovalStore {
 
 const SESSION_META_KEY = "session-meta";
 const LAST_ACTIVITY_KEY = "last-activity-ms";
-const SESSION_TIMEOUT_MS = 5 * 60 * 1000;
+const PARTYSERVER_NAME_KEY = "__ps_name";
+const MCP_HTTP_METHOD_HEADER = "cf-mcp-method";
+const MCP_MESSAGE_HEADER = "cf-mcp-message";
+const ACTIVE_POST_RESPONSE_WAIT_POLL_MS = 25;
+const ACTIVE_POST_RESPONSE_WAIT_MAX_MS = PAUSED_APPROVAL_TIMEOUT_MS + 30_000;
 const approvalResponseKey = (executionId: string) => `approval-response:${executionId}`;
+
+type JsonRpcRequestId = string | number;
+const JsonRpcRequestWithId = Schema.Struct({
+  id: Schema.Union([Schema.String, Schema.Number]),
+  method: Schema.String,
+});
+const JsonRpcPostPayload = Schema.fromJsonString(Schema.Unknown);
+const decodeJsonRpcPostPayload = Schema.decodeUnknownOption(JsonRpcPostPayload);
+const decodeJsonRpcRequestWithId = Schema.decodeUnknownOption(JsonRpcRequestWithId);
 
 const resumeApprovalResult = (
   executionId: string,
@@ -115,6 +144,46 @@ const isSessionProps = (props: unknown): props is McpSessionProps =>
   typeof (props as { readonly session?: unknown }).session === "object" &&
   (props as { readonly session?: unknown }).session !== null;
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const readActivePostRequestIds = (request: Request): readonly JsonRpcRequestId[] => {
+  if (request.headers.get(MCP_HTTP_METHOD_HEADER) !== "POST") return [];
+  const encoded = request.headers.get(MCP_MESSAGE_HEADER);
+  if (!encoded) return [];
+  const decoded = Effect.runSyncExit(
+    Effect.try({
+      try: () => atob(encoded),
+      catch: () => "invalid_base64" as const,
+    }),
+  );
+  if (Exit.isFailure(decoded)) {
+    console.warn(
+      JSON.stringify({
+        event: "mcp_active_post_response_wait_parse_failed",
+        reason: "invalid_base64",
+      }),
+    );
+    return [];
+  }
+  const parsed = decodeJsonRpcPostPayload(decoded.value);
+  if (Option.isNone(parsed)) {
+    console.warn(
+      JSON.stringify({
+        event: "mcp_active_post_response_wait_parse_failed",
+        reason: "invalid_json",
+      }),
+    );
+    return [];
+  }
+  const messages = Array.isArray(parsed.value) ? parsed.value : [parsed.value];
+  const requestIds: JsonRpcRequestId[] = [];
+  for (const message of messages) {
+    const decoded = decodeJsonRpcRequestWithId(message);
+    if (Option.isSome(decoded)) requestIds.push(decoded.value.id);
+  }
+  return requestIds;
+};
+
 export abstract class McpAgentSessionDOBase<
   Env extends Cloudflare.Env = Cloudflare.Env,
   TDbHandle extends SessionDbHandle = SessionDbHandle,
@@ -127,6 +196,7 @@ export abstract class McpAgentSessionDOBase<
   private lastActivityMs = 0;
   private approvalResponses = new Map<string, ResumeResponse>();
   private approvalWaiters = new Map<string, Deferred.Deferred<ResumeResponse>>();
+  private pendingApprovalLeases = new Map<string, PendingApprovalLease>();
 
   protected abstract openSessionDb(): TDbHandle | Promise<TDbHandle>;
 
@@ -163,8 +233,51 @@ export abstract class McpAgentSessionDOBase<
     waitForResponse: (executionId) => this.waitForApprovalResponse(executionId),
   };
 
+  protected readonly pausedExecutionHooks: PausedExecutionHooks = {
+    onExecutionPaused: (executionId) =>
+      Effect.sync(() => {
+        this.queuePendingApprovalLeaseStart(executionId);
+      }),
+    onResumeStarted: (executionId) => this.beginPendingApprovalResume(executionId),
+    onResumeSettled: (executionId) => this.finishPendingApprovalResume(executionId),
+  };
+
+  override async onConnect(conn: Connection, context: ConnectionContext): Promise<void> {
+    const requestIds = readActivePostRequestIds(context.request);
+    if (requestIds.length === 0) {
+      await super.onConnect(conn, context);
+      return;
+    }
+
+    await this.keepAliveWhile(async () => {
+      await super.onConnect(conn, context);
+      await this.waitForActivePostResponseDrain(conn.id);
+    });
+  }
+
   private openSessionDbHandle(): Effect.Effect<TDbHandle> {
     return Effect.promise(() => Promise.resolve(this.openSessionDb()));
+  }
+
+  private async waitForActivePostResponseDrain(streamId: string): Promise<void> {
+    const startedAt = Date.now();
+    for (;;) {
+      const requestIds = await this.getStreamRequestIds(streamId);
+      if (!requestIds || requestIds.length === 0) return;
+      if (Date.now() - startedAt >= ACTIVE_POST_RESPONSE_WAIT_MAX_MS) {
+        console.warn(
+          JSON.stringify({
+            event: "mcp_active_post_response_wait_timeout",
+            sessionId: this.sessionId,
+            streamId,
+            requestIds,
+            elapsedMs: Date.now() - startedAt,
+          }),
+        );
+        return;
+      }
+      await sleep(ACTIVE_POST_RESPONSE_WAIT_POLL_MS);
+    }
   }
 
   private loadSessionMeta(): Effect.Effect<SessionMeta | null> {
@@ -194,6 +307,22 @@ export abstract class McpAgentSessionDOBase<
     const stored = await this.ctx.storage.get<number>(LAST_ACTIVITY_KEY);
     this.lastActivityMs = stored ?? 0;
     return this.lastActivityMs;
+  }
+
+  private async hasPartyServerName(): Promise<boolean> {
+    if (this.ctx.id.name) return true;
+    const stored = await this.ctx.storage.get<string>(PARTYSERVER_NAME_KEY);
+    return !!stored;
+  }
+
+  private async cleanupUnaddressableSessionAlarm(): Promise<void> {
+    await Effect.runPromise(this.closeRuntime());
+    await Effect.runPromise(
+      Effect.all([
+        Effect.ignore(Effect.tryPromise(() => this.ctx.storage.deleteAlarm())),
+        Effect.ignore(Effect.tryPromise(() => this.ctx.storage.delete(LAST_ACTIVITY_KEY))),
+      ]),
+    );
   }
 
   private resolveAndStoreSessionMeta(token: McpSessionInit) {
@@ -238,6 +367,7 @@ export abstract class McpAgentSessionDOBase<
   private closeRuntime(): Effect.Effect<void> {
     const self = this;
     return Effect.gen(function* () {
+      yield* self.releaseAllPendingApprovalLeases();
       if (self.server) {
         const server = self.server;
         yield* Effect.promise(() => server.close()).pipe(Effect.ignore);
@@ -399,12 +529,7 @@ export abstract class McpAgentSessionDOBase<
         const paused = yield* self.engine.getPausedExecution(executionId);
         if (!paused) return { status: "not_found" } as const;
 
-        self.approvalResponses.set(executionId, response);
-        yield* Effect.promise(() =>
-          self.ctx.storage.put(approvalResponseKey(executionId), response),
-        );
-        const waiter = self.approvalWaiters.get(executionId);
-        if (waiter) yield* Deferred.succeed(waiter, response);
+        yield* self.recordApprovalResponse(executionId, response);
         return resumeApprovalResult(executionId, response);
       }).pipe(
         Effect.withSpan("McpSessionDO.resumeExecutionForApproval", {
@@ -423,13 +548,42 @@ export abstract class McpAgentSessionDOBase<
     await super.destroy();
   }
 
+  private async pausedExecutionCount(): Promise<number> {
+    if (!this.engine) return 0;
+    return Effect.runPromise(this.engine.pausedExecutionCount());
+  }
+
   override async alarm(): Promise<void> {
-    const lastActivityMs = await this.loadLastActivity();
-    if (lastActivityMs > 0 && Date.now() - lastActivityMs >= SESSION_TIMEOUT_MS) {
-      await this.destroy();
+    if (!(await this.hasPartyServerName())) {
+      await this.cleanupUnaddressableSessionAlarm();
       return;
     }
-    await super.alarm();
+    const lastActivityMs = await this.loadLastActivity();
+    const idleMs = lastActivityMs > 0 ? Date.now() - lastActivityMs : 0;
+    const pausedExecutionCount = await this.pausedExecutionCount();
+    const decision = decideSessionAlarm({ idleMs, pausedExecutionCount });
+
+    if (decision.kind === "idle_within_timeout") {
+      await super.alarm();
+      return;
+    }
+
+    if (decision.kind === "extend_paused_lease") {
+      console.info(
+        JSON.stringify(
+          pausedLeaseExtensionLog({
+            sessionId: this.sessionId,
+            pausedExecutionCount,
+            idleMs,
+            leaseMs: decision.leaseMs,
+          }),
+        ),
+      );
+      await this.ctx.storage.setAlarm(Date.now() + decision.leaseMs);
+      return;
+    }
+
+    await this.destroy();
   }
 
   private validateApprovalIdentity(
@@ -444,6 +598,141 @@ export abstract class McpAgentSessionDOBase<
         ? ("ok" as const)
         : ("forbidden" as const);
     }).pipe(Effect.withSpan("mcp.session.validate_approval_identity"));
+  }
+
+  private startPendingApprovalLease(executionId: string): Effect.Effect<void> {
+    const self = this;
+    return Effect.gen(function* () {
+      if (self.pendingApprovalLeases.has(executionId)) return;
+
+      yield* Effect.promise(() => self.markActivity()).pipe(
+        Effect.withSpan("McpSessionDO.markActivity"),
+      );
+      const disposeKeepAlive = yield* Effect.promise(() => self.keepAlive());
+      const timeout = setTimeout(() => {
+        self.queuePendingApprovalLeaseExpiration(executionId);
+      }, PAUSED_APPROVAL_TIMEOUT_MS);
+      self.pendingApprovalLeases.set(executionId, { disposeKeepAlive, timeout, expiring: false });
+    }).pipe(
+      Effect.withSpan("McpSessionDO.pending_approval_lease.start", {
+        attributes: { "mcp.execution.id": executionId },
+      }),
+      Effect.tapCause((cause) =>
+        Effect.sync(() => {
+          console.error("[mcp-session] pending approval lease start failed:", Cause.pretty(cause));
+          self.captureCause(cause);
+        }),
+      ),
+      Effect.ignore,
+    );
+  }
+
+  private queuePendingApprovalLeaseStart(executionId: string): void {
+    this.ctx.waitUntil(Effect.runPromise(this.startPendingApprovalLease(executionId)));
+  }
+
+  private queuePendingApprovalLeaseExpiration(executionId: string): void {
+    this.ctx.waitUntil(
+      Effect.runPromise(
+        this.expirePendingApproval(executionId).pipe(
+          Effect.tapCause((cause) =>
+            Effect.sync(() => {
+              console.error(
+                "[mcp-session] pending approval lease expiration failed:",
+                Cause.pretty(cause),
+              );
+              this.captureCause(cause);
+            }),
+          ),
+          Effect.ignore,
+        ),
+      ),
+    );
+  }
+
+  private beginPendingApprovalResume(executionId: string): Effect.Effect<void> {
+    return Effect.sync(() => {
+      const lease = this.pendingApprovalLeases.get(executionId);
+      if (!lease || lease.expiring) return;
+      if (lease.timeout) clearTimeout(lease.timeout);
+      lease.timeout = null;
+    }).pipe(
+      Effect.withSpan("McpSessionDO.pending_approval_lease.begin_resume", {
+        attributes: { "mcp.execution.id": executionId },
+      }),
+    );
+  }
+
+  private finishPendingApprovalResume(executionId: string): Effect.Effect<void> {
+    return this.releasePendingApprovalLease(executionId).pipe(
+      Effect.withSpan("McpSessionDO.pending_approval_lease.finish", {
+        attributes: { "mcp.execution.id": executionId },
+      }),
+    );
+  }
+
+  private releasePendingApprovalLease(executionId: string): Effect.Effect<void> {
+    return Effect.sync(() => {
+      const lease = this.pendingApprovalLeases.get(executionId);
+      if (!lease) return;
+      if (lease.timeout) clearTimeout(lease.timeout);
+      this.pendingApprovalLeases.delete(executionId);
+      lease.disposeKeepAlive();
+    });
+  }
+
+  private releaseAllPendingApprovalLeases(): Effect.Effect<void> {
+    return Effect.sync(() => {
+      for (const executionId of this.pendingApprovalLeases.keys()) {
+        const lease = this.pendingApprovalLeases.get(executionId);
+        if (!lease) continue;
+        if (lease.timeout) clearTimeout(lease.timeout);
+        lease.disposeKeepAlive();
+      }
+      this.pendingApprovalLeases.clear();
+    });
+  }
+
+  private recordApprovalResponse(
+    executionId: string,
+    response: ResumeResponse,
+  ): Effect.Effect<void> {
+    const self = this;
+    return Effect.gen(function* () {
+      self.approvalResponses.set(executionId, response);
+      yield* Effect.promise(() => self.ctx.storage.put(approvalResponseKey(executionId), response));
+      const waiter = self.approvalWaiters.get(executionId);
+      if (waiter) yield* Deferred.succeed(waiter, response);
+    });
+  }
+
+  private expirePendingApproval(executionId: string): Effect.Effect<void> {
+    const self = this;
+    return Effect.gen(function* () {
+      const lease = self.pendingApprovalLeases.get(executionId);
+      if (!lease || lease.expiring) return;
+      lease.expiring = true;
+      if (lease.timeout) clearTimeout(lease.timeout);
+      lease.timeout = null;
+      if (self.approvalResponses.has(executionId)) return;
+
+      const response = {
+        action: "decline",
+        content: { reason: "approval_timeout" },
+      } satisfies ResumeResponse;
+      yield* Effect.sync(() => {
+        console.info(JSON.stringify({ event: "mcp_pending_approval_lease_expire", executionId }));
+      });
+      yield* self.recordApprovalResponse(executionId, response);
+      if (self.engine && !self.approvalWaiters.has(executionId)) {
+        yield* self.engine.resume(executionId, response).pipe(Effect.ignore);
+      }
+    }).pipe(
+      Effect.ensuring(self.releasePendingApprovalLease(executionId)),
+      Effect.withSpan("McpSessionDO.pending_approval_lease.expire", {
+        attributes: { "mcp.execution.id": executionId },
+      }),
+    );
   }
 
   private takeApprovalResponse(executionId: string): Effect.Effect<ResumeResponse | null> {

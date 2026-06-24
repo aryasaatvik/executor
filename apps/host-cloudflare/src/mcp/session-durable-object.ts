@@ -93,6 +93,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
         engine,
         trigger: { kind: "mcp", actor },
         browserApprovalStore: self.browserApprovalStore,
+        pausedExecutionHooks: self.pausedExecutionHooks,
         elicitationMode:
           elicitationMode === "browser"
             ? {

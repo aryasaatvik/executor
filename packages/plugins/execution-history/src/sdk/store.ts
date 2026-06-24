@@ -62,6 +62,63 @@ const ownerOf = (binding: OwnerBinding): Owner => (binding.subject != null ? "us
 /** Hoisted: `Schema.is` compiles a guard, so it must not be rebuilt per row. */
 const isRunStatus = Schema.is(RunStatus);
 
+const MAX_INTERACTION_ARG_KEYS = 25;
+const MAX_INTERACTION_STRING_CHARS = 300;
+
+const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const previewScalar = (value: unknown): unknown => {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return value;
+  if (typeof value === "string") {
+    return value.length > MAX_INTERACTION_STRING_CHARS
+      ? `${value.slice(0, MAX_INTERACTION_STRING_CHARS)}...`
+      : value;
+  }
+  if (Array.isArray(value)) return `[Array(${value.length})]`;
+  if (isRecord(value)) return `[Object(${Object.keys(value).length})]`;
+  return `[${typeof value}]`;
+};
+
+const argsPreviewOf = (args: unknown): unknown => {
+  if (!isRecord(args)) return previewScalar(args);
+  const entries = Object.entries(args).slice(0, MAX_INTERACTION_ARG_KEYS);
+  const preview: Record<string, unknown> = {};
+  for (const [key, value] of entries) {
+    preview[key] = previewScalar(value);
+  }
+  const omitted = Object.keys(args).length - entries.length;
+  return omitted > 0 ? { ...preview, __omittedKeys: omitted } : preview;
+};
+
+const interactionPayloadOf = (
+  context: Extract<ExecutionEvent, { _tag: "InteractionStarted" }>["context"],
+) => {
+  const request = context.request;
+  if (Predicate.isTagged(request, "UrlElicitation")) {
+    return {
+      address: String(context.address),
+      argsPreview: argsPreviewOf(context.args),
+      request: {
+        kind: "UrlElicitation",
+        message: request.message,
+        url: request.url,
+        elicitationId: request.elicitationId,
+      },
+    };
+  }
+
+  return {
+    address: String(context.address),
+    argsPreview: argsPreviewOf(context.args),
+    request: {
+      kind: "FormElicitation",
+      message: request.message,
+      requestedSchema: request.requestedSchema,
+    },
+  };
+};
+
 /** First dot-delimited segment of a tool path (its namespace), or null. */
 const namespaceOf = (path: string): string | null => {
   const index = path.indexOf(".");
@@ -456,7 +513,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       status: "pending",
       kind,
       purpose: request.message,
-      payloadJson: toJson(event.context),
+      payloadJson: toJson(interactionPayloadOf(event.context)),
       responseJson: null,
       errorText: null,
       startedAt: event.startedAt.getTime(),
