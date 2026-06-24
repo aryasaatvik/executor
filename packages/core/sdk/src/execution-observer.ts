@@ -1,4 +1,5 @@
-import { Data, Effect, Schema } from "effect";
+import { Data, Effect, Predicate, Schema } from "effect";
+import * as Cause from "effect/Cause";
 
 import type { ElicitationContext, ElicitationResponse } from "./elicitation";
 import type { AnyPlugin, OwnerBinding, PluginExtensions } from "./plugin";
@@ -6,8 +7,8 @@ import type { AnyPlugin, OwnerBinding, PluginExtensions } from "./plugin";
 /* The execution-observer contract: a pull-model lifecycle stream the engine
  * emits as it runs code. Plugins opt in via `plugin.runtime.executionObserver`
  * and receive every event; sinks (history, metrics, tracing) are built on top.
- * Emission is fanned to all registered observers with per-observer error
- * suppression, so an observer can never break an execution. */
+ * Emission is dispatched to all registered observers with per-observer error
+ * logging, so an observer can never break an execution. */
 
 export const ExecutionId = Schema.String.pipe(Schema.brand("ExecutionId"));
 export type ExecutionId = typeof ExecutionId.Type;
@@ -118,29 +119,64 @@ export const noopExecutionObserver: ExecutionObserver = {
   handle: () => Effect.void,
 };
 
-/** Wrap an observer so any failure (defect or expected error) is swallowed —
+type ExecutionEventName = ExecutionEvent["_tag"];
+
+const executionEventName = (event: ExecutionEvent): ExecutionEventName => {
+  if (Predicate.isTagged(event, "ExecutionStarted")) return "ExecutionStarted";
+  if (Predicate.isTagged(event, "ToolCallStarted")) return "ToolCallStarted";
+  if (Predicate.isTagged(event, "ToolCallFinished")) return "ToolCallFinished";
+  if (Predicate.isTagged(event, "InteractionStarted")) return "InteractionStarted";
+  if (Predicate.isTagged(event, "InteractionResolved")) return "InteractionResolved";
+  return "ExecutionFinished";
+};
+
+const logExecutionObserverFailure = (
+  event: ExecutionEvent,
+  cause: Cause.Cause<unknown>,
+  pluginId?: string,
+): Effect.Effect<void> =>
+  Effect.logWarning("execution observer failed", {
+    cause: Cause.pretty(cause),
+    event: executionEventName(event),
+    ...(pluginId ? { pluginId } : {}),
+  });
+
+const handleExecutionObserverCause = (
+  event: ExecutionEvent,
+  cause: Cause.Cause<unknown>,
+  pluginId?: string,
+): Effect.Effect<void> =>
+  Cause.hasInterrupts(cause)
+    ? Effect.interrupt
+    : logExecutionObserverFailure(event, cause, pluginId);
+
+/** Wrap an observer so any failure (defect or expected error) is logged, and
  *  an observer must never propagate into the execution it observes. */
 export const ignoreExecutionObserverErrors = (
   observer: ExecutionObserver<unknown>,
 ): ExecutionObserver => ({
-  handle: (event) => observer.handle(event).pipe(Effect.catchCause(() => Effect.void)),
+  handle: (event) =>
+    observer
+      .handle(event)
+      .pipe(Effect.catchCause((cause) => handleExecutionObserverCause(event, cause))),
 });
 
 /** Collect every plugin's `runtime.executionObserver` and fan each event to
- *  all of them, suppressing per-observer errors. Returns the no-op observer
- *  when no plugin registers one — the common (opt-out) case. */
+ *  all of them, logging per-observer errors. Returns the no-op observer when no
+ *  plugin registers one, the common opt-out case. */
 export const composeExecutionObservers = <TPlugins extends readonly AnyPlugin[]>(
   plugins: TPlugins,
   extensions: PluginExtensions<TPlugins>,
 ): ExecutionObserver => {
-  const observers: ExecutionObserver<unknown>[] = [];
+  const observers: { readonly pluginId: string; readonly observer: ExecutionObserver<unknown> }[] =
+    [];
 
   for (const plugin of plugins) {
     const observer = plugin.runtime?.executionObserver?.(
       extensions[plugin.id as keyof PluginExtensions<TPlugins>] as never,
     );
     if (observer) {
-      observers.push(observer);
+      observers.push({ pluginId: plugin.id, observer });
     }
   }
 
@@ -152,11 +188,14 @@ export const composeExecutionObservers = <TPlugins extends readonly AnyPlugin[]>
     handle: (event) =>
       Effect.forEach(
         observers,
-        (observer) => observer.handle(event).pipe(Effect.catchCause(() => Effect.void)),
-        // Fan out in parallel — a slow sink (e.g. a DB-backed history observer)
-        // must not serialize behind another (e.g. a metrics push). Per-observer
-        // error isolation is preserved by the catchCause above.
-        { discard: true, concurrency: "unbounded" },
+        ({ pluginId, observer }) =>
+          observer
+            .handle(event)
+            .pipe(
+              Effect.catchCause((cause) => handleExecutionObserverCause(event, cause, pluginId)),
+            ),
+        // Preserve plugin order so observers see deterministic sequencing.
+        { discard: true },
       ),
   };
 };

@@ -1,21 +1,30 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
 
 import { Subject, Tenant } from "./ids";
-import { ExecutionFinished, ExecutionId, composeExecutionObservers, definePlugin } from "./index";
+import {
+  ExecutionFinished,
+  ExecutionId,
+  composeExecutionObservers,
+  definePlugin,
+  ignoreExecutionObserverErrors,
+} from "./index";
 
 const owner = { tenant: Tenant.make("tenant_test"), subject: Subject.make("subject_test") };
 
 let calls: string[] = [];
 
-const observingPlugin = (id: string) =>
+const observingPlugin = (id: string, asyncBoundary = false) =>
   definePlugin(() => ({
     id,
     storage: () => ({}),
     extension: () => ({ label: id }),
     runtime: {
       executionObserver: (self: { label: string }) => ({
-        handle: () => Effect.sync(() => calls.push(self.label)),
+        handle: () =>
+          (asyncBoundary ? Effect.promise(() => Promise.resolve()) : Effect.void).pipe(
+            Effect.flatMap(() => Effect.sync(() => calls.push(self.label))),
+          ),
       }),
     },
   }));
@@ -31,6 +40,17 @@ const failingPlugin = definePlugin(() => ({
   },
 }));
 
+const interruptingPlugin = definePlugin(() => ({
+  id: "interrupting" as const,
+  storage: () => ({}),
+  extension: () => ({ label: "interrupting" }),
+  runtime: {
+    executionObserver: () => ({
+      handle: () => Effect.interrupt,
+    }),
+  },
+}));
+
 const finishedEvent = () =>
   new ExecutionFinished({
     executionId: ExecutionId.make("exec_test"),
@@ -41,10 +61,10 @@ const finishedEvent = () =>
   });
 
 describe("composeExecutionObservers", () => {
-  it.effect("fans an event to every plugin observer and isolates failures", () =>
+  it.effect("dispatches observers sequentially and isolates failures", () =>
     Effect.gen(function* () {
       calls = [];
-      const first = observingPlugin("first")();
+      const first = observingPlugin("first", true)();
       const failing = failingPlugin();
       const last = observingPlugin("last")();
       const observer = composeExecutionObservers([first, failing, last] as const, {
@@ -53,10 +73,43 @@ describe("composeExecutionObservers", () => {
         last: { label: "last" },
       });
 
-      // The failing plugin dies mid-fan; the others must still observe.
+      // The failing plugin dies mid-dispatch; the others must still observe.
       yield* observer.handle(finishedEvent());
 
       expect(calls).toEqual(["first", "last"]);
+    }),
+  );
+
+  it.effect("preserves interrupts from isolated observers", () =>
+    Effect.gen(function* () {
+      const observer = ignoreExecutionObserverErrors({
+        handle: () => Effect.interrupt,
+      });
+
+      const exit = yield* Effect.exit(observer.handle(finishedEvent()));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (!Exit.isFailure(exit)) return;
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+    }),
+  );
+
+  it.effect("preserves interrupts from composed plugin observers", () =>
+    Effect.gen(function* () {
+      calls = [];
+      const interrupting = interruptingPlugin();
+      const last = observingPlugin("last")();
+      const observer = composeExecutionObservers([interrupting, last] as const, {
+        interrupting: { label: "interrupting" },
+        last: { label: "last" },
+      });
+
+      const exit = yield* Effect.exit(observer.handle(finishedEvent()));
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (!Exit.isFailure(exit)) return;
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+      expect(calls).toEqual([]);
     }),
   );
 
@@ -65,7 +118,7 @@ describe("composeExecutionObservers", () => {
       const plain = definePlugin(() => ({ id: "plain", storage: () => ({}) }))();
       const observer = composeExecutionObservers([plain] as const, { plain: {} });
 
-      // No observer registered → handling is a silent no-op, never throws.
+      // No observer registered: handling is a no-op and never throws.
       yield* observer.handle(finishedEvent());
     }),
   );
