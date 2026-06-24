@@ -216,7 +216,7 @@ function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonl
 }
 
 // ---------------------------------------------------------------------------
-// Interactions (elicitations) — rendered inline on the Properties tab
+// Approvals (elicitations), rendered inline on the Properties tab
 // ---------------------------------------------------------------------------
 
 const INTERACTION_BADGE: Record<InteractionStatus, string> = {
@@ -228,7 +228,7 @@ const INTERACTION_BADGE: Record<InteractionStatus, string> = {
 };
 
 const interactionKindLabel = (kind: string): string =>
-  kind === "UrlElicitation" ? "url" : kind === "FormElicitation" ? "form" : kind;
+  kind === "UrlElicitation" ? "URL approval" : kind === "FormElicitation" ? "Form approval" : kind;
 
 function InteractionBlock(props: { readonly interaction: InteractionRow }) {
   const { interaction } = props;
@@ -282,14 +282,14 @@ function DetailContent(props: {
   const pendingCount = props.interactions.filter(
     (interaction) => interaction.status === "pending",
   ).length;
-  // Singular/plural only when every interaction is pending; a mix gets the
-  // neutral "Interactions" so the heading never misrepresents the block.
+  // Singular/plural only when every approval is pending; a mix gets the neutral
+  // "Approvals" so the heading never misrepresents the block.
   const interactionsHeading =
     pendingCount > 0 && pendingCount === props.interactions.length
       ? pendingCount === 1
-        ? "Pending interaction"
-        : "Pending interactions"
-      : "Interactions";
+        ? "Pending approval"
+        : "Pending approvals"
+      : "Approvals";
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <SheetHeader className="border-b border-border px-5 py-3">

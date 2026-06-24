@@ -191,6 +191,8 @@ interface RunBuffer {
   actorLabel: string | null;
   actorKind: string | null;
   hadInteraction: boolean;
+  hadFormApproval: boolean;
+  hadUrlApproval: boolean;
   toolCalls: Map<string, BufferedToolCall>;
   interactions: Map<string, BufferedInteraction>;
 }
@@ -207,6 +209,7 @@ interface RunBuffer {
 // ---------------------------------------------------------------------------
 
 export type RunsSortField = "startedAt" | "durationMs";
+export type ApprovalTypeFilter = "form" | "url";
 
 /** Opaque-to-the-client keyset cursor: the sort value + storage key of the last
  *  row on a page. The HTTP layer encodes/decodes it as a string. */
@@ -221,6 +224,7 @@ export interface ExecutionHistoryListOptions {
   readonly actorFilter?: readonly string[];
   readonly timeRange?: { readonly from?: number; readonly to?: number };
   readonly hadInteraction?: boolean;
+  readonly approvalType?: ApprovalTypeFilter;
   /** Live-tail floor: only runs whose `startedAt` is strictly greater. */
   readonly after?: number;
   readonly sortField?: RunsSortField;
@@ -250,6 +254,8 @@ export interface RunActorCount {
 export interface RunInteractionCounts {
   readonly withInteraction: number;
   readonly withoutInteraction: number;
+  readonly formApproval: number;
+  readonly urlApproval: number;
 }
 
 export interface RunChartBucket {
@@ -321,6 +327,8 @@ type RunsWhere = {
   actorId?: { in: readonly string[] };
   startedAt?: { gte?: number; lte?: number; gt?: number };
   hadInteraction?: { eq: boolean };
+  hadFormApproval?: { eq: boolean };
+  hadUrlApproval?: { eq: boolean };
 };
 
 /** Build the indexed-field `where` from list options. `omit` drops one facet's
@@ -328,7 +336,7 @@ type RunsWhere = {
  *  shows every option for the field you're filtering on). */
 const buildRunsWhere = (
   options: ExecutionHistoryListOptions,
-  omit?: "status" | "triggerKind" | "actorId" | "hadInteraction",
+  omit?: "status" | "triggerKind" | "actorId" | "hadInteraction" | "approvalType",
 ): RunsWhere => {
   const where: RunsWhere = {};
   if (omit !== "status" && options.statusFilter && options.statusFilter.length > 0) {
@@ -347,6 +355,10 @@ const buildRunsWhere = (
   if (Object.keys(startedAt).length > 0) where.startedAt = startedAt;
   if (omit !== "hadInteraction" && options.hadInteraction != null) {
     where.hadInteraction = { eq: options.hadInteraction };
+  }
+  if (omit !== "approvalType") {
+    if (options.approvalType === "form") where.hadFormApproval = { eq: true };
+    if (options.approvalType === "url") where.hadUrlApproval = { eq: true };
   }
   return where;
 };
@@ -423,6 +435,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       actorLabel,
       actorKind,
       hadInteraction: false,
+      hadFormApproval: false,
+      hadUrlApproval: false,
       toolCalls: new Map(),
       interactions: new Map(),
     });
@@ -443,6 +457,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
           durationMs: null,
           toolCallCount: 0,
           hadInteraction: false,
+          hadFormApproval: false,
+          hadUrlApproval: false,
         }),
         // Eager code-only stub: the drawer shows code while the run is live, and
         // the code survives a restart that loses the in-memory buffer.
@@ -508,6 +524,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     const kind = Predicate.isTagged(request, "UrlElicitation")
       ? "UrlElicitation"
       : "FormElicitation";
+    const isUrlApproval = kind === "UrlElicitation";
+    const isFormApproval = kind === "FormElicitation";
     buffer.interactions.set(event.interactionId, {
       interactionId: event.interactionId,
       status: "pending",
@@ -520,6 +538,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       completedAt: null,
     });
     buffer.hadInteraction = true;
+    buffer.hadFormApproval = buffer.hadFormApproval || isFormApproval;
+    buffer.hadUrlApproval = buffer.hadUrlApproval || isUrlApproval;
     return putRun(buffer.owner, {
       executionId: event.executionId,
       status: "waiting_for_interaction",
@@ -535,6 +555,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       durationMs: null,
       toolCallCount: buffer.toolCalls.size,
       hadInteraction: true,
+      hadFormApproval: buffer.hadFormApproval,
+      hadUrlApproval: buffer.hadUrlApproval,
     });
   };
 
@@ -580,6 +602,14 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       const codePreview = buffer ? codePreviewOf(buffer.code) : (existing?.data.codePreview ?? "");
       const hadInteraction =
         buffer?.hadInteraction ?? (existing?.data.hadInteraction || interactionEntries.length > 0);
+      const hadFormApproval =
+        buffer?.hadFormApproval ??
+        existing?.data.hadFormApproval ??
+        interactionEntries.some((entry) => entry.kind === "FormElicitation");
+      const hadUrlApproval =
+        buffer?.hadUrlApproval ??
+        existing?.data.hadUrlApproval ??
+        interactionEntries.some((entry) => entry.kind === "UrlElicitation");
 
       yield* putRun(owner, {
         executionId: event.executionId,
@@ -596,6 +626,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         durationMs: completedAt - startedAt,
         toolCallCount: toolCallEntries.length,
         hadInteraction,
+        hadFormApproval,
+        hadUrlApproval,
       });
 
       // Write the full detail object. Normal path: assembled from the buffer.
@@ -684,6 +716,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         triggerGroups,
         actorGroups,
         interactionGroups,
+        formApprovalCount,
+        urlApprovalCount,
         stats,
         startedAtStats,
       ] = yield* Effect.all(
@@ -706,6 +740,12 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
             field: "hadInteraction",
             where: buildRunsWhere(options, "hadInteraction"),
             valueType: "boolean",
+          }),
+          runsC.aggregate.count({
+            where: { ...buildRunsWhere(options, "approvalType"), hadFormApproval: { eq: true } },
+          }),
+          runsC.aggregate.count({
+            where: { ...buildRunsWhere(options, "approvalType"), hadUrlApproval: { eq: true } },
           }),
           runsC.aggregate.stats({
             field: "durationMs",
@@ -827,7 +867,12 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         statusCounts,
         triggerCounts,
         actorCounts,
-        interactionCounts: { withInteraction, withoutInteraction },
+        interactionCounts: {
+          withInteraction,
+          withoutInteraction,
+          formApproval: formApprovalCount,
+          urlApproval: urlApprovalCount,
+        },
         chartBucketMs: bucketMs,
         chartData,
         durationStats: {
