@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Match, Option, Predicate, Schema } from "effect";
 
 import {
   type ExecutionEvent,
@@ -658,17 +658,16 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     );
   };
 
-  const handleEvent = (event: ExecutionEvent): Effect.Effect<void, StorageFailure> => {
-    if (Predicate.isTagged(event, "ExecutionStarted")) return onExecutionStarted(event);
-    if (Predicate.isTagged(event, "ToolCallStarted")) return onToolCallStarted(event);
-    if (Predicate.isTagged(event, "ToolCallFinished")) return onToolCallFinished(event);
-    if (Predicate.isTagged(event, "InteractionStarted")) return onInteractionStarted(event);
-    if (Predicate.isTagged(event, "InteractionResolved")) return onInteractionResolved(event);
-    // Explicit guard, not a fallthrough: a future ExecutionEvent variant must
-    // not be silently recorded as a finished run.
-    if (Predicate.isTagged(event, "ExecutionFinished")) return onExecutionFinished(event);
-    return Effect.void;
-  };
+  const handleEvent = Match.type<ExecutionEvent>().pipe(
+    Match.withReturnType<Effect.Effect<void, StorageFailure>>(),
+    Match.tag("ExecutionStarted", onExecutionStarted),
+    Match.tag("ToolCallStarted", onToolCallStarted),
+    Match.tag("ToolCallFinished", onToolCallFinished),
+    Match.tag("InteractionStarted", onInteractionStarted),
+    Match.tag("InteractionResolved", onInteractionResolved),
+    Match.tag("ExecutionFinished", onExecutionFinished),
+    Match.exhaustive,
+  );
 
   const computeMeta = (
     options: ExecutionHistoryListOptions,

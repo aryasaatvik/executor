@@ -1,4 +1,4 @@
-import { Effect, Predicate } from "effect";
+import { Effect, Match } from "effect";
 
 import { type ExecutionEvent, type ExecutionObserver } from "@executor-js/sdk/core";
 
@@ -40,24 +40,23 @@ export const createWaeMetricsObserver = (analytics: AnalyticsEngineDataset): Exe
   const toolCallStarts = new Map<string, number>();
 
   return {
-    handle: (event: ExecutionEvent) => {
-      if (Predicate.isTagged(event, "ExecutionStarted")) {
-        return Effect.sync(() => {
+    handle: Match.type<ExecutionEvent>().pipe(
+      Match.withReturnType<Effect.Effect<void>>(),
+      Match.tag("ExecutionStarted", (event) =>
+        Effect.sync(() => {
           rememberStart(executionStarts, event.executionId, {
             startedAt: event.startedAt.getTime(),
             trigger: event.trigger?.kind,
           });
-        });
-      }
-
-      if (Predicate.isTagged(event, "ToolCallStarted")) {
-        return Effect.sync(() => {
+        }),
+      ),
+      Match.tag("ToolCallStarted", (event) =>
+        Effect.sync(() => {
           rememberStart(toolCallStarts, event.toolCallId, event.startedAt.getTime());
-        });
-      }
-
-      if (Predicate.isTagged(event, "ExecutionFinished")) {
-        return Effect.sync(() => {
+        }),
+      ),
+      Match.tag("ExecutionFinished", (event) =>
+        Effect.sync(() => {
           const started = executionStarts.get(event.executionId);
           executionStarts.delete(event.executionId);
           const durationMs = started
@@ -68,11 +67,10 @@ export const createWaeMetricsObserver = (analytics: AnalyticsEngineDataset): Exe
             doubles: [durationMs],
             indexes: [event.executionId],
           });
-        });
-      }
-
-      if (Predicate.isTagged(event, "ToolCallFinished")) {
-        return Effect.sync(() => {
+        }),
+      ),
+      Match.tag("ToolCallFinished", (event) =>
+        Effect.sync(() => {
           const startedAt = toolCallStarts.get(event.toolCallId);
           toolCallStarts.delete(event.toolCallId);
           const durationMs =
@@ -82,10 +80,11 @@ export const createWaeMetricsObserver = (analytics: AnalyticsEngineDataset): Exe
             doubles: [durationMs],
             indexes: [event.executionId],
           });
-        });
-      }
-
-      return Effect.void;
-    },
+        }),
+      ),
+      Match.tag("InteractionStarted", () => Effect.void),
+      Match.tag("InteractionResolved", () => Effect.void),
+      Match.exhaustive,
+    ),
   };
 };
