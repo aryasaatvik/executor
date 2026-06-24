@@ -1,4 +1,4 @@
-import { Effect, Metric, Predicate } from "effect";
+import { Effect, Match, Metric } from "effect";
 
 import {
   type ExecutionEvent,
@@ -103,22 +103,19 @@ export const createExecutionMetricsObserver = (): ExecutionObserver => {
     });
 
   return {
-    handle: (event) => {
-      if (Predicate.isTagged(event, "ExecutionStarted")) {
-        return handleExecutionStarted(event);
-      }
-      if (Predicate.isTagged(event, "ExecutionFinished")) {
-        return handleExecutionFinished(event);
-      }
-      if (Predicate.isTagged(event, "ToolCallStarted")) {
-        return updateCounter(toolCallsStarted);
-      }
-      if (Predicate.isTagged(event, "ToolCallFinished")) {
-        return event.status === "completed"
+    handle: Match.type<ExecutionEvent>().pipe(
+      Match.withReturnType<Effect.Effect<void>>(),
+      Match.tag("ExecutionStarted", handleExecutionStarted),
+      Match.tag("ExecutionFinished", handleExecutionFinished),
+      Match.tag("ToolCallStarted", () => updateCounter(toolCallsStarted)),
+      Match.tag("ToolCallFinished", (event) =>
+        event.status === "completed"
           ? updateCounter(toolCallsCompleted)
-          : updateCounter(toolCallsFailed);
-      }
-      return Effect.void;
-    },
+          : updateCounter(toolCallsFailed),
+      ),
+      Match.tag("InteractionStarted", () => Effect.void),
+      Match.tag("InteractionResolved", () => Effect.void),
+      Match.exhaustive,
+    ),
   };
 };
