@@ -435,6 +435,10 @@ export function fromDrizzle(
     },
     async upsertMany(table, v) {
       if (v.values.length === 0) return;
+      if (v.target.length === 0) {
+        // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
+        throw new Error("[FumaDB] upsertMany requires at least one target column.");
+      }
       if (v.update.length === 0) {
         // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: adapter rejects invalid upsert shape
         throw new Error("[FumaDB] upsertMany requires at least one update column.");
