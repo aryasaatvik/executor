@@ -21,8 +21,9 @@ import {
   InteractionStarted,
   ToolCallFinished,
   ToolCallStarted,
+  emitExecutionEvent,
   noopExecutionObserver,
-  wrapExecutionObserver,
+  withExecutionObserver,
 } from "@executor-js/sdk/core";
 import { CodeExecutionError } from "@executor-js/codemode-core";
 import type { CodeExecutor, ExecuteResult, SandboxToolInvoker } from "@executor-js/codemode-core";
@@ -462,10 +463,9 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     }
   };
 
-  // Observer wiring. `emit` never fails (errors are swallowed per-observer) and
-  // resolves to a no-op when no plugin registered one — the opt-out default.
-  const observer = wrapExecutionObserver(config.observer ?? noopExecutionObserver);
-  const emit = observer.handle;
+  // Observer wiring is scoped around public execution methods so detached
+  // execution fibers inherit the observer context for pause/resume events.
+  const observeExecution = withExecutionObserver(config.observer ?? noopExecutionObserver);
   const owner = executor.owner;
 
   const makeExecutionId = (): ExecutionId => ExecutionId.make(`exec_${crypto.randomUUID()}`);
@@ -505,7 +505,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     invoke: (call) =>
       Effect.gen(function* () {
         const toolCallId = makeToolCallId();
-        yield* emit(
+        yield* emitExecutionEvent(
           new ToolCallStarted({
             executionId,
             toolCallId,
@@ -517,7 +517,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         );
         return yield* inner.invoke(call).pipe(
           Effect.tap((result) =>
-            emit(
+            emitExecutionEvent(
               new ToolCallFinished({
                 executionId,
                 toolCallId,
@@ -530,7 +530,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
             ),
           ),
           Effect.tapCause((cause) =>
-            emit(
+            emitExecutionEvent(
               new ToolCallFinished({
                 executionId,
                 toolCallId,
@@ -553,7 +553,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     (ctx) =>
       Effect.gen(function* () {
         const interactionId = makeInteractionId();
-        yield* emit(
+        yield* emitExecutionEvent(
           new InteractionStarted({
             executionId,
             interactionId,
@@ -564,7 +564,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         );
         return yield* handler(ctx).pipe(
           Effect.tap((response) =>
-            emit(
+            emitExecutionEvent(
               new InteractionResolved({
                 executionId,
                 interactionId,
@@ -576,7 +576,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
             ),
           ),
           Effect.tapCause((cause) =>
-            emit(
+            emitExecutionEvent(
               new InteractionResolved({
                 executionId,
                 interactionId,
@@ -635,7 +635,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     // resume handle below so a run with N interactions is one execution with N
     // interaction events.
     const executionId = makeExecutionId();
-    yield* emit(
+    yield* emitExecutionEvent(
       new ExecutionStarted({
         executionId,
         owner,
@@ -675,7 +675,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         };
         pausedExecutions.set(id, paused);
 
-        yield* emit(
+        yield* emitExecutionEvent(
           new InteractionStarted({
             executionId,
             interactionId,
@@ -692,7 +692,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         // pair — mirroring observeInlineElicitation on the inline path.
         return yield* Deferred.await(responseDeferred).pipe(
           Effect.tap((response) =>
-            emit(
+            emitExecutionEvent(
               new InteractionResolved({
                 executionId,
                 interactionId,
@@ -704,7 +704,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
             ),
           ),
           Effect.tapCause((cause) =>
-            emit(
+            emitExecutionEvent(
               new InteractionResolved({
                 executionId,
                 interactionId,
@@ -725,8 +725,8 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     fiber = yield* Effect.forkDetach(
       codeExecutor.execute(code, invoker).pipe(
         Effect.withSpan("executor.code.exec"),
-        Effect.tap((result) => emit(finishFromResult(executionId, result))),
-        Effect.tapCause((cause) => emit(finishFromCause(executionId, cause))),
+        Effect.tap((result) => emitExecutionEvent(finishFromResult(executionId, result))),
+        Effect.tapCause((cause) => emitExecutionEvent(finishFromCause(executionId, cause))),
       ),
     );
 
@@ -823,7 +823,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     });
 
     const executionId = makeExecutionId();
-    yield* emit(
+    yield* emitExecutionEvent(
       new ExecutionStarted({
         executionId,
         owner,
@@ -847,15 +847,17 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     );
     return yield* codeExecutor.execute(code, invoker).pipe(
       Effect.withSpan("executor.code.exec"),
-      Effect.tap((result) => emit(finishFromResult(executionId, result))),
-      Effect.tapCause((cause) => emit(finishFromCause(executionId, cause))),
+      Effect.tap((result) => emitExecutionEvent(finishFromResult(executionId, result))),
+      Effect.tapCause((cause) => emitExecutionEvent(finishFromCause(executionId, cause))),
     );
   });
 
   return {
-    execute: runInlineExecution,
-    executeWithPause: startPausableExecution,
-    resume: resumeExecution,
+    execute: (code, options) => runInlineExecution(code, options).pipe(observeExecution),
+    executeWithPause: (code, options) =>
+      startPausableExecution(code, options).pipe(observeExecution),
+    resume: (executionId, response) =>
+      resumeExecution(executionId, response).pipe(observeExecution),
     getPausedExecution: (executionId) =>
       Effect.sync(() => pausedExecutions.get(executionId) ?? null),
     pausedExecutionCount: () => Effect.sync(() => pausedExecutions.size),
