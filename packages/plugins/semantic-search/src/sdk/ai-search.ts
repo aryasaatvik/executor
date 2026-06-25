@@ -309,7 +309,7 @@ const chunkToResult = (chunk: AiSearchChunk): ToolDiscoveryResult | null => {
   return {
     path,
     name,
-    description: chunk.text,
+    description: metadata.description,
     integration,
     score: chunk.score,
   };

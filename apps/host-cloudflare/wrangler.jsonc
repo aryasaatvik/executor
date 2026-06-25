@@ -46,9 +46,9 @@
   // "analytics_engine_datasets": [
   //   { "binding": "ANALYTICS", "dataset": "executor_executions" },
   // ],
-  // Cloudflare AI Search backs semantic `tools.search`. Create the instance with
-  // `wrangler ai-search create executor-tool-search`.
-  "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "executor-tool-search" }],
+  // Cloudflare AI Search backs semantic `tools.search`. Uncomment after creating
+  // the instance, otherwise deploy will fail because the binding target is absent.
+  // "ai_search": [{ "binding": "AI_SEARCH", "instance_name": "executor-tool-search" }],
   // The MCP session Durable Object: one addressable isolate per MCP session (the
   // DO id IS the session id) so a session survives across the Worker's stateless
   // isolates - without it, `tools/list` after `initialize` can land on a fresh

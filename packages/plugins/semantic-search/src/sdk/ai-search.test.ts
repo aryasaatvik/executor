@@ -20,6 +20,7 @@ const makeAiSearch = (): AiSearchInstance => ({
           metadata: {
             path: "github.default.main.repos.create",
             name: "repos.create",
+            description: "Create a repository",
             integration: "github",
           },
         },
@@ -33,6 +34,7 @@ const makeAiSearch = (): AiSearchInstance => ({
           metadata: {
             path: "github.default.main.repos.create",
             name: "repos.create",
+            description: "Create a repository",
             integration: "github",
           },
         },
@@ -46,6 +48,7 @@ const makeAiSearch = (): AiSearchInstance => ({
           metadata: {
             path: "slack.default.main.messages.send",
             name: "messages.send",
+            description: "Send a message",
             integration: "slack",
           },
         },
@@ -75,6 +78,7 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
         "slack.default.main.messages.send",
       ]);
       expect(page.items[0]?.score).toBe(0.9);
+      expect(page.items[0]?.description).toBe("Create a repository");
       expect(page.total).toBe(2);
     }),
   );

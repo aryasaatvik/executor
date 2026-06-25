@@ -124,7 +124,6 @@ export const toolItemKey = (manifest: ToolSchemaManifest): string =>
   ].join(":");
 
 export interface ToolSearchDocument {
-  readonly key: string;
   readonly path: string;
   readonly name: string;
   readonly description: string;
@@ -165,7 +164,6 @@ export const collectToolSearchDocument = (
         view ? schemaSection("Definitions", view.schemaDefinitions) : undefined,
       ].filter((section): section is string => section !== undefined && section.length > 0);
       return {
-        key: fingerprint,
         path,
         name,
         description,
@@ -176,10 +174,10 @@ export const collectToolSearchDocument = (
         content: truncateToAiSearchLimit(sections.join("\n\n")),
         metadata: {
           path,
+          name,
+          description: description.slice(0, 1_000),
           integration: manifest.integration,
           connection: manifest.connection ?? "",
-          plugin: manifest.pluginId ?? "",
-          name,
         },
       };
     }),
