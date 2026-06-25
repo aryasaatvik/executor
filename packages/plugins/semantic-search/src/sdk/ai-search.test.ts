@@ -1,7 +1,64 @@
 import { describe, expect, it } from "@effect/vitest";
+import { type PluginStorageCollectionFacade, type PluginStorageEntry } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
-import { makeAiSearchToolDiscoveryProvider, type AiSearchInstance } from "./ai-search";
+import {
+  makeAiSearchToolDiscoveryProvider,
+  reindexAiSearch,
+  type AiSearchInstance,
+} from "./ai-search";
+import { type aiSearchItems, type AiSearchItemRow } from "./collections";
+import { SemanticSearchError } from "./errors";
+
+type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
+
+const fixedDate = new Date("2026-06-25T00:00:00.000Z");
+
+const githubRow: PluginStorageEntry<AiSearchItemRow> = {
+  id: "entry:github.default.main.repos.create",
+  owner: "org",
+  pluginId: "semantic-search",
+  collection: "aiSearchItems",
+  key: "github.default.main.repos.create",
+  data: {
+    path: "github.default.main.repos.create",
+    key: "github.repos.create.md",
+    itemId: "item:github.repos.create.md",
+    name: "repos.create",
+    description: "Create a repository",
+    integration: "github",
+    fingerprint: "github-fingerprint",
+    status: "queued",
+    updatedAt: "2026-06-25T00:00:00.000Z",
+  },
+  createdAt: fixedDate,
+  updatedAt: fixedDate,
+};
+
+const unusedEffect = <A>(): Effect.Effect<A> =>
+  Effect.sync(() => expect.unreachable("Unexpected plugin storage test call"));
+
+const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollection => ({
+  get: () => unusedEffect(),
+  getMany: () => unusedEffect(),
+  getForOwner: () => unusedEffect(),
+  getManyForOwner: () => unusedEffect(),
+  list: () => unusedEffect(),
+  put: () => unusedEffect(),
+  putMany: () => unusedEffect(),
+  query: () => unusedEffect(),
+  count: () => unusedEffect(),
+  queryKeyset: () => unusedEffect(),
+  aggregate: {
+    count: () => unusedEffect(),
+    groupCount: () => unusedEffect(),
+    timeBuckets: () => unusedEffect(),
+    stats: () => unusedEffect(),
+  },
+  remove: () => unusedEffect(),
+  removeMany: () => unusedEffect(),
+  ...overrides,
+});
 
 const makeAiSearch = (): AiSearchInstance => ({
   items: {
@@ -107,6 +164,65 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
 
       expect(unfiltered.items).toHaveLength(2);
       expect(filtered.items.map((item) => item.path)).toEqual(["github.default.main.repos.create"]);
+    }),
+  );
+
+  it.effect("ignores AI Search chunks whose item key is not tracked locally", () =>
+    Effect.gen(function* () {
+      const provider = makeAiSearchToolDiscoveryProvider({
+        aiSearch: makeAiSearch(),
+        items: makeItemsCollection({ list: () => Effect.succeed([githubRow]) }),
+        namespace: "default",
+      });
+
+      const page = yield* provider!.searchTools({
+        executor: undefined as never,
+        query: "tool",
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(page.items.map((item) => item.path)).toEqual(["github.default.main.repos.create"]);
+      expect(page.total).toBe(1);
+    }),
+  );
+});
+
+describe("reindexAiSearch", () => {
+  it.effect("keeps stale rows when deleting the remote AI Search item fails", () =>
+    Effect.gen(function* () {
+      const removed: string[] = [];
+      const error = yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () => Effect.succeed([]),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearch().items,
+            delete: async () => {
+              // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: test double for rejected AI Search delete promise
+              throw new Error("delete failed");
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([githubRow]),
+          remove: ({ key }) =>
+            Effect.sync(() => {
+              removed.push(key);
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+      }).pipe(Effect.flip);
+
+      const typedError: SemanticSearchError = error;
+      expect(typedError.message).toContain("Failed to delete AI Search item");
+      expect(typedError).toBeInstanceOf(SemanticSearchError);
+      expect(removed).toEqual([]);
     }),
   );
 });

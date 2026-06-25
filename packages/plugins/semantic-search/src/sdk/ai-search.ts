@@ -127,14 +127,20 @@ const mapUploadError =
       cause,
     });
 
-const deleteItem = (aiSearch: AiSearchInstance, itemId: string): Effect.Effect<void, never> =>
+const deleteItem = (
+  aiSearch: AiSearchInstance,
+  itemId: string,
+): Effect.Effect<void, SemanticSearchError> =>
   Effect.tryPromise({
     try: () => aiSearch.items.delete(itemId),
-    catch: () => undefined,
-  }).pipe(
-    Effect.asVoid,
-    Effect.catch(() => Effect.void),
-  );
+    catch: (cause) =>
+      new SemanticSearchError({ message: `Failed to delete AI Search item "${itemId}".`, cause }),
+  }).pipe(Effect.asVoid);
+
+const deleteItemBestEffort = (
+  aiSearch: AiSearchInstance,
+  itemId: string,
+): Effect.Effect<void, never> => deleteItem(aiSearch, itemId).pipe(Effect.catch(() => Effect.void));
 
 const putIndexedItem = (
   items: ItemsCollection,
@@ -203,10 +209,14 @@ export const reindexAiSearch = (input: {
           }),
         catch: mapUploadError(document),
       });
-      yield* putIndexedItem(input.items, input.owner, document, uploaded);
       if (previous) {
-        yield* deleteItem(aiSearch, previous.itemId);
+        yield* deleteItem(aiSearch, previous.itemId).pipe(
+          Effect.tapError(() => deleteItemBestEffort(aiSearch, uploaded.id)),
+        );
       }
+      yield* putIndexedItem(input.items, input.owner, document, uploaded).pipe(
+        Effect.tapError(() => deleteItemBestEffort(aiSearch, uploaded.id)),
+      );
       indexed += 1;
     }
 
@@ -347,9 +357,10 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
             new ExecutionToolError({ message: "AI Search tool search failed.", cause }),
         });
 
+        const hasLocalRows = deps.items !== undefined;
         const rowsByKey =
           deps.items === undefined
-            ? new Map<string, AiSearchItemRow>()
+            ? undefined
             : yield* deps.items.list().pipe(
                 Effect.map((rows) => new Map(rows.map((row) => [row.data.key, row.data]))),
                 Effect.mapError(
@@ -362,8 +373,12 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
               );
         const bestByPath = new Map<string, ToolDiscoveryResult>();
         for (const chunk of response.chunks ?? []) {
-          const row = chunk.item?.key ? rowsByKey.get(chunk.item.key) : undefined;
-          const result = row ? rowToResult(row, chunk.score) : chunkToResult(chunk);
+          const row = chunk.item?.key ? rowsByKey?.get(chunk.item.key) : undefined;
+          const result = row
+            ? rowToResult(row, chunk.score)
+            : hasLocalRows
+              ? null
+              : chunkToResult(chunk);
           if (!result || !matchesNamespace(result.path, input.namespace)) continue;
           const previous = bestByPath.get(result.path);
           if (!previous || result.score > previous.score) bestByPath.set(result.path, result);
