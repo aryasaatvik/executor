@@ -8,7 +8,6 @@ import {
   type AiSearchInstance,
 } from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
-import { SemanticSearchError } from "./errors";
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
 
@@ -189,10 +188,10 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
 });
 
 describe("reindexAiSearch", () => {
-  it.effect("keeps stale rows when deleting the remote AI Search item fails", () =>
+  it.effect("removes stale rows even when deleting the remote AI Search item fails", () =>
     Effect.gen(function* () {
       const removed: string[] = [];
-      const error = yield* reindexAiSearch({
+      const result = yield* reindexAiSearch({
         executor: {
           tools: {
             manifest: () => Effect.succeed([]),
@@ -217,12 +216,10 @@ describe("reindexAiSearch", () => {
         }),
         owner: "org",
         namespace: "org",
-      }).pipe(Effect.flip);
+      });
 
-      const typedError: SemanticSearchError = error;
-      expect(typedError.message).toContain("Failed to delete AI Search item");
-      expect(typedError).toBeInstanceOf(SemanticSearchError);
-      expect(removed).toEqual([]);
+      expect(result.removed).toBe(1);
+      expect(removed).toEqual(["github.default.main.repos.create"]);
     }),
   );
 });

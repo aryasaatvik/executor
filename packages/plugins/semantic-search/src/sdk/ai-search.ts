@@ -209,24 +209,22 @@ export const reindexAiSearch = (input: {
           }),
         catch: mapUploadError(document),
       });
-      if (previous) {
-        yield* deleteItem(aiSearch, previous.itemId).pipe(
-          Effect.tapError(() => deleteItemBestEffort(aiSearch, uploaded.id)),
-        );
-      }
       yield* putIndexedItem(input.items, input.owner, document, uploaded).pipe(
         Effect.tapError(() => deleteItemBestEffort(aiSearch, uploaded.id)),
       );
+      if (previous) {
+        yield* deleteItemBestEffort(aiSearch, previous.itemId);
+      }
       indexed += 1;
     }
 
     let removed = 0;
     for (const entry of existingEntries) {
       if (livePaths.has(entry.key)) continue;
-      yield* deleteItem(aiSearch, entry.data.itemId);
       yield* input.items
         .remove({ owner: input.owner, key: entry.key })
         .pipe(Effect.mapError(mapStorageError("Failed to remove stale AI Search item row.")));
+      yield* deleteItemBestEffort(aiSearch, entry.data.itemId);
       removed += 1;
     }
 
