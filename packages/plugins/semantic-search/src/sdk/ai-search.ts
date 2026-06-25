@@ -196,9 +196,6 @@ export const reindexAiSearch = (input: {
         continue;
       }
       const document = yield* collectToolSearchDocument(input.executor, manifest);
-      if (previous) {
-        yield* deleteItem(aiSearch, previous.itemId);
-      }
       const uploaded = yield* Effect.tryPromise({
         try: () =>
           aiSearch.items.upload(toItemName(document), document.content, {
@@ -207,6 +204,9 @@ export const reindexAiSearch = (input: {
         catch: mapUploadError(document),
       });
       yield* putIndexedItem(input.items, input.owner, document, uploaded);
+      if (previous) {
+        yield* deleteItem(aiSearch, previous.itemId);
+      }
       indexed += 1;
     }
 
