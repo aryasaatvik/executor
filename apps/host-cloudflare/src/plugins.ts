@@ -21,6 +21,7 @@ import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
 import {
   makeVectorizeStore,
+  ToolSearchBackend,
   withCloudflareLimits,
   type VectorizeIndex,
 } from "@executor-js/plugin-semantic-search";
@@ -64,6 +65,14 @@ export const makeCloudflarePlugins = (
   const store = options.vectorize
     ? withCloudflareLimits(makeVectorizeStore(options.vectorize))
     : undefined;
+  const semanticSearchBackend =
+    store && options.geminiApiKey
+      ? ToolSearchBackend.vector({
+          store,
+          geminiApiKey: options.geminiApiKey,
+          namespace: options.searchNamespace,
+        })
+      : undefined;
   return [
     openApiHttpPlugin({
       presets: [...googleCatalog, ...microsoftCatalog],
@@ -78,11 +87,7 @@ export const makeCloudflarePlugins = (
         options.analytics ? createWaeMetricsObserver(options.analytics) : noopExecutionObserver,
     }),
     serviceTokensPlugin(),
-    semanticSearchHttpPlugin({
-      store,
-      geminiApiKey: options.geminiApiKey,
-      namespace: options.searchNamespace,
-    }),
+    semanticSearchHttpPlugin({ backend: semanticSearchBackend }),
   ] as const;
 };
 
