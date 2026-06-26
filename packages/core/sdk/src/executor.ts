@@ -511,6 +511,7 @@ const makeMemoryCacheStore = (): KeyValueStore.KeyValueStore => {
       Effect.sync(() => {
         const now = Date.now();
         evictExpired(now);
+        rows.delete(key);
         rows.set(key, { value, expiresAt: now + MEMORY_CACHE_TTL_MS });
         evictCapacity();
       }),
