@@ -590,6 +590,129 @@ describe("createExecutor", () => {
     }),
   );
 
+  it.effect("tools.manifest syncs stale connection catalogs before reading", () =>
+    Effect.gen(function* () {
+      const staleIntegration = IntegrationSlug.make("stale-manifest");
+      const staleConnection = ConnectionName.make("main");
+      const staleAddress = (tool: string): ToolAddress =>
+        ToolAddress.make(`tools.${staleIntegration}.org.${staleConnection}.${tool}`);
+      const versionedPlugin = definePlugin(() => ({
+        id: "staleManifest" as const,
+        credentialProviders: [memoryProvider()],
+        storage: () => ({}),
+        resolveTools: ({ config }) => {
+          const version =
+            config && typeof config === "object" && "version" in config
+              ? String((config as { readonly version?: unknown }).version)
+              : "unknown";
+          return Effect.succeed({
+            tools: [
+              {
+                name: ToolName.make("inspect"),
+                description: `inspect ${version}`,
+              },
+            ],
+            definitions: {},
+            sourceRevision: version,
+          });
+        },
+        invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+        extension: (ctx) => ({
+          seed: () =>
+            ctx.core.integrations.register({
+              slug: staleIntegration,
+              description: "Stale Manifest",
+              config: { version: "v1" },
+            }),
+          revise: (version: string) =>
+            ctx.core.integrations.update(staleIntegration, {
+              config: { version },
+            }),
+        }),
+      }))();
+
+      const executor = yield* makeTestExecutor({
+        plugins: [versionedPlugin] as const,
+      });
+      yield* executor.staleManifest.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: staleConnection,
+        integration: staleIntegration,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      const before = yield* executor.tools.manifest({
+        integration: staleIntegration,
+        includeBlocked: true,
+      });
+      expect(before).toHaveLength(1);
+      expect(before[0]).toMatchObject({
+        address: staleAddress("inspect"),
+        description: "inspect v1",
+        sourceRevision: "v1",
+      });
+
+      yield* executor.staleManifest.revise("v2");
+
+      const after = yield* executor.tools.manifest({
+        integration: staleIntegration,
+        includeBlocked: true,
+      });
+      expect(after).toHaveLength(1);
+      expect(after[0]).toMatchObject({
+        address: staleAddress("inspect"),
+        description: "inspect v2",
+        sourceRevision: "v2",
+      });
+    }),
+  );
+
+  it.effect("tools.manifest persists plugin-provided source revisions", () =>
+    Effect.gen(function* () {
+      const sourceRevision = "spec-hash-v1";
+      const sourcePlugin = definePlugin(() => ({
+        id: "sourceRevision" as const,
+        credentialProviders: [memoryProvider()],
+        storage: () => ({}),
+        resolveTools: () =>
+          Effect.succeed({
+            tools: [{ name: ToolName.make("inspect"), description: "inspect" }],
+            definitions: {},
+            sourceRevision,
+          }),
+        invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+        extension: (ctx) => ({
+          seed: () =>
+            ctx.core.integrations.register({
+              slug: INTEG,
+              description: "Source",
+              config: { fallback: "would-be-hashed" },
+            }),
+        }),
+      }))();
+
+      const executor = yield* makeTestExecutor({
+        plugins: [sourcePlugin] as const,
+      });
+      yield* executor.sourceRevision.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: CONN,
+        integration: INTEG,
+        template: TEMPLATE,
+        from: { provider: ProviderKey.make("memory"), id: ProviderItemId.make("v") },
+      });
+
+      const manifest = (yield* executor.tools.manifest({
+        integration: INTEG,
+        includeBlocked: true,
+      })).find((entry) => entry.name === "inspect");
+      expect(manifest?.sourceRevision).toBe(sourceRevision);
+    }),
+  );
+
   it.effect("execute dispatches a connection-produced tool to the owning plugin", () =>
     Effect.gen(function* () {
       const executor = yield* makeTestExecutor({

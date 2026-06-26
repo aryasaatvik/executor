@@ -12,6 +12,7 @@ import {
   IntegrationSlug,
   mergeAuthTemplates,
   OAuthClientSlug,
+  sha256Hex,
   tool,
   ToolResult,
   type AuthMethodDescriptor,
@@ -957,7 +958,14 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           : { ok: false as const, manifest: null };
 
         const entries = manifest.ok && manifest.manifest ? manifest.manifest.tools : [];
-        return { tools: entries.map(toToolDef) };
+        const sourceRevision =
+          manifest.ok && manifest.manifest
+            ? yield* sha256Hex(JSON.stringify(manifest.manifest))
+            : undefined;
+        return {
+          tools: entries.map(toToolDef),
+          ...(sourceRevision === undefined ? {} : { sourceRevision }),
+        };
       }).pipe(
         Effect.withSpan("mcp.plugin.resolve_tools", {
           attributes: { "mcp.connection.name": String(connection.name) },
