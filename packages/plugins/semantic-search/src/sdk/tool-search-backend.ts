@@ -1,7 +1,9 @@
 import {
   type Executor,
   type PluginBlobStore,
+  type PluginStorageConfig,
   type PluginStorageCollectionFacade,
+  type StorageDeps,
   type ToolDiscoveryProvider,
   type ToolDiscoveryResult,
 } from "@executor-js/sdk/core";
@@ -66,7 +68,7 @@ export interface ToolSearchBackend {
 const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_IN_PROCESS_PARTITIONS = 1;
 
-export interface ToolSearchBackendStorage {
+export interface VectorToolSearchBackendStorage {
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly indexRuns: PluginStorageCollectionFacade<typeof indexRuns>;
   readonly indexJobs: PluginStorageCollectionFacade<typeof indexJobs>;
@@ -75,9 +77,11 @@ export interface ToolSearchBackendStorage {
   readonly owner: "org" | "user";
 }
 
-export interface ToolSearchBackendFactory {
+export interface ToolSearchBackendFactory<TStorage = unknown> {
   readonly namespace: string;
-  readonly build: (input: { readonly storage: ToolSearchBackendStorage }) => ToolSearchBackend;
+  readonly pluginStorage?: PluginStorageConfig;
+  readonly storage: (deps: StorageDeps) => TStorage;
+  build(input: { readonly storage: TStorage }): ToolSearchBackend;
 }
 
 export interface VectorToolSearchBackendOptions {
@@ -146,7 +150,7 @@ const makeVectorProvider = (input: {
 
 export const makeVectorToolSearchBackend = (
   options: VectorToolSearchBackendOptions,
-): ToolSearchBackendFactory => {
+): ToolSearchBackendFactory<VectorToolSearchBackendStorage> => {
   const namespace = options.namespace ?? "default";
   const embedder = makeVectorEmbedder(options);
   const chunker = options.chunker ?? makeFacetChunker();
@@ -160,6 +164,18 @@ export const makeVectorToolSearchBackend = (
 
   return {
     namespace,
+    pluginStorage: { toolFingerprints, indexRuns, indexJobs, indexChunks },
+    storage: (deps): VectorToolSearchBackendStorage => ({
+      fingerprints: deps.pluginStorage.collection(toolFingerprints),
+      indexRuns: deps.pluginStorage.collection(indexRuns),
+      indexJobs: deps.pluginStorage.collection(indexJobs),
+      indexChunks: deps.pluginStorage.collection(indexChunks),
+      indexBlobs: deps.blobs,
+      // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
+      // org-scoped. Scoping by the triggering principal would split the
+      // fingerprint store into disjoint partitions.
+      owner: "org" as const,
+    }),
     build: ({ storage }) => {
       const index = (executor: Executor): ToolSearchIndex.Service =>
         embedder && provider

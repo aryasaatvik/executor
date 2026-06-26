@@ -11,7 +11,7 @@ export {
   type SemanticSearchStatus,
   type ToolSearchBackend as ToolSearchBackendType,
   type ToolSearchBackendFactory,
-  type ToolSearchBackendStorage,
+  type VectorToolSearchBackendStorage,
   type VectorToolSearchBackendOptions,
 } from "./tool-search-backend";
 export { makeVectorToolDiscoveryProvider } from "./provider";

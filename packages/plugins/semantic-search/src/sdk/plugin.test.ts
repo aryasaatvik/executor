@@ -4,7 +4,8 @@ import { Effect } from "effect";
 import type { ToolDiscoveryProvider, ToolDiscoveryResult } from "@executor-js/sdk/core";
 
 import { SemanticSearchError } from "./errors";
-import { makeSemanticSearchExtension } from "./plugin";
+import { makeSemanticSearchExtension, semanticSearchPlugin } from "./plugin";
+import type { ToolSearchBackend, ToolSearchBackendFactory } from "./tool-search-backend";
 
 // A result whose integration/path is NOT the tenant id. This is exactly the case
 // the bug broke: the operator search defaulted the integration-prefix filter to
@@ -97,4 +98,38 @@ describe("makeSemanticSearchExtension — search namespace handling", () => {
       expect(receivedPrefix).toBe("github_api");
     }),
   );
+});
+
+describe("semanticSearchPlugin — backend storage", () => {
+  it("registers and builds storage through the selected backend", () => {
+    const pluginStorage = {};
+    const backendStorage = { marker: true };
+    let receivedStorage: unknown;
+
+    const backend: ToolSearchBackend = {
+      namespace: "default",
+      index: () => undefined as never,
+      reindex: () => Effect.die("unused"),
+      sweep: () => Effect.die("unused"),
+      search: () => Effect.die("unused"),
+      status: () => Effect.die("unused"),
+    };
+    const factory: ToolSearchBackendFactory<typeof backendStorage> = {
+      namespace: "default",
+      pluginStorage,
+      storage: () => backendStorage,
+      build: ({ storage }) => {
+        receivedStorage = storage;
+        return backend;
+      },
+    };
+
+    const plugin = semanticSearchPlugin({ backend: factory });
+    const storage = plugin.storage(undefined as never);
+    plugin.extension?.({ storage } as never);
+
+    expect(plugin.pluginStorage).toBe(pluginStorage);
+    expect(storage.backend).toBe(backendStorage);
+    expect(receivedStorage).toBe(backendStorage);
+  });
 });

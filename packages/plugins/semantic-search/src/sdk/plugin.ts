@@ -1,7 +1,6 @@
 import { definePlugin, type Executor } from "@executor-js/sdk/core";
 import type { Effect } from "effect";
 
-import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
 import type { SemanticSearchError } from "./errors";
 import {
   notConfigured,
@@ -46,22 +45,13 @@ export const semanticSearchPlugin = definePlugin((options?: SemanticSearchPlugin
   return {
     id: "semanticSearch" as const,
     packageName: "@executor-js/plugin-semantic-search",
-    pluginStorage: { toolFingerprints, indexRuns, indexJobs, indexChunks },
+    pluginStorage: options?.backend?.pluginStorage,
     storage: (deps) => ({
-      fingerprints: deps.pluginStorage.collection(toolFingerprints),
-      indexRuns: deps.pluginStorage.collection(indexRuns),
-      indexJobs: deps.pluginStorage.collection(indexJobs),
-      indexChunks: deps.pluginStorage.collection(indexChunks),
-      indexBlobs: deps.blobs,
-      // The tool catalog is an org-level artifact, so fingerprints are ALWAYS
-      // org-scoped. Scoping by the triggering principal (user vs cron) would
-      // split the fingerprint store into disjoint partitions, so each reindex
-      // would see an empty store and re-embed the whole catalog.
-      owner: "org" as const,
+      backend: options?.backend?.storage(deps),
     }),
     extension: (ctx) =>
       makeSemanticSearchExtension({
-        backend: options?.backend?.build({ storage: ctx.storage }),
+        backend: options?.backend?.build({ storage: ctx.storage.backend }),
       }),
     runtime: {
       toolDiscoveryProvider: (extension: SemanticSearchExtension) => extension.provider,
