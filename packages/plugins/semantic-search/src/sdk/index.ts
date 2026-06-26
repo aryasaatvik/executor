@@ -17,15 +17,11 @@ export {
 export {
   makeAiSearchToolDiscoveryProvider,
   makeAiSearchToolSearchBackend,
+  DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
   reindexAiSearch,
   statusAiSearch,
-  type AiSearchChunk,
-  type AiSearchInstance,
-  type AiSearchListedItem,
-  type AiSearchSearchResponse,
   type AiSearchToolSearchBackendOptions,
   type AiSearchToolSearchBackendStorage,
-  type AiSearchUploadedItem,
 } from "./ai-search";
 export { makeVectorToolDiscoveryProvider } from "./provider";
 export {
@@ -35,6 +31,11 @@ export {
   type ToolEmbedder,
   type GeminiEmbedderOptions,
 } from "./embedder";
+export {
+  makeCloudflareWorkersAiEmbedder,
+  DEFAULT_CLOUDFLARE_WORKERS_AI_EMBEDDING_DIMENSIONS,
+  DEFAULT_CLOUDFLARE_WORKERS_AI_EMBEDDING_MODEL,
+} from "./embedder-cloudflare";
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export {

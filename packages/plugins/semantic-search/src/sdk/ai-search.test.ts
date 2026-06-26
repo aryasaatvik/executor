@@ -1,11 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import type { AiSearchInstance } from "@cloudflare/workers-types";
 import { type PluginStorageCollectionFacade, type PluginStorageEntry } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import {
+  DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
   makeAiSearchToolDiscoveryProvider,
   reindexAiSearch,
-  type AiSearchInstance,
 } from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
 
@@ -59,16 +60,30 @@ const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollecti
   ...overrides,
 });
 
-const makeAiSearch = (): AiSearchInstance => ({
-  items: {
-    upload: async (name) => ({ id: `item:${name}`, key: name }),
-    list: async () => ({ result: [], result_info: { total_count: 0, page: 1, per_page: 50 } }),
+const makeAiSearchItems = () =>
+  ({
+    upload: async (name) => ({ id: `item:${name}`, key: name, status: "queued" }),
+    list: async () => ({
+      result: [],
+      result_info: { count: 0, total_count: 0, page: 1, per_page: 50 },
+    }),
     delete: async () => {},
-  },
+    uploadAndPoll: async (name) => ({ id: `item:${name}`, key: name, status: "queued" }),
+    get: () => expect.unreachable("Unexpected AI Search item lookup"),
+  }) satisfies Pick<AiSearchInstance, "items">["items"];
+
+const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search" | "info"> => ({
+  info: async () => ({
+    id: "executor-tool-search",
+    embedding_model: DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
+  }),
+  items: makeAiSearchItems(),
   search: async () => ({
+    search_query: "create repo",
     chunks: [
       {
         id: "chunk-1",
+        type: "text",
         score: 0.7,
         text: "create a repository",
         item: {
@@ -83,6 +98,7 @@ const makeAiSearch = (): AiSearchInstance => ({
       },
       {
         id: "chunk-2",
+        type: "text",
         score: 0.9,
         text: "github repository creation",
         item: {
@@ -97,6 +113,7 @@ const makeAiSearch = (): AiSearchInstance => ({
       },
       {
         id: "chunk-3",
+        type: "text",
         score: 0.8,
         text: "send a message",
         item: {
@@ -210,10 +227,10 @@ describe("reindexAiSearch", () => {
         aiSearch: {
           ...makeAiSearch(),
           items: {
-            ...makeAiSearch().items,
+            ...makeAiSearchItems(),
             upload: async (name, content) => {
               uploadedContent = String(content);
-              return { id: `item:${name}`, key: name };
+              return { id: `item:${name}`, key: name, status: "queued" };
             },
           },
         },
@@ -237,6 +254,48 @@ describe("reindexAiSearch", () => {
     }),
   );
 
+  it.effect(
+    "fails before indexing when the AI Search instance uses a different embedding model",
+    () =>
+      Effect.gen(function* () {
+        const error = yield* Effect.flip(
+          reindexAiSearch({
+            executor: {
+              tools: {
+                manifest: () =>
+                  Effect.succeed([
+                    {
+                      path: "github.default.main.repos.create",
+                      name: "repos.create",
+                      description: "Create a repository",
+                      integration: "github",
+                      fingerprintVersion: "v1",
+                      indexFingerprint: "fingerprint",
+                    },
+                  ]),
+              },
+            } as never,
+            aiSearch: {
+              ...makeAiSearch(),
+              info: async () => ({
+                id: "executor-tool-search",
+                embedding_model: "@cf/baai/bge-base-en-v1.5",
+              }),
+            },
+            items: makeItemsCollection({
+              list: () => Effect.sync(() => expect.unreachable("list should not run")),
+            }),
+            owner: "org",
+            namespace: "org",
+          }),
+        );
+
+        expect(error).toMatchObject({
+          message: expect.stringContaining(DEFAULT_AI_SEARCH_EMBEDDING_MODEL),
+        });
+      }),
+  );
+
   it.effect("removes stale rows even when deleting the remote AI Search item fails", () =>
     Effect.gen(function* () {
       const removed: string[] = [];
@@ -249,7 +308,7 @@ describe("reindexAiSearch", () => {
         aiSearch: {
           ...makeAiSearch(),
           items: {
-            ...makeAiSearch().items,
+            ...makeAiSearchItems(),
             delete: async () => {
               // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: test double for rejected AI Search delete promise
               throw new Error("delete failed");

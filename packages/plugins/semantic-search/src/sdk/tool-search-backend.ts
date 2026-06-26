@@ -11,6 +11,10 @@ import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
 import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
+import {
+  makeCloudflareWorkersAiEmbedder,
+  type CloudflareWorkersAiEmbedderOptions,
+} from "./embedder-cloudflare";
 import { makeGeminiEmbedder, type GeminiEmbedderOptions, type ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
@@ -94,6 +98,7 @@ export interface ToolSearchBackendFactory<TStorage = unknown> {
 export interface VectorToolSearchBackendOptions {
   readonly namespace?: string;
   readonly store: VectorStore;
+  readonly workersAi?: CloudflareWorkersAiEmbedderOptions["ai"];
   readonly geminiApiKey?: string;
   readonly model?: string;
   readonly dimensions?: number;
@@ -125,6 +130,13 @@ export const unconfiguredIndex: ToolSearchIndex.Service = {
 
 const makeVectorEmbedder = (options: VectorToolSearchBackendOptions): ToolEmbedder | undefined =>
   options.embedder ??
+  (options.workersAi
+    ? makeCloudflareWorkersAiEmbedder({
+        ai: options.workersAi,
+        dimensions: options.dimensions,
+        batchSize: options.embedderBatchSize,
+      })
+    : undefined) ??
   (options.geminiApiKey
     ? makeGeminiEmbedder({
         apiKey: options.geminiApiKey,

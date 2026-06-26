@@ -1,3 +1,8 @@
+import type {
+  AiSearchInstance,
+  AiSearchItemInfo,
+  AiSearchSearchResponse,
+} from "@cloudflare/workers-types";
 import {
   ExecutionToolError,
   type Executor,
@@ -24,75 +29,12 @@ import type {
 } from "./tool-search-backend";
 import type { ToolSearchIndex } from "./tool-search-index";
 
-export interface AiSearchUploadedItem {
-  readonly id: string;
-  readonly key: string;
-}
-
-export interface AiSearchListedItem {
-  readonly id: string;
-  readonly key: string;
-  readonly status: string;
-  readonly metadata?: Readonly<Record<string, string>>;
-}
-
-export interface AiSearchInstance {
-  readonly items: {
-    readonly upload: (
-      name: string,
-      content: string | ArrayBuffer | ReadableStream,
-      options?: { readonly metadata?: Readonly<Record<string, string>> },
-    ) => Promise<AiSearchUploadedItem>;
-    readonly list: (input?: {
-      readonly page?: number;
-      readonly per_page?: number;
-      readonly status?: string;
-      readonly sort_by?: string;
-      readonly search?: string;
-      readonly source?: string;
-    }) => Promise<{
-      readonly result: readonly AiSearchListedItem[];
-      readonly result_info?: {
-        readonly count?: number;
-        readonly total_count?: number;
-        readonly page?: number;
-        readonly per_page?: number;
-      };
-    }>;
-    readonly delete: (itemId: string) => Promise<void>;
-  };
-  readonly search: (input: {
-    readonly messages: readonly [{ readonly role: "user"; readonly content: string }];
-    readonly ai_search_options?: {
-      readonly retrieval?: {
-        readonly retrieval_type?: "vector" | "keyword" | "hybrid";
-        readonly max_num_results?: number;
-        readonly metadata_only?: boolean;
-        readonly return_on_failure?: boolean;
-      };
-      readonly reranking?: { readonly enabled?: boolean };
-    };
-  }) => Promise<AiSearchSearchResponse>;
-}
-
-export interface AiSearchChunk {
-  readonly id: string;
-  readonly score: number;
-  readonly text?: string;
-  readonly item?: {
-    readonly key?: string;
-    readonly metadata?: Readonly<Record<string, string>>;
-  };
-}
-
-export interface AiSearchSearchResponse {
-  readonly search_query?: string;
-  readonly chunks?: readonly AiSearchChunk[];
-}
+export const DEFAULT_AI_SEARCH_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
 
 export interface AiSearchToolSearchBackendOptions {
-  readonly aiSearch: AiSearchInstance | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "items" | "search" | "info"> | undefined;
   readonly namespace?: string;
+  readonly embeddingModel?: string;
 }
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
@@ -133,6 +75,27 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
     }),
   );
 
+const requireEmbeddingModel = (input: {
+  readonly aiSearch: Pick<AiSearchInstance, "info">;
+  readonly expectedModel: string;
+}): Effect.Effect<void, SemanticSearchError> =>
+  Effect.tryPromise({
+    try: () => input.aiSearch.info(),
+    catch: (cause) =>
+      new SemanticSearchError({ message: "Failed to read AI Search instance config.", cause }),
+  }).pipe(
+    Effect.flatMap((info) => {
+      const actualModel =
+        typeof info.embedding_model === "string" ? info.embedding_model : undefined;
+      if (!actualModel || actualModel === input.expectedModel) return Effect.void;
+      return Effect.fail(
+        new SemanticSearchError({
+          message: `AI Search instance uses embedding model "${actualModel}", expected "${input.expectedModel}". Recreate or update the instance before indexing.`,
+        }),
+      );
+    }),
+  );
+
 const unavailableIndex: ToolSearchIndex.Service = {
   create: () => notConfigured(),
   scan: () => notConfigured(),
@@ -146,7 +109,7 @@ const unavailableIndex: ToolSearchIndex.Service = {
 };
 
 const deleteItem = (
-  aiSearch: AiSearchInstance,
+  aiSearch: Pick<AiSearchInstance, "items">,
   itemId: string,
 ): Effect.Effect<void, SemanticSearchError> =>
   Effect.tryPromise({
@@ -156,7 +119,7 @@ const deleteItem = (
   }).pipe(Effect.asVoid);
 
 const deleteItemBestEffort = (
-  aiSearch: AiSearchInstance,
+  aiSearch: Pick<AiSearchInstance, "items">,
   itemId: string,
 ): Effect.Effect<void, never> => deleteItem(aiSearch, itemId).pipe(Effect.catch(() => Effect.void));
 
@@ -164,7 +127,7 @@ const putIndexedItem = (
   items: ItemsCollection,
   owner: "user" | "org",
   document: ToolSearchDocument,
-  uploaded: AiSearchUploadedItem,
+  uploaded: AiSearchItemInfo,
 ): Effect.Effect<void, SemanticSearchError> =>
   items
     .put({
@@ -188,15 +151,20 @@ const putIndexedItem = (
 
 export const reindexAiSearch = (input: {
   readonly executor: Executor;
-  readonly aiSearch: AiSearchInstance | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "items" | "info"> | undefined;
   readonly items: ItemsCollection;
   readonly owner: "user" | "org";
   readonly namespace: string;
+  readonly embeddingModel?: string;
   readonly maxTools?: number;
 }): Effect.Effect<SemanticSearchRefreshResult, SemanticSearchError> => {
   if (!input.aiSearch) return notConfigured();
   const aiSearch = input.aiSearch;
   return Effect.gen(function* () {
+    yield* requireEmbeddingModel({
+      aiSearch,
+      expectedModel: input.embeddingModel ?? DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
+    });
     const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
     const livePaths = new Set(manifests.map((manifest) => manifest.path));
     const existingEntries = yield* input.items
@@ -245,10 +213,10 @@ export const reindexAiSearch = (input: {
 };
 
 const listAiSearchItems = (
-  aiSearch: AiSearchInstance,
-): Effect.Effect<readonly AiSearchListedItem[], SemanticSearchError> =>
+  aiSearch: Pick<AiSearchInstance, "items">,
+): Effect.Effect<readonly AiSearchItemInfo[], SemanticSearchError> =>
   Effect.gen(function* () {
-    const all: AiSearchListedItem[] = [];
+    const all: AiSearchItemInfo[] = [];
     let page = 1;
     while (true) {
       const result = yield* Effect.tryPromise({
@@ -267,7 +235,7 @@ const listAiSearchItems = (
   });
 
 export const statusAiSearch = (input: {
-  readonly aiSearch: AiSearchInstance;
+  readonly aiSearch: Pick<AiSearchInstance, "items">;
   readonly items: ItemsCollection;
   readonly namespace: string;
 }): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
@@ -321,23 +289,33 @@ const rowToResult = (row: AiSearchItemRow, score: number): ToolDiscoveryResult =
   score,
 });
 
-const chunkToResult = (chunk: AiSearchChunk): ToolDiscoveryResult | null => {
+const getStringMetadata = (
+  metadata: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+) => {
+  const value = metadata?.[key];
+  return typeof value === "string" ? value : undefined;
+};
+
+const chunkToResult = (
+  chunk: AiSearchSearchResponse["chunks"][number],
+): ToolDiscoveryResult | null => {
   const metadata = chunk.item?.metadata;
-  const path = metadata?.path;
-  const name = metadata?.name;
-  const integration = metadata?.integration;
+  const path = getStringMetadata(metadata, "path");
+  const name = getStringMetadata(metadata, "name");
+  const integration = getStringMetadata(metadata, "integration");
   if (!path || !name || !integration) return null;
   return {
     path,
     name,
-    description: metadata.description,
+    description: getStringMetadata(metadata, "description"),
     integration,
     score: chunk.score,
   };
 };
 
 export const makeAiSearchToolDiscoveryProvider = (deps: {
-  readonly aiSearch: AiSearchInstance | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "search"> | undefined;
   readonly items: ItemsCollection | undefined;
 }): ToolDiscoveryProvider | undefined => {
   if (!deps.aiSearch) return undefined;
@@ -414,6 +392,7 @@ export const makeAiSearchToolSearchBackend = (
   options: AiSearchToolSearchBackendOptions,
 ): ToolSearchBackendFactory<AiSearchToolSearchBackendStorage> => {
   const namespace = options.namespace ?? "default";
+  const embeddingModel = options.embeddingModel ?? DEFAULT_AI_SEARCH_EMBEDDING_MODEL;
   return {
     namespace,
     pluginStorage: { aiSearchItems },
@@ -437,6 +416,7 @@ export const makeAiSearchToolSearchBackend = (
             items: storage.aiSearchItems,
             owner: storage.owner,
             namespace,
+            embeddingModel,
           }),
         sweep: () =>
           Effect.succeed({
