@@ -1,30 +1,25 @@
 import { definePlugin, type Executor } from "@executor-js/sdk/core";
-import { Effect } from "effect";
+import type { Effect } from "effect";
 
 import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
-import { SemanticSearchError } from "./errors";
+import type { SemanticSearchError } from "./errors";
 import {
+  notConfigured,
   type SemanticSearchResultPage,
   type SemanticSearchStatus,
   type ToolSearchBackend,
   type ToolSearchBackendFactory,
+  unconfiguredIndex,
 } from "./tool-search-backend";
 
 export interface SemanticSearchPluginOptions {
   readonly backend?: ToolSearchBackendFactory;
 }
 
-const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
-  Effect.fail(
-    new SemanticSearchError({
-      message: "Semantic search is not configured (missing a tool-search backend).",
-    }),
-  );
-
 export const makeSemanticSearchExtension = (deps: {
   readonly backend: ToolSearchBackend | undefined;
 }) => ({
-  index: (executor: Executor) => deps.backend?.index(executor),
+  index: (executor: Executor) => deps.backend?.index(executor) ?? unconfiguredIndex,
   reindex: (executor: Executor) => deps.backend?.reindex(executor) ?? notConfigured(),
   sweep: (executor: Executor) => deps.backend?.sweep(executor) ?? notConfigured(),
   search: (

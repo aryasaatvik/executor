@@ -93,14 +93,14 @@ export interface VectorToolSearchBackendOptions {
   readonly lexicalStore?: FtsLexicalStore;
 }
 
-const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
+export const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
   Effect.fail(
     new SemanticSearchError({
       message: "Semantic search is not configured (missing a tool-search backend).",
     }),
   );
 
-const unconfiguredIndex: ToolSearchIndex.Service = {
+export const unconfiguredIndex: ToolSearchIndex.Service = {
   create: () => notConfigured(),
   scan: () => notConfigured(),
   chunk: () => notConfigured(),
