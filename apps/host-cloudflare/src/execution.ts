@@ -46,6 +46,8 @@ export const makeCloudflarePluginsProvider = (
           context?.mcpResource?.kind === "toolkit" ? context.mcpResource.slug : undefined,
         allowLocalNetwork: config.allowLocalNetwork,
         analytics,
+        aiSearch: config.aiSearch,
+        searchNamespace: config.organizationId,
       }),
   });
 

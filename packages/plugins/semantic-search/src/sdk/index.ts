@@ -14,6 +14,19 @@ export {
   type VectorToolSearchBackendStorage,
   type VectorToolSearchBackendOptions,
 } from "./tool-search-backend";
+export {
+  makeAiSearchToolDiscoveryProvider,
+  makeAiSearchToolSearchBackend,
+  reindexAiSearch,
+  statusAiSearch,
+  type AiSearchChunk,
+  type AiSearchInstance,
+  type AiSearchListedItem,
+  type AiSearchSearchResponse,
+  type AiSearchToolSearchBackendOptions,
+  type AiSearchToolSearchBackendStorage,
+  type AiSearchUploadedItem,
+} from "./ai-search";
 export { makeVectorToolDiscoveryProvider } from "./provider";
 export {
   makeGeminiEmbedder,
@@ -59,10 +72,15 @@ export { fingerprintTool, type FingerprintInput } from "./fingerprint";
 
 // Collections (plugin storage)
 export {
+  aiSearchItems,
+  AiSearchItemRow,
+  AiSearchItemStatus,
   toolFingerprints,
   indexRuns,
   indexJobs,
   indexChunks,
+  type AiSearchItemRow as AiSearchItemRowType,
+  type AiSearchItemStatus as AiSearchItemStatusType,
   FingerprintRow,
   IndexRun,
   IndexJob,
