@@ -185,6 +185,58 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
 });
 
 describe("reindexAiSearch", () => {
+  it.effect("indexes an identity document when schema collection fails", () =>
+    Effect.gen(function* () {
+      let uploadedContent = "";
+      const stored: AiSearchItemRow[] = [];
+
+      const result = yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () =>
+              Effect.succeed([
+                {
+                  path: "github.default.main.repos.create",
+                  name: "repos.create",
+                  description: "Create a repository",
+                  integration: "github",
+                  fingerprintVersion: "v1",
+                  indexFingerprint: "fingerprint",
+                },
+              ]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearch().items,
+            upload: async (name, content) => {
+              uploadedContent = String(content);
+              return { id: `item:${name}`, key: name };
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          put: ({ data }) =>
+            Effect.sync(() => {
+              stored.push(data);
+              return { ...githubRow, data };
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
+      expect(uploadedContent).toContain("# github.default.main.repos.create");
+      expect(uploadedContent).toContain("Description: Create a repository");
+      expect(uploadedContent).not.toContain("Input schema");
+      expect(stored[0]?.fingerprint).toBe("github.default.main.repos.create:v1:fingerprint:");
+    }),
+  );
+
   it.effect("removes stale rows even when deleting the remote AI Search item fails", () =>
     Effect.gen(function* () {
       const removed: string[] = [];

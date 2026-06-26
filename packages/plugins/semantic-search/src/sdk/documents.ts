@@ -305,13 +305,7 @@ export const collectToolSearchDocument = (
   const description = stripHtml(manifest.description ?? "");
   const fingerprint = toolItemKey(manifest);
   return executor.tools.schema(`${ADDRESS_PREFIX}${path}` as Tool["address"]).pipe(
-    Effect.mapError(
-      (cause) =>
-        new SemanticSearchError({
-          message: `Failed to collect schema for AI Search item "${path}".`,
-          cause,
-        }),
-    ),
+    Effect.catch(() => Effect.succeed(null)),
     Effect.map((view) => {
       const sections = [
         `# ${path}`,
