@@ -9,6 +9,7 @@ const ADDRESS_PREFIX = "tools.";
 const MAX_AI_SEARCH_FILE_BYTES = 3_500_000;
 
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 export interface IndexableToolDescriptor {
   readonly address: Tool["address"] | string;
@@ -162,18 +163,12 @@ export const listToolManifests = (
   );
 
 const truncateToAiSearchLimit = (document: string): string => {
-  if (textEncoder.encode(document).byteLength <= MAX_AI_SEARCH_FILE_BYTES) return document;
-  let low = 0;
-  let high = document.length;
-  while (low < high) {
-    const mid = Math.floor((low + high + 1) / 2);
-    if (textEncoder.encode(document.slice(0, mid)).byteLength <= MAX_AI_SEARCH_FILE_BYTES) {
-      low = mid;
-    } else {
-      high = mid - 1;
-    }
-  }
-  return document.slice(0, low);
+  const bytes = textEncoder.encode(document);
+  if (bytes.byteLength <= MAX_AI_SEARCH_FILE_BYTES) return document;
+
+  let end = MAX_AI_SEARCH_FILE_BYTES;
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end -= 1;
+  return textDecoder.decode(bytes.subarray(0, end));
 };
 
 export const toolItemKey = (manifest: ToolSchemaManifest): string =>
