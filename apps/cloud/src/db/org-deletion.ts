@@ -27,6 +27,7 @@ import {
   subject,
   tool,
   tool_policy,
+  tool_schema_manifest,
 } from "./executor-schema";
 
 // Escape LIKE wildcards (`\`, `%`, `_`) in the org id before using it as a
@@ -43,6 +44,7 @@ export const purgeOrganizationData = (db: DrizzleDb, organizationId: string): Pr
   db.transaction(async (tx) => {
     // Executor tenant tables — every row is scoped by `tenant = organizationId`.
     await tx.delete(tool).where(eq(tool.tenant, organizationId));
+    await tx.delete(tool_schema_manifest).where(eq(tool_schema_manifest.tenant, organizationId));
     await tx.delete(definition).where(eq(definition.tenant, organizationId));
     await tx.delete(connection).where(eq(connection.tenant, organizationId));
     await tx.delete(integration).where(eq(integration.tenant, organizationId));

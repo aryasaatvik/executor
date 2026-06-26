@@ -1,3 +1,4 @@
+import type { AiSearchInstance } from "@cloudflare/workers-types";
 import { openApiHttpPlugin } from "@executor-js/plugin-openapi/api";
 import {
   googleCatalog,
@@ -19,11 +20,7 @@ import {
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
-import {
-  makeVectorizeStore,
-  withCloudflareLimits,
-  type VectorizeIndex,
-} from "@executor-js/plugin-semantic-search";
+import { makeAiSearchToolSearchBackend } from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -45,9 +42,7 @@ import {
 //
 // Semantic search follows the same opt-in-by-binding shape: the plugin is
 // always in the tuple (its reindex route keeps the API shape stable), but it is
-// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
-// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
-// Vectorize index + add the binding in wrangler.jsonc and set the secret.
+// inert until the Cloudflare AI Search binding is present.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
@@ -56,13 +51,15 @@ export const makeCloudflarePlugins = (
     readonly activeToolkitSlug?: string;
     readonly allowLocalNetwork?: boolean;
     readonly analytics?: AnalyticsEngineDataset;
-    readonly vectorize?: VectorizeIndex;
-    readonly geminiApiKey?: string;
+    readonly aiSearch?: AiSearchInstance;
     readonly searchNamespace?: string;
   } = {},
 ) => {
-  const store = options.vectorize
-    ? withCloudflareLimits(makeVectorizeStore(options.vectorize))
+  const semanticSearchBackend = options.aiSearch
+    ? makeAiSearchToolSearchBackend({
+        aiSearch: options.aiSearch,
+        namespace: options.searchNamespace,
+      })
     : undefined;
   return [
     openApiHttpPlugin({
@@ -78,11 +75,7 @@ export const makeCloudflarePlugins = (
         options.analytics ? createWaeMetricsObserver(options.analytics) : noopExecutionObserver,
     }),
     serviceTokensPlugin(),
-    semanticSearchHttpPlugin({
-      store,
-      geminiApiKey: options.geminiApiKey,
-      namespace: options.searchNamespace,
-    }),
+    semanticSearchHttpPlugin({ backend: semanticSearchBackend }),
   ] as const;
 };
 
