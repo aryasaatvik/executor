@@ -67,6 +67,7 @@ const makeMemoryCache = (): Executor["cache"] => {
 const manifestForTool = (
   tool: Tool,
   fingerprint = `fingerprint:${String(tool.address)}`,
+  sourceRevision?: string,
 ): ToolSchemaManifest => ({
   address: tool.address,
   path: String(tool.address).replace(/^tools\./, ""),
@@ -82,6 +83,7 @@ const manifestForTool = (
   definitionSetHash: `definitions:${String(tool.address)}`,
   indexFingerprint: fingerprint,
   fingerprintVersion: "tool-schema-manifest/v1",
+  ...(sourceRevision === undefined ? {} : { sourceRevision }),
 });
 
 const makeExecutor = (
@@ -327,6 +329,7 @@ describe("ToolSearchIndex", () => {
       }
 
       expect(scanned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect([...jobs.data.values()][0]?.sourceRevision).toBeUndefined();
       expect(chunked.processed).toBe(1);
       expect(chunked.chunks).toBeGreaterThan(0);
       expect(embedded).toMatchObject({ processed: chunked.chunks, chunks: chunked.chunks });
@@ -347,6 +350,84 @@ describe("ToolSearchIndex", () => {
       );
       expect(deleted).toEqual([["old-chunk"]]);
       expect([...jobs.data.values()][0]?.status).toBe("indexed");
+    }),
+  );
+
+  it.effect("copies manifest source revisions into scan jobs", () =>
+    Effect.gen(function* () {
+      const tool: Tool = {
+        address: "tools.github.repos.get" as never,
+        name: "repos.get" as never,
+        integration: "github" as never,
+        description: "Get a repository",
+        owner,
+        connection: "default" as never,
+        pluginId: "test",
+      };
+      const executor: Pick<Executor, "tools" | "cache"> = {
+        tools: {
+          list: () => Effect.succeed([tool]),
+          manifest: () => Effect.succeed([manifestForTool(tool, "fp-source", "spec-hash-v1")]),
+          schema: () => Effect.succeed(null),
+        },
+        cache: makeMemoryCache(),
+      };
+      const base = {
+        namespace,
+        executor: executor as Executor,
+        runs: makeCollection<IndexRun>(indexRuns.name),
+        jobs: makeCollection<IndexJob>(indexJobs.name),
+        chunks: makeCollection<IndexChunk>(indexChunks.name),
+        fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+        blobs: makeBlobs(),
+        owner,
+      };
+
+      yield* create({ ...base, runId: "run-source-revision", partitionCount: 1 });
+      const scanned = yield* scan({
+        ...base,
+        runId: "run-source-revision",
+        partition: 0,
+        limit: 10,
+      });
+
+      expect(scanned).toMatchObject({ processed: 1, changed: 1, skipped: 0 });
+      expect([...base.jobs.data.values()][0]).toMatchObject({
+        path: "github.repos.get",
+        fingerprint: "fp-source",
+        sourceRevision: "spec-hash-v1",
+      });
+
+      const skippedBase = {
+        ...base,
+        jobs: makeCollection<IndexJob>(indexJobs.name),
+        fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+      };
+      yield* skippedBase.fingerprints.put({
+        owner,
+        key: "github.repos.get",
+        data: {
+          path: "github.repos.get",
+          integration: "github",
+          fingerprint: "fp-source",
+          chunkIds: [],
+        },
+      });
+
+      yield* create({ ...skippedBase, runId: "run-source-revision-skipped", partitionCount: 1 });
+      const skipped = yield* scan({
+        ...skippedBase,
+        runId: "run-source-revision-skipped",
+        partition: 0,
+        limit: 10,
+      });
+
+      expect(skipped).toMatchObject({ processed: 1, changed: 0, skipped: 1 });
+      expect([...skippedBase.jobs.data.values()][0]).toMatchObject({
+        path: "github.repos.get",
+        fingerprint: "fp-source",
+        sourceRevision: "spec-hash-v1",
+      });
     }),
   );
 
