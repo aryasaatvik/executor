@@ -127,6 +127,13 @@
       "when": 1788287088210,
       "tag": "0017_lush_thunderbolts",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788679256454,
+      "tag": "0018_tool_schema_manifest",
+      "breakpoints": true
     }
   ]
 }

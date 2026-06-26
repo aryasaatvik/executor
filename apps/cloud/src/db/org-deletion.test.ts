@@ -39,6 +39,7 @@ import {
   subject,
   tool,
   tool_policy,
+  tool_schema_manifest,
 } from "./executor-schema";
 
 const program = <A, E>(body: Effect.Effect<A, E, DbService>) =>
@@ -100,6 +101,25 @@ const seedTenant = async (db: DrizzleDb, tenant: string, tag: string) => {
     plugin_id: "p",
     name: `tool-${tag}`,
     description: "d",
+    created_at: now,
+    updated_at: now,
+    tenant,
+    owner: "o",
+    subject: "s",
+  });
+  await db.insert(tool_schema_manifest).values({
+    integration: "int",
+    connection: "conn",
+    plugin_id: "p",
+    name: `tool-${tag}`,
+    path: `int.org.conn.tool-${tag}`,
+    description: "d",
+    descriptor_hash: "descriptor",
+    input_schema_hash: "input",
+    output_schema_hash: "output",
+    definition_set_hash: "definitions",
+    index_fingerprint: "fingerprint",
+    fingerprint_version: "1",
     created_at: now,
     updated_at: now,
     tenant,
@@ -180,6 +200,7 @@ const TENANT_TABLES = [
   oauth_client,
   oauth_session,
   tool,
+  tool_schema_manifest,
   definition,
   tool_policy,
   plugin_storage,
