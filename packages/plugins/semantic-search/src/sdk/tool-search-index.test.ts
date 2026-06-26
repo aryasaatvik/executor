@@ -397,6 +397,37 @@ describe("ToolSearchIndex", () => {
         fingerprint: "fp-source",
         sourceRevision: "spec-hash-v1",
       });
+
+      const skippedBase = {
+        ...base,
+        jobs: makeCollection<IndexJob>(indexJobs.name),
+        fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+      };
+      yield* skippedBase.fingerprints.put({
+        owner,
+        key: "github.repos.get",
+        data: {
+          path: "github.repos.get",
+          integration: "github",
+          fingerprint: "fp-source",
+          chunkIds: [],
+        },
+      });
+
+      yield* create({ ...skippedBase, runId: "run-source-revision-skipped", partitionCount: 1 });
+      const skipped = yield* scan({
+        ...skippedBase,
+        runId: "run-source-revision-skipped",
+        partition: 0,
+        limit: 10,
+      });
+
+      expect(skipped).toMatchObject({ processed: 1, changed: 0, skipped: 1 });
+      expect([...skippedBase.jobs.data.values()][0]).toMatchObject({
+        path: "github.repos.get",
+        fingerprint: "fp-source",
+        sourceRevision: "spec-hash-v1",
+      });
     }),
   );
 
