@@ -1,14 +1,10 @@
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { embed, embedMany } from "ai";
+import { embed, embedMany, type EmbeddingModel } from "ai";
 import { Effect } from "effect";
 
 import { SemanticSearchError } from "./errors";
 
-/** Turns tool documents and queries into embedding vectors. Document and query
- *  embeddings use different task types (Gemini distinguishes
- *  `RETRIEVAL_DOCUMENT` from `RETRIEVAL_QUERY`), so the two methods are
- *  separate. The plugin treats this as a seam: tests inject a deterministic
- *  embedder, production uses {@link makeGeminiEmbedder}. */
+type EmbeddingProviderOptions = Parameters<typeof embed>[0]["providerOptions"];
+
 export interface ToolEmbedder {
   readonly model: string;
   readonly dimensions: number;
@@ -18,22 +14,17 @@ export interface ToolEmbedder {
   readonly embedQuery: (text: string) => Effect.Effect<readonly number[], SemanticSearchError>;
 }
 
-export interface GeminiEmbedderOptions {
-  readonly apiKey: string;
-  /** Gemini embedding model id. Defaults to the v2 model. */
-  readonly model?: string;
-  /** Output dimensionality (MRL truncation). MUST match the Vectorize index. */
-  readonly dimensions?: number;
+export interface MakeEmbedderOptions {
+  readonly model: EmbeddingModel;
+  readonly modelId: string;
+  readonly dimensions: number;
   readonly batchSize?: number;
+  readonly maxParallelCalls?: number;
+  readonly documentProviderOptions?: EmbeddingProviderOptions;
+  readonly queryProviderOptions?: EmbeddingProviderOptions;
 }
 
-/** Gemini Embedding 2: natively multimodal, default 3072d, MRL-truncatable to
- *  1536/768. We default to 1536d as a quality/size balance for a tool catalog. */
-export const DEFAULT_GEMINI_MODEL = "gemini-embedding-2";
-export const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
 const DEFAULT_BATCH_SIZE = 32;
-const DOCUMENT_TASK_TYPE = "RETRIEVAL_DOCUMENT";
-const QUERY_TASK_TYPE = "RETRIEVAL_QUERY";
 
 const chunk = <A>(items: readonly A[], size: number): A[][] => {
   const safe = Math.max(1, Math.floor(size));
@@ -44,49 +35,79 @@ const chunk = <A>(items: readonly A[], size: number): A[][] => {
   return out;
 };
 
-export const makeGeminiEmbedder = (options: GeminiEmbedderOptions): ToolEmbedder => {
-  const model = options.model ?? DEFAULT_GEMINI_MODEL;
-  const dimensions = options.dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+const validateEmbeddings = (
+  embeddings: readonly (readonly number[])[],
+  expectedCount: number,
+  dimensions: number,
+  modelId: string,
+): Effect.Effect<readonly (readonly number[])[], SemanticSearchError> => {
+  if (
+    embeddings.length !== expectedCount ||
+    !embeddings.every((vector) => vector.length === dimensions)
+  ) {
+    return Effect.fail(
+      new SemanticSearchError({
+        message: `${modelId} returned ${embeddings.length} vectors with invalid dimensions.`,
+      }),
+    );
+  }
+  return Effect.succeed(embeddings);
+};
+
+export const makeEmbedder = (options: MakeEmbedderOptions): ToolEmbedder => {
   const batchSize = options.batchSize ?? DEFAULT_BATCH_SIZE;
-  const google = createGoogleGenerativeAI({ apiKey: options.apiKey });
+  const maxParallelCalls = options.maxParallelCalls ?? 1;
 
   const embedTexts = (
-    texts: string[],
-    taskType: typeof DOCUMENT_TASK_TYPE | typeof QUERY_TASK_TYPE,
+    texts: readonly string[],
+    providerOptions: EmbeddingProviderOptions,
   ): Effect.Effect<readonly (readonly number[])[], SemanticSearchError> =>
-    Effect.tryPromise({
-      try: async () => {
-        if (texts.length === 0) return [];
-        const textModel = google.textEmbedding(model);
-        const providerOptions = { google: { outputDimensionality: dimensions, taskType } };
-        if (texts.length === 1) {
-          const { embedding } = await embed({
-            model: textModel,
-            value: texts[0]!,
+    Effect.gen(function* () {
+      if (texts.length === 0) return [];
+      const embeddings = yield* Effect.tryPromise({
+        try: async () => {
+          if (texts.length === 1) {
+            const { embedding } = await embed({
+              model: options.model,
+              value: texts[0]!,
+              providerOptions,
+            });
+            return [embedding];
+          }
+          const { embeddings } = await embedMany({
+            model: options.model,
+            values: [...texts],
+            maxParallelCalls,
             providerOptions,
           });
-          return [embedding];
-        }
-        const { embeddings } = await embedMany({
-          model: textModel,
-          values: texts,
-          maxParallelCalls: 5,
-          providerOptions,
-        });
-        return embeddings;
-      },
-      catch: (cause) =>
-        new SemanticSearchError({ message: `Gemini embedding failed for ${model}.`, cause }),
+          return embeddings;
+        },
+        catch: (cause) =>
+          new SemanticSearchError({
+            message: `Embedding failed for ${options.modelId}.`,
+            cause,
+          }),
+      });
+      return yield* validateEmbeddings(
+        embeddings,
+        texts.length,
+        options.dimensions,
+        options.modelId,
+      );
     });
 
   return {
-    model,
-    dimensions,
+    model: options.modelId,
+    dimensions: options.dimensions,
     embedDocuments: (texts) =>
-      Effect.forEach(chunk(texts, batchSize), (group) => embedTexts(group, DOCUMENT_TASK_TYPE), {
-        concurrency: 1,
-      }).pipe(Effect.map((groups) => groups.flat())),
+      Effect.forEach(
+        chunk(texts, batchSize),
+        (group) => embedTexts(group, options.documentProviderOptions),
+        { concurrency: 1 },
+      ).pipe(Effect.map((groups) => groups.flat())),
     embedQuery: (text) =>
-      embedTexts([text], QUERY_TASK_TYPE).pipe(Effect.map((vectors) => vectors[0] ?? [])),
+      embedTexts([text], options.queryProviderOptions).pipe(
+        Effect.map((vectors) => vectors[0] ?? []),
+      ),
   };
 };
