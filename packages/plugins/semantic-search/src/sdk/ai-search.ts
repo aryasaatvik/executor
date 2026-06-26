@@ -29,12 +29,9 @@ import type {
 } from "./tool-search-backend";
 import type { ToolSearchIndex } from "./tool-search-index";
 
-export const DEFAULT_AI_SEARCH_EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
-
 export interface AiSearchToolSearchBackendOptions {
-  readonly aiSearch: Pick<AiSearchInstance, "items" | "search" | "info"> | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "items" | "search"> | undefined;
   readonly namespace?: string;
-  readonly embeddingModel?: string;
 }
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
@@ -72,27 +69,6 @@ const notConfigured = (): Effect.Effect<never, SemanticSearchError> =>
   Effect.fail(
     new SemanticSearchError({
       message: "Semantic search is not configured (missing AI Search).",
-    }),
-  );
-
-const requireEmbeddingModel = (input: {
-  readonly aiSearch: Pick<AiSearchInstance, "info">;
-  readonly expectedModel: string;
-}): Effect.Effect<void, SemanticSearchError> =>
-  Effect.tryPromise({
-    try: () => input.aiSearch.info(),
-    catch: (cause) =>
-      new SemanticSearchError({ message: "Failed to read AI Search instance config.", cause }),
-  }).pipe(
-    Effect.flatMap((info) => {
-      const actualModel =
-        typeof info.embedding_model === "string" ? info.embedding_model : undefined;
-      if (!actualModel || actualModel === input.expectedModel) return Effect.void;
-      return Effect.fail(
-        new SemanticSearchError({
-          message: `AI Search instance uses embedding model "${actualModel}", expected "${input.expectedModel}". Recreate or update the instance before indexing.`,
-        }),
-      );
     }),
   );
 
@@ -151,20 +127,15 @@ const putIndexedItem = (
 
 export const reindexAiSearch = (input: {
   readonly executor: Executor;
-  readonly aiSearch: Pick<AiSearchInstance, "items" | "info"> | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "items"> | undefined;
   readonly items: ItemsCollection;
   readonly owner: "user" | "org";
   readonly namespace: string;
-  readonly embeddingModel?: string;
   readonly maxTools?: number;
 }): Effect.Effect<SemanticSearchRefreshResult, SemanticSearchError> => {
   if (!input.aiSearch) return notConfigured();
   const aiSearch = input.aiSearch;
   return Effect.gen(function* () {
-    yield* requireEmbeddingModel({
-      aiSearch,
-      expectedModel: input.embeddingModel ?? DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
-    });
     const manifests = yield* listToolManifests(input.executor, { maxTools: input.maxTools });
     const livePaths = new Set(manifests.map((manifest) => manifest.path));
     const existingEntries = yield* input.items
@@ -392,7 +363,6 @@ export const makeAiSearchToolSearchBackend = (
   options: AiSearchToolSearchBackendOptions,
 ): ToolSearchBackendFactory<AiSearchToolSearchBackendStorage> => {
   const namespace = options.namespace ?? "default";
-  const embeddingModel = options.embeddingModel ?? DEFAULT_AI_SEARCH_EMBEDDING_MODEL;
   return {
     namespace,
     pluginStorage: { aiSearchItems },
@@ -416,7 +386,6 @@ export const makeAiSearchToolSearchBackend = (
             items: storage.aiSearchItems,
             owner: storage.owner,
             namespace,
-            embeddingModel,
           }),
         sweep: () =>
           Effect.succeed({

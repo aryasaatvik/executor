@@ -17,7 +17,6 @@ export {
 export {
   makeAiSearchToolDiscoveryProvider,
   makeAiSearchToolSearchBackend,
-  DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
   reindexAiSearch,
   statusAiSearch,
   type AiSearchToolSearchBackendOptions,

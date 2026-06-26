@@ -3,11 +3,7 @@ import type { AiSearchInstance } from "@cloudflare/workers-types";
 import { type PluginStorageCollectionFacade, type PluginStorageEntry } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
-import {
-  DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
-  makeAiSearchToolDiscoveryProvider,
-  reindexAiSearch,
-} from "./ai-search";
+import { makeAiSearchToolDiscoveryProvider, reindexAiSearch } from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
@@ -72,11 +68,7 @@ const makeAiSearchItems = () =>
     get: () => expect.unreachable("Unexpected AI Search item lookup"),
   }) satisfies Pick<AiSearchInstance, "items">["items"];
 
-const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search" | "info"> => ({
-  info: async () => ({
-    id: "executor-tool-search",
-    embedding_model: DEFAULT_AI_SEARCH_EMBEDDING_MODEL,
-  }),
+const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search"> => ({
   items: makeAiSearchItems(),
   search: async () => ({
     search_query: "create repo",
@@ -252,48 +244,6 @@ describe("reindexAiSearch", () => {
       expect(uploadedContent).not.toContain("Input schema");
       expect(stored[0]?.fingerprint).toBe("github.default.main.repos.create:v1:fingerprint:");
     }),
-  );
-
-  it.effect(
-    "fails before indexing when the AI Search instance uses a different embedding model",
-    () =>
-      Effect.gen(function* () {
-        const error = yield* Effect.flip(
-          reindexAiSearch({
-            executor: {
-              tools: {
-                manifest: () =>
-                  Effect.succeed([
-                    {
-                      path: "github.default.main.repos.create",
-                      name: "repos.create",
-                      description: "Create a repository",
-                      integration: "github",
-                      fingerprintVersion: "v1",
-                      indexFingerprint: "fingerprint",
-                    },
-                  ]),
-              },
-            } as never,
-            aiSearch: {
-              ...makeAiSearch(),
-              info: async () => ({
-                id: "executor-tool-search",
-                embedding_model: "@cf/baai/bge-base-en-v1.5",
-              }),
-            },
-            items: makeItemsCollection({
-              list: () => Effect.sync(() => expect.unreachable("list should not run")),
-            }),
-            owner: "org",
-            namespace: "org",
-          }),
-        );
-
-        expect(error).toMatchObject({
-          message: expect.stringContaining(DEFAULT_AI_SEARCH_EMBEDDING_MODEL),
-        });
-      }),
   );
 
   it.effect("removes stale rows even when deleting the remote AI Search item fails", () =>
