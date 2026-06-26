@@ -14,11 +14,7 @@ import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
 import {
   makeAiSearchToolSearchBackend,
-  makeVectorizeStore,
-  ToolSearchBackend,
-  withCloudflareLimits,
   type AiSearchInstance,
-  type VectorizeIndex,
 } from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
@@ -41,31 +37,21 @@ import {
 //
 // Semantic search follows the same opt-in-by-binding shape: the plugin is
 // always in the tuple (its reindex route keeps the API shape stable), but it is
-// inert until a search backend binding is present. Prefer Cloudflare AI Search
-// when bound; otherwise fall back to the Vectorize + Gemini backend.
+// inert until the Cloudflare AI Search binding is present.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
   secretKey: string,
   analytics?: AnalyticsEngineDataset,
   aiSearch?: AiSearchInstance,
-  vectorize?: VectorizeIndex,
-  geminiApiKey?: string,
   searchNamespace?: string,
 ) => {
-  const store = vectorize ? withCloudflareLimits(makeVectorizeStore(vectorize)) : undefined;
   const semanticSearchBackend = aiSearch
     ? makeAiSearchToolSearchBackend({
         aiSearch,
         namespace: searchNamespace,
       })
-    : store && geminiApiKey
-      ? ToolSearchBackend.vector({
-          store,
-          geminiApiKey,
-          namespace: searchNamespace,
-        })
-      : undefined;
+    : undefined;
   return [
     openApiHttpPlugin(),
     googleHttpPlugin(),

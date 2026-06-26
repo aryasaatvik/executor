@@ -41,8 +41,6 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
     config.secretKey,
     env.ANALYTICS,
     config.aiSearch,
-    env.VECTORIZE,
-    config.geminiApiKey,
     config.organizationId,
   );
 
