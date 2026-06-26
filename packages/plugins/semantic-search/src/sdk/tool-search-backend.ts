@@ -34,6 +34,13 @@ export interface SemanticSearchStatus {
   readonly namespace: string;
   readonly indexed: number;
   readonly lexical: number | null;
+  readonly queued?: number;
+  readonly running?: number;
+  readonly completed?: number;
+  readonly error?: number;
+  readonly skipped?: number;
+  readonly outdated?: number;
+  readonly lastActivity?: string;
 }
 
 export interface SemanticSearchRefreshResult {

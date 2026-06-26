@@ -57,6 +57,13 @@ export const StatusResponse = Schema.Struct({
   namespace: Schema.String,
   indexed: Schema.Number,
   lexical: Schema.NullOr(Schema.Number),
+  queued: Schema.optional(Schema.Number),
+  running: Schema.optional(Schema.Number),
+  completed: Schema.optional(Schema.Number),
+  error: Schema.optional(Schema.Number),
+  skipped: Schema.optional(Schema.Number),
+  outdated: Schema.optional(Schema.Number),
+  lastActivity: Schema.optional(Schema.String),
 });
 
 export type SearchResultItemType = typeof SearchResultItem.Type;

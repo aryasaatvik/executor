@@ -40,6 +40,7 @@ export const makeCloudflareApp = async (env: CloudflareEnv) => {
   const plugins = makeCloudflarePlugins(
     config.secretKey,
     env.ANALYTICS,
+    config.aiSearch,
     env.VECTORIZE,
     config.geminiApiKey,
     config.organizationId,

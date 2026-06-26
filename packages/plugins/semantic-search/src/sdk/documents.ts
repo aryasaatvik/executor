@@ -6,6 +6,9 @@ import { SemanticSearchError } from "./errors";
 import { cyrb53 } from "./fingerprint";
 
 const ADDRESS_PREFIX = "tools.";
+const MAX_AI_SEARCH_FILE_BYTES = 3_500_000;
+
+const textEncoder = new TextEncoder();
 
 export interface IndexableToolDescriptor {
   readonly address: Tool["address"] | string;
@@ -158,6 +161,41 @@ export const listToolManifests = (
     Effect.map((manifests) => selectToolManifests(manifests, options)),
   );
 
+const truncateToAiSearchLimit = (document: string): string => {
+  if (textEncoder.encode(document).byteLength <= MAX_AI_SEARCH_FILE_BYTES) return document;
+  let low = 0;
+  let high = document.length;
+  while (low < high) {
+    const mid = Math.floor((low + high + 1) / 2);
+    if (textEncoder.encode(document.slice(0, mid)).byteLength <= MAX_AI_SEARCH_FILE_BYTES) {
+      low = mid;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return document.slice(0, low);
+};
+
+export const toolItemKey = (manifest: ToolSchemaManifest): string =>
+  [
+    manifest.path,
+    manifest.fingerprintVersion,
+    manifest.indexFingerprint,
+    manifest.sourceRevision ?? "",
+  ].join(":");
+
+export interface ToolSearchDocument {
+  readonly path: string;
+  readonly name: string;
+  readonly description: string;
+  readonly integration: string;
+  readonly connection?: string;
+  readonly plugin?: string;
+  readonly fingerprint: string;
+  readonly content: string;
+  readonly metadata: Readonly<Record<string, string>>;
+}
+
 const isPlainRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -208,6 +246,13 @@ const schemaFacetText = (label: string, schema: unknown): string | undefined => 
   return `${label} ${Array.from(terms).join(" ")}`;
 };
 
+const schemaSection = (title: string, schema: unknown): string | undefined => {
+  const terms = new Set<string>();
+  collectSchemaTerms(schema, terms);
+  if (terms.size === 0) return undefined;
+  return `## ${title}\n\n${Array.from(terms).join("\n")}`;
+};
+
 const schemaDefinitionsFacetText = (
   definitions: Readonly<Record<string, unknown>> | undefined,
 ): string | undefined => {
@@ -253,6 +298,55 @@ export const collectDocForTool = (
     }),
     // Degrade: schema fetch failed — use identity-only document.
     Effect.catch(() => Effect.succeed({ ...base, lexicalText: buildLexicalText(base) })),
+  );
+};
+
+export const collectToolSearchDocument = (
+  executor: Executor,
+  manifest: ToolSchemaManifest,
+): Effect.Effect<ToolSearchDocument, SemanticSearchError> => {
+  const path = manifest.path;
+  const name = manifest.name;
+  const description = stripHtml(manifest.description ?? "");
+  const fingerprint = toolItemKey(manifest);
+  return executor.tools.schema(`${ADDRESS_PREFIX}${path}` as Tool["address"]).pipe(
+    Effect.mapError(
+      (cause) =>
+        new SemanticSearchError({
+          message: `Failed to collect schema for AI Search item "${path}".`,
+          cause,
+        }),
+    ),
+    Effect.map((view) => {
+      const sections = [
+        `# ${path}`,
+        `Name: ${name}`,
+        `Integration: ${manifest.integration}`,
+        manifest.connection ? `Connection: ${manifest.connection}` : undefined,
+        manifest.pluginId ? `Plugin: ${manifest.pluginId}` : undefined,
+        description ? `Description: ${description}` : undefined,
+        view ? schemaSection("Input schema", view.inputSchema) : undefined,
+        view ? schemaSection("Output schema", view.outputSchema) : undefined,
+        view ? schemaSection("Definitions", view.schemaDefinitions) : undefined,
+      ].filter((section): section is string => section !== undefined && section.length > 0);
+      return {
+        path,
+        name,
+        description,
+        integration: manifest.integration,
+        ...(manifest.connection ? { connection: manifest.connection } : {}),
+        ...(manifest.pluginId ? { plugin: manifest.pluginId } : {}),
+        fingerprint,
+        content: truncateToAiSearchLimit(sections.join("\n\n")),
+        metadata: {
+          path,
+          name,
+          description: description.slice(0, 1_000),
+          integration: manifest.integration,
+          connection: manifest.connection ?? "",
+        },
+      };
+    }),
   );
 };
 

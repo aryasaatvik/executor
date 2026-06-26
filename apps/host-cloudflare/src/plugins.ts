@@ -13,9 +13,11 @@ import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
 import {
+  makeAiSearchToolSearchBackend,
   makeVectorizeStore,
   ToolSearchBackend,
   withCloudflareLimits,
+  type AiSearchInstance,
   type VectorizeIndex,
 } from "@executor-js/plugin-semantic-search";
 
@@ -39,21 +41,25 @@ import {
 //
 // Semantic search follows the same opt-in-by-binding shape: the plugin is
 // always in the tuple (its reindex route keeps the API shape stable), but it is
-// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
-// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
-// Vectorize index + add the binding in wrangler.jsonc and set the secret.
+// inert until a search backend binding is present. Prefer Cloudflare AI Search
+// when bound; otherwise fall back to the Vectorize + Gemini backend.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
   secretKey: string,
   analytics?: AnalyticsEngineDataset,
+  aiSearch?: AiSearchInstance,
   vectorize?: VectorizeIndex,
   geminiApiKey?: string,
   searchNamespace?: string,
 ) => {
   const store = vectorize ? withCloudflareLimits(makeVectorizeStore(vectorize)) : undefined;
-  const semanticSearchBackend =
-    store && geminiApiKey
+  const semanticSearchBackend = aiSearch
+    ? makeAiSearchToolSearchBackend({
+        aiSearch,
+        namespace: searchNamespace,
+      })
+    : store && geminiApiKey
       ? ToolSearchBackend.vector({
           store,
           geminiApiKey,
