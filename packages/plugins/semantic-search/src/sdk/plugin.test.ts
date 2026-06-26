@@ -3,7 +3,7 @@ import { Effect } from "effect";
 
 import type { ToolDiscoveryProvider, ToolDiscoveryResult } from "@executor-js/sdk/core";
 
-import { makeWholeChunker } from "./chunker";
+import { SemanticSearchError } from "./errors";
 import { makeSemanticSearchExtension } from "./plugin";
 
 // A result whose integration/path is NOT the tenant id. This is exactly the case
@@ -23,18 +23,33 @@ const githubItem: ToolDiscoveryResult = {
 // by `search` (they drive indexing), so they stay undefined.
 const extensionWith = (provider: ToolDiscoveryProvider) =>
   makeSemanticSearchExtension({
-    namespace: "default", // tenant id — NOT a tool prefix
-    embedder: undefined,
-    store: undefined,
-    chunker: makeWholeChunker(),
-    fingerprints: undefined,
-    indexRuns: undefined,
-    indexJobs: undefined,
-    indexChunks: undefined,
-    blobs: undefined,
-    owner: undefined,
-    lexicalStore: undefined,
-    provider,
+    backend: {
+      namespace: "default", // tenant id — NOT a tool prefix
+      provider,
+      index: () => undefined as never,
+      reindex: () => Effect.die("unused"),
+      sweep: () => Effect.die("unused"),
+      search: (executor, input) =>
+        provider
+          .searchTools({
+            executor,
+            query: input.query,
+            namespace: input.namespace,
+            limit: input.limit ?? 20,
+            offset: 0,
+          })
+          .pipe(
+            Effect.map((page) => ({
+              namespace: "default",
+              query: input.query,
+              items: page.items,
+            })),
+            Effect.mapError(
+              (cause) => new SemanticSearchError({ message: "Test provider failed.", cause }),
+            ),
+          ),
+      status: () => Effect.die("unused"),
+    },
   });
 
 describe("makeSemanticSearchExtension — search namespace handling", () => {

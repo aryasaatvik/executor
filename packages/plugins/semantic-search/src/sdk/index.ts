@@ -3,6 +3,17 @@ export {
   type SemanticSearchPluginOptions,
   type SemanticSearchExtension,
 } from "./plugin";
+export {
+  ToolSearchBackend,
+  makeVectorToolSearchBackend,
+  type SemanticSearchRefreshResult,
+  type SemanticSearchResultPage,
+  type SemanticSearchStatus,
+  type ToolSearchBackend as ToolSearchBackendType,
+  type ToolSearchBackendFactory,
+  type ToolSearchBackendStorage,
+  type VectorToolSearchBackendOptions,
+} from "./tool-search-backend";
 export { makeVectorToolDiscoveryProvider } from "./provider";
 export {
   makeGeminiEmbedder,
