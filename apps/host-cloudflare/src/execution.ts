@@ -38,7 +38,8 @@ export const makeCloudflarePluginsProvider = (
   config: CloudflareConfig,
 ): Layer.Layer<PluginsProvider> =>
   Layer.succeed(PluginsProvider)({
-    plugins: () => makeCloudflarePlugins(config.secretKey),
+    plugins: () =>
+      makeCloudflarePlugins(config.secretKey, undefined, config.aiSearch, config.organizationId),
   });
 
 export const makeCloudflareHostConfig = (config: CloudflareConfig): Layer.Layer<HostConfig> =>
