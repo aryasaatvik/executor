@@ -4,6 +4,7 @@ import { Effect } from "effect";
 import { createExecutor, type Executor } from "./executor";
 import { Tenant } from "./ids";
 
+// Keep in sync with the unexported fallback cache defaults in executor.ts.
 const MEMORY_CACHE_CAPACITY = 2_048;
 const MEMORY_CACHE_TTL_MS = 10 * 60 * 1000;
 
