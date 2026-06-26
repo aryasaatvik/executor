@@ -225,7 +225,13 @@ export interface PluginStorageStatsInput<
 > extends PluginStorageAggregateFilter<TDefinition> {
   /** Numeric field the stats are computed over. */
   readonly field: PluginStorageCollectionIndexedField<TDefinition>;
-  /** Percentile fractions in [0, 1] (e.g. 0.5, 0.95). */
+  /**
+   * Percentile fractions in [0, 1] (e.g. 0.5, 0.95).
+   *
+   * SQLite-backed storage computes percentiles from all matching numeric values
+   * after projection because SQLite has no native percentile aggregate. Count,
+   * min, and max still run as SQL aggregates.
+   */
   readonly percentiles?: readonly number[];
 }
 
