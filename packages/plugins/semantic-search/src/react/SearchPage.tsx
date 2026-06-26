@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
+import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { RefreshCw, Search } from "lucide-react";
@@ -13,16 +14,18 @@ import {
   TableHeader,
   TableRow,
 } from "@executor-js/react/components/table";
+import type { InternalError } from "@executor-js/sdk/core";
 
 import type { SearchResponseType, StatusResponseType } from "../api/group";
 import { reindexMutation, searchAtom, statusAtom } from "./atoms";
 
 const SEARCH_LIMIT = 25;
 
+const internalErrorMessage = (cause: Cause.Cause<InternalError>): string => Cause.pretty(cause);
+
 // Operator/debug page for the semantic-search plugin: a live `tools.search` box
-// over the engine's discovery provider (Vectorize + FTS5/BM25 hybrid), an index
-// status line, and an explicit reindex trigger. Read-only against the catalog —
-// the only mutation is reindex.
+// over the engine's discovery provider, an index status line, and an explicit
+// reindex trigger. Read-only against the catalog, except for reindex.
 export function SearchPage() {
   const [input, setInput] = useState("");
   const [submitted, setSubmitted] = useState("");
@@ -31,10 +34,10 @@ export function SearchPage() {
 
   const searchResult = useAtomValue(
     searchAtom({ q: submitted, limit: SEARCH_LIMIT }),
-  ) as AsyncResult.AsyncResult<SearchResponseType, unknown>;
+  ) as AsyncResult.AsyncResult<SearchResponseType, InternalError>;
   const statusResult = useAtomValue(statusAtom) as AsyncResult.AsyncResult<
     StatusResponseType,
-    unknown
+    InternalError
   >;
   const refreshStatus = useAtomRefresh(statusAtom);
   const doReindex = useAtomSet(reindexMutation, { mode: "promiseExit" });
@@ -54,6 +57,11 @@ export function SearchPage() {
     onFailure: () => true,
     onSuccess: () => false,
   });
+  const searchError = AsyncResult.match(searchResult, {
+    onInitial: () => null,
+    onFailure: ({ cause }) => internalErrorMessage(cause),
+    onSuccess: () => null,
+  });
   const status = AsyncResult.match(statusResult, {
     onInitial: () => null,
     onFailure: () => null,
@@ -67,12 +75,12 @@ export function SearchPage() {
     setNotice(null);
     const exit = await doReindex({ reactivityKeys: [] });
     setReindexing(false);
+    refreshStatus();
     if (Exit.isFailure(exit)) {
-      setNotice("Reindex failed — a full-catalog index run can exceed the Worker CPU limit.");
+      setNotice("Reindex failed. Check server logs for the trace id.");
       return;
     }
-    setNotice("Reindex complete.");
-    refreshStatus();
+    setNotice("Reindex submitted.");
   };
 
   return (
@@ -85,8 +93,8 @@ export function SearchPage() {
             </h1>
             <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
               Run a live <span className="font-mono text-[12px]">tools.search</span> through the
-              engine's discovery provider — semantic (Vectorize) fused with lexical (FTS5/BM25) when
-              both are indexed. This is what the agent sees.
+              engine's configured discovery provider. On Cloudflare this uses the bound AI Search
+              instance. This is what the agent sees.
             </p>
           </div>
           <Button
@@ -122,9 +130,15 @@ export function SearchPage() {
         <div className="mb-6 text-[12px] text-muted-foreground">
           {status ? (
             <>
-              namespace <span className="font-mono">{status.namespace}</span> · indexed{" "}
+              namespace <span className="font-mono">{status.namespace}</span> · documents{" "}
               {status.indexed.toLocaleString()}
               {status.lexical !== null ? ` · lexical ${status.lexical.toLocaleString()}` : ""}
+              {status.queued !== undefined ? ` · queued ${status.queued.toLocaleString()}` : ""}
+              {status.running !== undefined ? ` · running ${status.running.toLocaleString()}` : ""}
+              {status.completed !== undefined
+                ? ` · completed ${status.completed.toLocaleString()}`
+                : ""}
+              {status.error !== undefined ? ` · error ${status.error.toLocaleString()}` : ""}
             </>
           ) : (
             "index status unavailable"
@@ -134,7 +148,7 @@ export function SearchPage() {
 
         {searchFailed ? (
           <div className="rounded-md border border-border px-4 py-8 text-center text-sm text-muted-foreground">
-            Search failed.
+            Search failed{searchError ? `: ${searchError}` : "."}
           </div>
         ) : submitted.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
@@ -144,8 +158,8 @@ export function SearchPage() {
           <div className="px-4 py-10 text-center text-sm text-muted-foreground">Searching…</div>
         ) : items.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-            No tools matched <span className="font-mono">{submitted}</span>. The index may be empty
-            — run a reindex.
+            No tools matched <span className="font-mono">{submitted}</span>. The AI Search index may
+            be empty. Run a reindex.
           </div>
         ) : (
           <Table>

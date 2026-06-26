@@ -1092,6 +1092,9 @@ export const scan = (
               name: manifest.name,
               integration: manifest.integration,
               description: manifest.description,
+              ...(manifest.sourceRevision === undefined
+                ? {}
+                : { sourceRevision: manifest.sourceRevision }),
               status: "skipped",
               fingerprint: manifest.indexFingerprint,
               oldFingerprint: storedRow.fingerprint,
@@ -1110,6 +1113,9 @@ export const scan = (
               name: manifest.name,
               integration: manifest.integration,
               description: manifest.description,
+              ...(manifest.sourceRevision === undefined
+                ? {}
+                : { sourceRevision: manifest.sourceRevision }),
               status: "pendingChunk",
               fingerprint: manifest.indexFingerprint,
               oldFingerprint: storedRow?.fingerprint,

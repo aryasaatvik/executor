@@ -3,14 +3,31 @@ export {
   type SemanticSearchPluginOptions,
   type SemanticSearchExtension,
 } from "./plugin";
-export { makeVectorToolDiscoveryProvider } from "./provider";
 export {
-  makeGeminiEmbedder,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_EMBEDDING_DIMENSIONS,
-  type ToolEmbedder,
-  type GeminiEmbedderOptions,
-} from "./embedder";
+  ToolSearchBackend,
+  makeVectorToolSearchBackend,
+  type SemanticSearchRefreshResult,
+  type SemanticSearchReindexBatchInput,
+  type SemanticSearchReindexBatchResult,
+  type SemanticSearchResultPage,
+  type SemanticSearchStatus,
+  type ToolSearchBackend as ToolSearchBackendType,
+  type ToolSearchBackendFactory,
+  type VectorToolSearchBackendStorage,
+  type VectorToolSearchBackendOptions,
+} from "./tool-search-backend";
+export {
+  makeAiSearchToolDiscoveryProvider,
+  makeAiSearchToolSearchBackend,
+  reindexAiSearch,
+  reindexAiSearchBatch,
+  statusAiSearch,
+  type AiSearchToolSearchBackendOptions,
+  type AiSearchToolSearchBackendStorage,
+} from "./ai-search";
+export { makeVectorToolDiscoveryProvider } from "./provider";
+export { makeEmbedder, type ToolEmbedder, type MakeEmbedderOptions } from "./embedder";
+export { makeHashEmbedder } from "./embedder-hash";
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export {
@@ -48,10 +65,15 @@ export { fingerprintTool, type FingerprintInput } from "./fingerprint";
 
 // Collections (plugin storage)
 export {
+  aiSearchItems,
+  AiSearchItemRow,
+  AiSearchItemStatus,
   toolFingerprints,
   indexRuns,
   indexJobs,
   indexChunks,
+  type AiSearchItemRow as AiSearchItemRowType,
+  type AiSearchItemStatus as AiSearchItemStatusType,
   FingerprintRow,
   IndexRun,
   IndexJob,
