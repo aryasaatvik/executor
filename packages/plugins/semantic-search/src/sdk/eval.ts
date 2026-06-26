@@ -1,16 +1,13 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { Cause, Effect, Exit, Layer } from "effect";
 
 import { ChunkerService, facetChunkerLayer, wholeChunkerLayer } from "./chunker-service";
 import type { ToolDocumentInput } from "./chunker";
 import { stripHtml, buildLexicalText } from "./documents";
-import {
-  EmbedderService,
-  geminiEmbedderLayer,
-  hashEmbedderLayer,
-  openAiCompatibleEmbedderLayer,
-} from "./embedding-service";
+import { EmbedderService, hashEmbedderLayer, embedderLayer } from "./embedding-service";
 import { VectorStoreService, zvecStoreLayer, sqliteVecStoreLayer } from "./store-service";
 import { GOLDEN, SAMPLE_GOLDEN } from "./eval-golden";
 import { makeFtsLexicalStore, makeFtsLexicalProvider } from "./store-fts";
@@ -666,21 +663,36 @@ const program = Effect.gen(function* () {
 // Layer selection from env
 // ---------------------------------------------------------------------------
 
-const embedderLayer = (): Layer.Layer<EmbedderService> => {
+const makeEvalEmbedderLayer = (): Layer.Layer<EmbedderService> => {
   const kind = process.env.EMBEDDER ?? "gemini";
   if (kind === "openai") {
-    return openAiCompatibleEmbedderLayer({
-      baseUrl: process.env.OPENAI_BASE_URL ?? "http://localhost:1234/v1",
-      model: process.env.OPENAI_MODEL ?? "text-embedding-3-small",
-      dimensions: DIMENSIONS,
+    const modelId = process.env.OPENAI_MODEL ?? "text-embedding-3-small";
+    const provider = createOpenAICompatible({
+      name: "openai-compatible",
+      baseURL: process.env.OPENAI_BASE_URL ?? "http://localhost:1234/v1",
       apiKey: process.env.OPENAI_API_KEY,
+    });
+    return embedderLayer({
+      model: provider.textEmbeddingModel(modelId),
+      modelId,
+      dimensions: DIMENSIONS,
+      documentProviderOptions: { "openai-compatible": { dimensions: DIMENSIONS } },
+      queryProviderOptions: { "openai-compatible": { dimensions: DIMENSIONS } },
     });
   }
   if (kind === "hash") return hashEmbedderLayer(DIMENSIONS);
-  return geminiEmbedderLayer({
-    apiKey: process.env.GEMINI_API_KEY?.trim() ?? "",
-    model: process.env.GEMINI_EMBEDDING_MODEL?.trim() || undefined,
+  const modelId = process.env.GEMINI_EMBEDDING_MODEL?.trim() || "gemini-embedding-2";
+  const google = createGoogleGenerativeAI({ apiKey: process.env.GEMINI_API_KEY?.trim() ?? "" });
+  return embedderLayer({
+    model: google.textEmbedding(modelId),
+    modelId,
     dimensions: DIMENSIONS,
+    documentProviderOptions: {
+      google: { outputDimensionality: DIMENSIONS, taskType: "RETRIEVAL_DOCUMENT" },
+    },
+    queryProviderOptions: {
+      google: { outputDimensionality: DIMENSIONS, taskType: "RETRIEVAL_QUERY" },
+    },
   });
 };
 
@@ -706,7 +718,9 @@ const chunkerLayer = (): Layer.Layer<ChunkerService> => {
 };
 
 const exit = await Effect.runPromiseExit(
-  program.pipe(Effect.provide(Layer.mergeAll(embedderLayer(), storeLayer(), chunkerLayer()))),
+  program.pipe(
+    Effect.provide(Layer.mergeAll(makeEvalEmbedderLayer(), storeLayer(), chunkerLayer())),
+  ),
 );
 if (Exit.isFailure(exit)) {
   console.error(Cause.pretty(exit.cause));
