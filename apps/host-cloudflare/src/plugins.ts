@@ -20,10 +20,8 @@ import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
 import {
-  makeVectorizeStore,
-  ToolSearchBackend,
-  withCloudflareLimits,
-  type VectorizeIndex,
+  makeAiSearchToolSearchBackend,
+  type AiSearchInstance,
 } from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
@@ -46,9 +44,7 @@ import {
 //
 // Semantic search follows the same opt-in-by-binding shape: the plugin is
 // always in the tuple (its reindex route keeps the API shape stable), but it is
-// inert — the engine keeps its lexical `tools.search` — until BOTH a `vectorize`
-// binding and the `GEMINI_API_KEY` secret are present. To enable: create a
-// Vectorize index + add the binding in wrangler.jsonc and set the secret.
+// inert until the Cloudflare AI Search binding is present.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
@@ -57,22 +53,16 @@ export const makeCloudflarePlugins = (
     readonly activeToolkitSlug?: string;
     readonly allowLocalNetwork?: boolean;
     readonly analytics?: AnalyticsEngineDataset;
-    readonly vectorize?: VectorizeIndex;
-    readonly geminiApiKey?: string;
+    readonly aiSearch?: AiSearchInstance;
     readonly searchNamespace?: string;
   } = {},
 ) => {
-  const store = options.vectorize
-    ? withCloudflareLimits(makeVectorizeStore(options.vectorize))
+  const semanticSearchBackend = options.aiSearch
+    ? makeAiSearchToolSearchBackend({
+        aiSearch: options.aiSearch,
+        namespace: options.searchNamespace,
+      })
     : undefined;
-  const semanticSearchBackend =
-    store && options.geminiApiKey
-      ? ToolSearchBackend.vector({
-          store,
-          geminiApiKey: options.geminiApiKey,
-          namespace: options.searchNamespace,
-        })
-      : undefined;
   return [
     openApiHttpPlugin({
       presets: [...googleCatalog, ...microsoftCatalog],
