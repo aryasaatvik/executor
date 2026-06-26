@@ -1035,6 +1035,7 @@ describe("ToolSearchIndex manifest snapshot", () => {
   it.effect("scans the create-time manifest snapshot when the live manifest changes", () =>
     Effect.gen(function* () {
       const [tool] = makeTools(1);
+      expect(tool).toBeDefined();
       if (tool === undefined) return;
       let liveManifests = [manifestForTool(tool, "fp-at-create", "source-at-create")];
       const counters = { manifest: 0 };
