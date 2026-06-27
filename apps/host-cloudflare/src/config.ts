@@ -1,11 +1,11 @@
 import type {
   D1Database,
   DurableObjectNamespace,
+  AiSearchInstance,
   KVNamespace,
   R2Bucket,
 } from "@cloudflare/workers-types";
 import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
-import type { AiSearchInstance } from "@executor-js/plugin-semantic-search";
 
 import { isValidOrgSlug } from "@executor-js/api";
 import { missingPublicOriginWarning, resolvePublicOrigin } from "@executor-js/sdk/public-origin";

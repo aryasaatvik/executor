@@ -1,3 +1,4 @@
+import type { AiSearchInstance } from "@cloudflare/workers-types";
 import { openApiHttpPlugin } from "@executor-js/plugin-openapi/api";
 import {
   googleCatalog,
@@ -19,10 +20,7 @@ import {
 import { noopExecutionObserver } from "@executor-js/sdk";
 import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 import { semanticSearchHttpPlugin } from "@executor-js/plugin-semantic-search/api";
-import {
-  makeAiSearchToolSearchBackend,
-  type AiSearchInstance,
-} from "@executor-js/plugin-semantic-search";
+import { makeAiSearchToolSearchBackend } from "@executor-js/plugin-semantic-search";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
