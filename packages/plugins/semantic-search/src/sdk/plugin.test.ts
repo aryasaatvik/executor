@@ -29,6 +29,7 @@ const extensionWith = (provider: ToolDiscoveryProvider) =>
       provider,
       index: () => undefined as never,
       reindex: () => Effect.die("unused"),
+      reindexBatch: () => Effect.die("unused"),
       sweep: () => Effect.die("unused"),
       search: (executor, input) =>
         provider
@@ -110,6 +111,7 @@ describe("semanticSearchPlugin — backend storage", () => {
       namespace: "default",
       index: () => undefined as never,
       reindex: () => Effect.die("unused"),
+      reindexBatch: () => Effect.die("unused"),
       sweep: () => Effect.die("unused"),
       search: () => Effect.die("unused"),
       status: () => Effect.die("unused"),

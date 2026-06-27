@@ -330,9 +330,10 @@ export const collectToolSearchDocument = (
         metadata: {
           path,
           name,
-          description: description.slice(0, 1_000),
+          description: description.slice(0, 500),
           integration: manifest.integration,
           connection: manifest.connection ?? "",
+          plugin: manifest.pluginId ?? "",
         },
       };
     }),

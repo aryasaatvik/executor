@@ -20,6 +20,10 @@ export const makeSemanticSearchExtension = (deps: {
 }) => ({
   index: (executor: Executor) => deps.backend?.index(executor) ?? unconfiguredIndex,
   reindex: (executor: Executor) => deps.backend?.reindex(executor) ?? notConfigured(),
+  reindexBatch: (
+    executor: Executor,
+    input: Parameters<NonNullable<ToolSearchBackend["reindexBatch"]>>[1],
+  ) => deps.backend?.reindexBatch(executor, input) ?? notConfigured(),
   sweep: (executor: Executor) => deps.backend?.sweep(executor) ?? notConfigured(),
   search: (
     executor: Executor,
