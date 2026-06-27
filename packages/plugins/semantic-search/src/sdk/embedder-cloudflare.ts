@@ -36,20 +36,6 @@ const chunk = <A>(items: readonly A[], size: number): A[][] => {
   return out;
 };
 
-const normalizeVectors = (
-  response: Ai_Cf_Qwen_Qwen3_Embedding_0_6B_Output,
-  count: number,
-  dimensions: number,
-): readonly (readonly number[])[] | undefined => {
-  if (
-    response.data?.length === count &&
-    response.data.every((vector) => vector.length === dimensions)
-  ) {
-    return response.data;
-  }
-  return undefined;
-};
-
 export const makeCloudflareWorkersAiEmbedder = (
   options: CloudflareWorkersAiEmbedderOptions,
 ): ToolEmbedder => {
@@ -76,10 +62,14 @@ export const makeCloudflareWorkersAiEmbedder = (
             cause,
           }),
       });
-      const embeddings = normalizeVectors(response, texts.length, dimensions);
-      if (!embeddings) {
+      const embeddings = response.data;
+      if (
+        embeddings === undefined ||
+        embeddings.length !== texts.length ||
+        !embeddings.every((vector) => vector.length === dimensions)
+      ) {
         return yield* new SemanticSearchError({
-          message: `Cloudflare Workers AI returned ${response.data?.length ?? 0} vectors for ${texts.length} inputs with expected dimension ${dimensions}.`,
+          message: `Cloudflare Workers AI returned ${embeddings?.length ?? 0} vectors for ${texts.length} inputs with expected dimension ${dimensions}.`,
         });
       }
       return embeddings;
