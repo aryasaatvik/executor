@@ -11,11 +11,7 @@ import { Effect } from "effect";
 
 import { type Chunker, makeFacetChunker } from "./chunker";
 import { indexChunks, indexJobs, indexRuns, toolFingerprints } from "./collections";
-import {
-  makeCloudflareWorkersAiEmbedder,
-  type CloudflareWorkersAiEmbedderOptions,
-} from "./embedder-cloudflare";
-import { makeGeminiEmbedder, type GeminiEmbedderOptions, type ToolEmbedder } from "./embedder";
+import type { ToolEmbedder } from "./embedder";
 import { SemanticSearchError } from "./errors";
 import { makeHybridToolDiscoveryProvider } from "./hybrid";
 import { makeVectorToolDiscoveryProvider } from "./provider";
@@ -114,11 +110,6 @@ export interface ToolSearchBackendFactory<TStorage = unknown> {
 export interface VectorToolSearchBackendOptions {
   readonly namespace?: string;
   readonly store: VectorStore;
-  readonly workersAi?: CloudflareWorkersAiEmbedderOptions["ai"];
-  readonly geminiApiKey?: string;
-  readonly model?: string;
-  readonly dimensions?: number;
-  readonly embedderBatchSize?: number;
   readonly embedder?: ToolEmbedder;
   readonly chunker?: Chunker;
   readonly lexical?: ToolDiscoveryProvider;
@@ -143,24 +134,6 @@ export const unconfiguredIndex: ToolSearchIndex.Service = {
   status: () => notConfigured(),
   complete: () => notConfigured(),
 };
-
-const makeVectorEmbedder = (options: VectorToolSearchBackendOptions): ToolEmbedder | undefined =>
-  options.embedder ??
-  (options.workersAi
-    ? makeCloudflareWorkersAiEmbedder({
-        ai: options.workersAi,
-        dimensions: options.dimensions,
-        batchSize: options.embedderBatchSize,
-      })
-    : undefined) ??
-  (options.geminiApiKey
-    ? makeGeminiEmbedder({
-        apiKey: options.geminiApiKey,
-        model: options.model,
-        dimensions: options.dimensions,
-        batchSize: options.embedderBatchSize,
-      } satisfies GeminiEmbedderOptions)
-    : undefined);
 
 const makeVectorProvider = (input: {
   readonly namespace: string;
@@ -187,7 +160,7 @@ export const makeVectorToolSearchBackend = (
   options: VectorToolSearchBackendOptions,
 ): ToolSearchBackendFactory<VectorToolSearchBackendStorage> => {
   const namespace = options.namespace ?? "default";
-  const embedder = makeVectorEmbedder(options);
+  const embedder = options.embedder;
   const chunker = options.chunker ?? makeFacetChunker();
   const provider = makeVectorProvider({
     namespace,
