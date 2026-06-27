@@ -10,8 +10,7 @@ import { InternalError } from "@executor-js/api";
 // execution-history/graphql convention — the per-request executor is already
 // owner-scoped at the host edge, so there is no `:scopeId` segment.
 //
-//   - reindex (POST) indexes the whole tool catalog for the scoped tenant
-//     through the same index refresh/chunk/embed pipeline.
+//   - reindex (POST) uploads changed tool documents into Cloudflare AI Search.
 //   - search (GET) runs a live `tools.search` through the SAME provider the
 //     engine uses, so the operator console sees what the agent would.
 //   - status (GET) reports index population (vector fingerprints + lexical docs).
@@ -20,7 +19,7 @@ import { InternalError } from "@executor-js/api";
 // `capture` downgrades it to `InternalError`.
 // ---------------------------------------------------------------------------
 
-/** Result of an index run: counts for each category of tool processed. */
+/** Result of submitting changed documents to the backend index. */
 export const ReindexResponse = Schema.Struct({
   namespace: Schema.String,
   total: Schema.Number,

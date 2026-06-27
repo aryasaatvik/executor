@@ -3,8 +3,13 @@ import type { AiSearchInstance } from "@cloudflare/workers-types";
 import { type PluginStorageCollectionFacade, type PluginStorageEntry } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
-import { makeAiSearchToolDiscoveryProvider, reindexAiSearch } from "./ai-search";
+import {
+  makeAiSearchToolDiscoveryProvider,
+  reindexAiSearch,
+  reindexAiSearchBatch,
+} from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
+import { cyrb53 } from "./fingerprint";
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
 
@@ -191,6 +196,27 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
       expect(page.total).toBe(1);
     }),
   );
+
+  it.effect("returns an empty page without querying AI Search when local rows are empty", () =>
+    Effect.gen(function* () {
+      const provider = makeAiSearchToolDiscoveryProvider({
+        aiSearch: {
+          ...makeAiSearch(),
+          search: () => expect.unreachable("AI Search should not be queried"),
+        },
+        items: makeItemsCollection({ list: () => Effect.succeed([]) }),
+      });
+
+      const page = yield* provider!.searchTools({
+        executor: undefined as never,
+        query: "tool",
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(page).toMatchObject({ items: [], total: 0, hasMore: false, nextOffset: null });
+    }),
+  );
 });
 
 describe("reindexAiSearch", () => {
@@ -228,10 +254,9 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
-          put: ({ data }) =>
+          putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(data);
-              return { ...githubRow, data };
+              stored.push(...entries.map((entry) => entry.data));
             }),
         }),
         owner: "org",
@@ -267,9 +292,9 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([githubRow]),
-          remove: ({ key }) =>
+          removeMany: ({ keys }) =>
             Effect.sync(() => {
-              removed.push(key);
+              removed.push(...keys);
             }),
         }),
         owner: "org",
@@ -278,6 +303,318 @@ describe("reindexAiSearch", () => {
 
       expect(result.removed).toBe(1);
       expect(removed).toEqual(["github.default.main.repos.create"]);
+    }),
+  );
+
+  it.effect("batches local row writes before deleting replaced remote items", () =>
+    Effect.gen(function* () {
+      const deleted: string[] = [];
+      const stored: AiSearchItemRow[] = [];
+      const result = yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () =>
+              Effect.succeed([
+                {
+                  path: "github.default.main.repos.create",
+                  name: "repos.create",
+                  description: "Create a repository",
+                  integration: "github",
+                  fingerprintVersion: "v1",
+                  indexFingerprint: "new-fingerprint",
+                },
+              ]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            upload: async (name) => ({ id: `new:${name}`, key: name, status: "queued" }),
+            delete: async (id) => {
+              deleted.push(id);
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([githubRow]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.data));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
+      expect(stored[0]?.itemId).toMatch(/^new:tool-[a-z0-9]+\.md$/);
+      expect(stored[0]?.key).toBe(stored[0]?.itemId.replace(/^new:/, ""));
+      expect(deleted).toEqual(["item:github.repos.create.md"]);
+    }),
+  );
+
+  it.effect("records uploaded rows in bounded batches", () =>
+    Effect.gen(function* () {
+      const putManySizes: number[] = [];
+      const manifests = Array.from({ length: 55 }, (_, index) => ({
+        path: `github.default.main.repos.tool${index}`,
+        name: `repos.tool${index}`,
+        description: "Repository tool",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: `fingerprint-${index}`,
+      }));
+
+      const result = yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () => Effect.succeed(manifests),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            upload: async (name) => ({ id: `item:${name}`, key: name, status: "queued" }),
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              putManySizes.push(entries.length);
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(result.indexed).toBe(55);
+      expect(putManySizes).toEqual([25, 25, 5]);
+    }),
+  );
+
+  it.effect("records existing remote rows when a retry sees an orphaned AI Search item", () =>
+    Effect.gen(function* () {
+      const stored: AiSearchItemRow[] = [];
+      const manifest = {
+        path: "github.default.main.repos.create",
+        name: "repos.create",
+        description: "Create a repository",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: "fingerprint",
+      };
+      const fingerprint = "github.default.main.repos.create:v1:fingerprint:";
+      const itemName = `tool-${cyrb53(`${manifest.path}\u0000${fingerprint}`).toString(36)}.md`;
+
+      const result = yield* reindexAiSearchBatch({
+        executor: {
+          tools: {
+            manifest: () => Effect.succeed([manifest]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            list: async () => ({
+              result: [{ id: `remote:${itemName}`, key: itemName, status: "completed" }],
+              result_info: { count: 1, total_count: 1, page: 1, per_page: 50 },
+            }),
+            upload: async () => expect.unreachable("Existing remote item should be reused"),
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.data));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+        offset: 0,
+        pageSize: 128,
+      });
+
+      expect(result.indexed).toBe(1);
+      expect(stored).toMatchObject([
+        {
+          path: manifest.path,
+          itemId: `remote:${itemName}`,
+          key: itemName,
+          fingerprint,
+          status: "completed",
+        },
+      ]);
+    }),
+  );
+
+  it.effect("indexes one requested batch and returns the next offset", () =>
+    Effect.gen(function* () {
+      const stored: string[] = [];
+      const manifests = Array.from({ length: 130 }, (_, index) => ({
+        path: `github.default.main.repos.tool${index}`,
+        name: `repos.tool${index}`,
+        description: "Repository tool",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: `fingerprint-${index}`,
+      }));
+
+      const result = yield* reindexAiSearchBatch({
+        executor: {
+          tools: {
+            manifest: () => Effect.succeed(manifests),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            upload: async (name) => ({ id: `item:${name}`, key: name, status: "queued" }),
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.key));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+        offset: 0,
+        pageSize: 128,
+      });
+
+      expect(result).toMatchObject({
+        total: 130,
+        indexed: 128,
+        skipped: 0,
+        removed: 0,
+        offset: 0,
+        pageSize: 128,
+        nextOffset: 128,
+      });
+      expect(stored).toHaveLength(128);
+    }),
+  );
+
+  it.effect("retries rows whose remote AI Search item is errored", () =>
+    Effect.gen(function* () {
+      let uploadCount = 0;
+      const manifest = {
+        path: "github.default.main.repos.create",
+        name: "repos.create",
+        description: "Create a repository",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: "fingerprint",
+      };
+      const existing = {
+        ...githubRow,
+        data: {
+          ...githubRow.data,
+          fingerprint: "github.default.main.repos.create:v1:fingerprint:",
+        },
+      };
+
+      const result = yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () => Effect.succeed([manifest]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            list: async () => ({
+              result: [
+                {
+                  id: existing.data.itemId,
+                  key: existing.data.key,
+                  status: "error",
+                },
+              ],
+              result_info: { count: 1, total_count: 1, page: 1, per_page: 50 },
+            }),
+            upload: async (name) => {
+              uploadCount += 1;
+              return { id: `retry:${name}`, key: name, status: "queued" };
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([existing]),
+          putMany: () => Effect.void,
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0 });
+      expect(uploadCount).toBe(1);
+    }),
+  );
+
+  it.effect("uses a bounded AI Search item name for long tool paths", () =>
+    Effect.gen(function* () {
+      const uploadedNames: string[] = [];
+      const longPath = [
+        "cloudflare_api",
+        "org",
+        "aryalabs",
+        "accessBookmarkApplicationsDeprecated",
+        "accessBookmarkApplicationsDeprecatedCreateABookmarkApplication",
+      ].join(".");
+
+      yield* reindexAiSearch({
+        executor: {
+          tools: {
+            manifest: () =>
+              Effect.succeed([
+                {
+                  path: longPath,
+                  name: "Create a bookmark application",
+                  description: "Create a bookmark application",
+                  integration: "cloudflare_api",
+                  fingerprintVersion: "v1",
+                  indexFingerprint: "fingerprint",
+                },
+              ]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            upload: async (name) => {
+              uploadedNames.push(name);
+              return { id: `item:${name}`, key: name, status: "queued" };
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          putMany: () => Effect.void,
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(uploadedNames).toHaveLength(1);
+      expect(uploadedNames[0]).toMatch(/^tool-[a-z0-9]+\.md$/);
+      expect(uploadedNames[0]?.length).toBeLessThan(64);
     }),
   );
 });

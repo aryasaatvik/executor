@@ -55,6 +55,18 @@ export interface SemanticSearchRefreshResult {
   readonly removed: number;
 }
 
+export interface SemanticSearchReindexBatchInput {
+  readonly offset: number;
+  readonly pageSize: number;
+  readonly maxTools?: number;
+}
+
+export interface SemanticSearchReindexBatchResult extends SemanticSearchRefreshResult {
+  readonly offset: number;
+  readonly pageSize: number;
+  readonly nextOffset: number | null;
+}
+
 export interface ToolSearchBackend {
   readonly namespace: string;
   readonly provider?: ToolDiscoveryProvider;
@@ -62,6 +74,10 @@ export interface ToolSearchBackend {
   readonly reindex: (
     executor: Executor,
   ) => Effect.Effect<SemanticSearchRefreshResult, SemanticSearchError>;
+  readonly reindexBatch: (
+    executor: Executor,
+    input: SemanticSearchReindexBatchInput,
+  ) => Effect.Effect<SemanticSearchReindexBatchResult, SemanticSearchError>;
   readonly sweep: (executor: Executor) => Effect.Effect<
     {
       readonly namespace: string;
@@ -237,6 +253,7 @@ export const makeVectorToolSearchBackend = (
                 partitionCount: DEFAULT_IN_PROCESS_PARTITIONS,
               })
             : notConfigured(),
+        reindexBatch: () => notConfigured(),
         sweep: (executor) =>
           sweepRemoved({
             namespace,
