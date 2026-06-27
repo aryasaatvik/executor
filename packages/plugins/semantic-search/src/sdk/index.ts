@@ -26,18 +26,8 @@ export {
   type AiSearchToolSearchBackendStorage,
 } from "./ai-search";
 export { makeVectorToolDiscoveryProvider } from "./provider";
-export {
-  makeGeminiEmbedder,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_EMBEDDING_DIMENSIONS,
-  type ToolEmbedder,
-  type GeminiEmbedderOptions,
-} from "./embedder";
-export {
-  makeCloudflareWorkersAiEmbedder,
-  DEFAULT_CLOUDFLARE_WORKERS_AI_EMBEDDING_DIMENSIONS,
-  DEFAULT_CLOUDFLARE_WORKERS_AI_EMBEDDING_MODEL,
-} from "./embedder-cloudflare";
+export { makeEmbedder, type ToolEmbedder, type MakeEmbedderOptions } from "./embedder";
+export { makeHashEmbedder } from "./embedder-hash";
 export { type VectorStore, type VectorMatch, type VectorMatches, type VectorInput } from "./store";
 export { makeVectorizeStore, type VectorizeIndex, MAX_TOP_K } from "./store-cloudflare";
 export {
