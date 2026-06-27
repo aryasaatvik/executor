@@ -17,11 +17,12 @@
     "eval": "bun run src/sdk/eval.ts"
   },
   "dependencies": {
-    "@ai-sdk/google": "^3.0.80",
     "@executor-js/sdk": "workspace:*",
     "ai": "^6.0.191"
   },
   "devDependencies": {
+    "@ai-sdk/google": "^3.0.80",
+    "@ai-sdk/openai-compatible": "^1.0.39",
     "@cloudflare/workers-types": "^4.20250620.0",
     "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
