@@ -4,7 +4,7 @@ export interface GraphqlPreset {
   readonly summary: string;
   readonly url: string;
   readonly endpoint: string;
-  readonly icon?: string;
+  readonly logoDomain?: string;
   readonly featured?: boolean;
 }
 
@@ -15,7 +15,7 @@ export const graphqlPresets: readonly GraphqlPreset[] = [
     summary: "Repos, issues, PRs, and users via GitHub's GraphQL API.",
     url: "https://api.github.com/graphql",
     endpoint: "https://api.github.com/graphql",
-    icon: "https://svgl.app/library/github_dark.svg",
+    logoDomain: "github.com",
     featured: true,
   },
   {
@@ -24,7 +24,7 @@ export const graphqlPresets: readonly GraphqlPreset[] = [
     summary: "Projects, merge requests, pipelines, and users.",
     url: "https://gitlab.com/api/graphql",
     endpoint: "https://gitlab.com/api/graphql",
-    icon: "https://integrations.sh/logo/gitlab.com",
+    logoDomain: "gitlab.com",
     featured: true,
   },
   {
@@ -33,7 +33,7 @@ export const graphqlPresets: readonly GraphqlPreset[] = [
     summary: "Issues, projects, teams, and cycles.",
     url: "https://api.linear.app/graphql",
     endpoint: "https://api.linear.app/graphql",
-    icon: "https://integrations.sh/logo/linear.app",
+    logoDomain: "linear.app",
     featured: true,
   },
   {
@@ -42,7 +42,7 @@ export const graphqlPresets: readonly GraphqlPreset[] = [
     summary: "Boards, items, columns, and workspace automation.",
     url: "https://api.monday.com/v2",
     endpoint: "https://api.monday.com/v2",
-    icon: "https://integrations.sh/logo/monday.com",
+    logoDomain: "monday.com",
   },
   {
     id: "anilist",
@@ -50,6 +50,6 @@ export const graphqlPresets: readonly GraphqlPreset[] = [
     summary: "Anime and manga database — no auth required.",
     url: "https://graphql.anilist.co",
     endpoint: "https://graphql.anilist.co",
-    icon: "https://integrations.sh/logo/anilist.co",
+    logoDomain: "anilist.co",
   },
 ];

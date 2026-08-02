@@ -19,7 +19,7 @@ import {
 import {
   IntegrationFavicon,
   integrationInferredUrl,
-  integrationPresetIconUrl,
+  integrationPresetLogoDomain,
 } from "../components/integration-favicon";
 import { CommandPalette } from "../components/command-palette";
 import { Wordmark } from "../components/wordmark";
@@ -227,7 +227,7 @@ function IntegrationList(props: { pathname: string; onNavigate?: () => void }) {
                 ].join(" ")}
               >
                 <IntegrationFavicon
-                  icon={integrationPresetIconUrl(
+                  logoDomain={integrationPresetLogoDomain(
                     { id: slug, kind: integration.kind, name, url: integration.displayUrl },
                     integrationPlugins,
                   )}

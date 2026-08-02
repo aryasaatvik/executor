@@ -4,7 +4,7 @@ export interface McpRemotePreset {
   readonly summary: string;
   readonly url: string;
   readonly endpoint: string;
-  readonly icon?: string;
+  readonly logoDomain?: string;
   readonly featured?: boolean;
   readonly transport?: undefined;
 }
@@ -13,7 +13,7 @@ export interface McpStdioPreset {
   readonly id: string;
   readonly name: string;
   readonly summary: string;
-  readonly icon?: string;
+  readonly logoDomain?: string;
   readonly featured?: boolean;
   readonly transport: "stdio";
   readonly command: string;
@@ -30,7 +30,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Deterministic MCP fixtures for validating native text and image content.",
     url: "https://emulators.dev/mcp/query/mcp?token=demo-token",
     endpoint: "https://emulators.dev/mcp/query/mcp?token=demo-token",
-    icon: "https://integrations.sh/logo/emulators.dev",
+    logoDomain: "emulators.dev",
   },
   {
     id: "deepwiki",
@@ -38,7 +38,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Search and read documentation from any GitHub repo.",
     url: "https://mcp.deepwiki.com/mcp",
     endpoint: "https://mcp.deepwiki.com/mcp",
-    icon: "https://integrations.sh/logo/deepwiki.com",
+    logoDomain: "deepwiki.com",
     featured: true,
   },
   {
@@ -47,7 +47,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Search messages, read canvases, and write Slack updates via MCP.",
     url: "https://mcp.slack.com/mcp",
     endpoint: "https://mcp.slack.com/mcp",
-    icon: "https://integrations.sh/logo/slack.com",
+    logoDomain: "slack.com",
     featured: true,
   },
   {
@@ -56,7 +56,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Up-to-date docs and code examples for any library.",
     url: "https://mcp.context7.com/mcp",
     endpoint: "https://mcp.context7.com/mcp",
-    icon: "https://integrations.sh/logo/context7.com",
+    logoDomain: "context7.com",
     featured: true,
   },
   {
@@ -65,7 +65,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Cloud browser sessions for web scraping and automation.",
     url: "https://mcp.browserbase.com/mcp",
     endpoint: "https://mcp.browserbase.com/mcp",
-    icon: "https://integrations.sh/logo/browserbase.com",
+    logoDomain: "browserbase.com",
     featured: true,
   },
   {
@@ -74,7 +74,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Crawl and scrape websites into structured data.",
     url: "https://mcp.firecrawl.dev/mcp",
     endpoint: "https://mcp.firecrawl.dev/mcp",
-    icon: "https://integrations.sh/logo/firecrawl.dev",
+    logoDomain: "firecrawl.dev",
     featured: true,
   },
   {
@@ -83,7 +83,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Serverless Postgres — branches, queries, and management.",
     url: "https://mcp.neon.tech/mcp",
     endpoint: "https://mcp.neon.tech/mcp",
-    icon: "https://integrations.sh/logo/neon.tech",
+    logoDomain: "neon.tech",
     featured: true,
   },
   {
@@ -92,7 +92,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Query, analyze, and monitor your logs and event data.",
     url: "https://mcp.axiom.co/mcp",
     endpoint: "https://mcp.axiom.co/mcp",
-    icon: "https://integrations.sh/logo/axiom.co",
+    logoDomain: "axiom.co",
     featured: true,
   },
   {
@@ -101,7 +101,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Manage payments, subscriptions, and billing via MCP.",
     url: "https://mcp.stripe.com",
     endpoint: "https://mcp.stripe.com",
-    icon: "https://integrations.sh/logo/stripe.com",
+    logoDomain: "stripe.com",
     featured: true,
   },
   {
@@ -110,7 +110,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Issues, projects, teams, and cycles via MCP.",
     url: "https://mcp.linear.app/mcp",
     endpoint: "https://mcp.linear.app/mcp",
-    icon: "https://integrations.sh/logo/linear.app",
+    logoDomain: "linear.app",
     featured: true,
   },
   {
@@ -119,7 +119,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Databases, pages, blocks, and search via MCP.",
     url: "https://mcp.notion.com/mcp",
     endpoint: "https://mcp.notion.com/mcp",
-    icon: "https://integrations.sh/logo/notion.com",
+    logoDomain: "notion.com",
     featured: true,
   },
   {
@@ -128,7 +128,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Error monitoring, issues, and performance data.",
     url: "https://mcp.sentry.dev/mcp",
     endpoint: "https://mcp.sentry.dev/mcp",
-    icon: "https://svgl.app/library/sentry.svg",
+    logoDomain: "sentry.io",
   },
   {
     id: "cloudflare",
@@ -136,13 +136,13 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "Workers, KV, D1, R2, and DNS management via MCP.",
     url: "https://mcp.cloudflare.com/mcp",
     endpoint: "https://mcp.cloudflare.com/mcp",
-    icon: "https://integrations.sh/logo/cloudflare.com",
+    logoDomain: "cloudflare.com",
   },
   {
     id: "chrome-devtools",
     name: "Chrome DevTools",
     summary: "Debug a live Chrome browser session via local stdio.",
-    icon: "https://integrations.sh/logo/chrome.com",
+    logoDomain: "chrome.com",
     featured: true,
     transport: "stdio",
     command: "npx",

@@ -43,7 +43,7 @@ import {
 } from "@executor-js/react/components/alert-dialog";
 import {
   IntegrationFavicon,
-  integrationPresetIconUrl,
+  integrationPresetLogoDomain,
 } from "@executor-js/react/components/integration-favicon";
 import {
   Dialog,
@@ -199,7 +199,7 @@ type ToolkitConnectionGroup = {
 type IntegrationMeta = {
   readonly name: string;
   readonly integrationId: string;
-  readonly icon?: string | null;
+  readonly logoDomain?: string | null;
   readonly url?: string;
 };
 
@@ -336,7 +336,7 @@ const integrationMetaFor = (
   return {
     name: integrationSummary.name,
     integrationId: group.integration,
-    icon: integrationPresetIconUrl(integrationSummary, integrationPlugins),
+    logoDomain: integrationPresetLogoDomain(integrationSummary, integrationPlugins),
     ...(integrationSummary.url ? { url: integrationSummary.url } : {}),
   };
 };
@@ -347,7 +347,7 @@ type ConfiguredConnectionView = {
   readonly subtitle: string;
   readonly pattern: string;
   readonly integrationId: string;
-  readonly icon?: string | null;
+  readonly logoDomain?: string | null;
   readonly url?: string;
 };
 
@@ -378,7 +378,7 @@ const configuredConnectionViews = (
       subtitle: connectionDisplaySubtitleForHost(group, meta, showOwnerLabels),
       pattern: connection.pattern,
       integrationId: meta.integrationId,
-      icon: meta.icon,
+      logoDomain: meta.logoDomain,
       ...(meta.url ? { url: meta.url } : {}),
     };
   });
@@ -436,7 +436,7 @@ function ToolkitConnectionIconStack(props: { connections: readonly ConfiguredCon
             className="flex size-5 items-center justify-center rounded-sm border border-background bg-card shadow-xs"
           >
             <IntegrationFavicon
-              icon={connection.icon}
+              logoDomain={connection.logoDomain}
               integrationId={connection.integrationId}
               url={connection.url}
               size={14}
@@ -886,7 +886,7 @@ function AddConnectionDialog(props: {
                     >
                       <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/30">
                         <IntegrationFavicon
-                          icon={meta.icon}
+                          logoDomain={meta.logoDomain}
                           integrationId={meta.integrationId}
                           url={meta.url}
                           size={18}
