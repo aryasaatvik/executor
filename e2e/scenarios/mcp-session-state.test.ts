@@ -93,7 +93,6 @@ scenario(
           name: "Session-stateful MCP",
           endpoint: server.url,
           slug,
-          remoteTransport: "streamable-http",
         },
       });
 

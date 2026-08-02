@@ -60,6 +60,11 @@ const OrgAuthMiddleware = HttpRouter.middleware<{ provides: AuthContext }>()(
           name: session.name,
           avatarUrl: session.avatarUrl,
           roles: [],
+          actor: {
+            kind: "user",
+            id: session.accountId,
+            label: session.name ?? session.email,
+          },
         });
 
         return yield* Effect.provideService(httpEffect, AuthContext, auth);
