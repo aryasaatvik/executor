@@ -17,6 +17,36 @@ import {
 const now = 1_780_000_000_000;
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
+const D1_JSON_COLUMNS = new Set([
+  "config",
+  "health_check",
+  "item_ids",
+  "last_health",
+  "provider_state",
+  "input_schema",
+  "output_schema",
+  "annotations",
+  "data",
+]);
+
+const d1BinaryJsonClient = (client: SqliteDataMigrationClient): SqliteDataMigrationClient => ({
+  execute: async (stmt) => {
+    const result = await client.execute(stmt);
+    return {
+      rows: result.rows.map((row) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [
+            key,
+            D1_JSON_COLUMNS.has(key) && typeof value === "string"
+              ? new TextEncoder().encode(value)
+              : value,
+          ]),
+        ),
+      ),
+    };
+  },
+});
+
 const insertIntegration = (
   client: SqliteDataMigrationClient,
   row: {
@@ -283,6 +313,24 @@ describe("providerServiceSplitDataMigration", () => {
         client.execute("SELECT slug, plugin_id FROM integration ORDER BY slug"),
       );
       expect(integrations.rows).toEqual([{ slug: "google", plugin_id: "google" }]);
+
+      yield* Effect.promise(() => db.close());
+    }),
+  );
+
+  it.effect("decodes binary JSON returned by D1", () =>
+    Effect.gen(function* () {
+      const db = yield* Effect.promise(() => createSqliteTestFumaDb({ tables: collectTables() }));
+      const client = db.client;
+
+      yield* seedCalendarOrg(client);
+
+      expect(yield* runSqliteProviderServiceSplitMigration(d1BinaryJsonClient(client))).toBe(1);
+
+      const integrations = yield* Effect.promise(() =>
+        client.execute("SELECT slug, plugin_id FROM integration ORDER BY slug"),
+      );
+      expect(integrations.rows).toEqual([{ slug: "google_calendar", plugin_id: "openapi" }]);
 
       yield* Effect.promise(() => db.close());
     }),
