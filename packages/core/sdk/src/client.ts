@@ -109,8 +109,8 @@ export interface IntegrationPreset {
   /** Endpoint passed to agent-facing probe/add tools when their schema
    *  uses `endpoint` instead of `url`. */
   readonly endpoint?: string;
-  /** Optional icon URL (favicon, logo). */
-  readonly icon?: string;
+  /** Canonical brand domain resolved through integrations.sh/logo by the client. */
+  readonly logoDomain?: string;
   /** Shown in the top-level grid on the integrations page when true. */
   readonly featured?: boolean;
   readonly family?: string;

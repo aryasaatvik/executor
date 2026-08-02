@@ -10,7 +10,6 @@ export interface GooglePreset {
   readonly name: string;
   readonly summary: string;
   readonly url?: string;
-  readonly icon?: string;
   readonly featured?: boolean;
 }
 
@@ -27,17 +26,14 @@ export type GoogleOpenApiPreset = GooglePreset & {
 const gd = (service: string, version: string) =>
   `https://www.googleapis.com/discovery/v1/apis/${service}/${version}/rest`;
 
-const GOOGLE_G = "https://fonts.gstatic.com/s/i/productlogos/googleg/v6/192px.svg";
 export const GOOGLE_BUNDLE_PRESET_ID = "google";
 export const GOOGLE_PHOTOS_PRESET_ID = "google-photos";
-export const GOOGLE_PHOTOS_ICON =
-  "https://www.gstatic.com/images/branding/product/2x/photos_96dp.png";
+const GOOGLE_LOGO_DOMAIN = "google.com";
 
 export const googleOpenApiBundlePreset: GooglePreset = {
   id: GOOGLE_BUNDLE_PRESET_ID,
   name: "Google",
   summary: "Bundle Gmail, Calendar, Drive, Docs, and other Google APIs into one integration.",
-  icon: GOOGLE_G,
   featured: true,
 };
 
@@ -45,7 +41,6 @@ export const googlePhotosOpenApiBundlePreset: GooglePreset = {
   id: GOOGLE_PHOTOS_PRESET_ID,
   name: "Google Photos",
   summary: "Albums, uploads, app-created media, and user-selected picker media.",
-  icon: GOOGLE_PHOTOS_ICON,
   featured: true,
 };
 
@@ -55,7 +50,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Calendar",
     summary: "Calendars, events, ACLs, and scheduling.",
     url: gd("calendar", "v3"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/calendar_2020q4/v8/192px.svg",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -64,7 +58,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Meet",
     summary: "Meeting spaces, conference records, participants, recordings, and transcripts.",
     url: "https://meet.googleapis.com/$discovery/rest?version=v2",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/meet_2020q4/v8/192px.svg",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -73,7 +66,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Gmail",
     summary: "Messages, threads, labels, and drafts.",
     url: gd("gmail", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/gmail_2020q4/v8/web-96dp/logo_gmail_2020q4_color_2x_web_96dp.png",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -82,7 +74,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Sheets",
     summary: "Spreadsheets, values, ranges, and formatting.",
     url: gd("sheets", "v4"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/sheets_2020q4/v8/192px.svg",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -91,7 +82,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Drive",
     summary: "Files, folders, permissions, and shared drives.",
     url: gd("drive", "v3"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/drive_2020q4/v8/192px.svg",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -100,7 +90,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Docs",
     summary: "Documents, structural edits, and formatting.",
     url: gd("docs", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/docs_2020q4/v12/192px.svg",
     featured: true,
     oauthAudience: "standard-user",
   },
@@ -109,7 +98,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Slides",
     summary: "Presentations, slides, page elements, and deck updates.",
     url: gd("slides", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/slides_2020q4/v12/192px.svg",
     oauthAudience: "standard-user",
   },
   {
@@ -117,7 +105,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Forms",
     summary: "Forms, questions, responses, and quizzes.",
     url: "https://forms.googleapis.com/$discovery/rest?version=v1",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/forms_2020q4/v6/192px.svg",
     oauthAudience: "standard-user",
   },
   {
@@ -125,7 +112,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Tasks",
     summary: "Task lists, task items, notes, and due dates.",
     url: gd("tasks", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/tasks/v5/192px.svg",
     oauthAudience: "standard-user",
   },
   {
@@ -133,7 +119,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google People",
     summary: "Contacts, profiles, directory people, and contact groups.",
     url: gd("people", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/contacts_2022/v2/192px.svg",
     oauthAudience: "standard-user",
   },
   {
@@ -141,7 +126,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Photos Library",
     summary: "Albums, uploads, and app-created media through Google Photos.",
     url: gd("photoslibrary", "v1"),
-    icon: GOOGLE_PHOTOS_ICON,
     oauthAudience: "advanced-user",
   },
   {
@@ -149,7 +133,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Photos Picker",
     summary: "Picker sessions and user-selected Google Photos media items.",
     url: "https://photospicker.googleapis.com/$discovery/rest?version=v1",
-    icon: GOOGLE_PHOTOS_ICON,
     oauthAudience: "advanced-user",
   },
   {
@@ -157,7 +140,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Chat",
     summary: "Spaces, messages, members, reactions, and chat workflows.",
     url: gd("chat", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/chat_2020q4/v8/192px.svg",
     oauthAudience: "advanced-user",
   },
   {
@@ -165,7 +147,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Keep",
     summary: "Create, list, delete, and share notes; download attachments.",
     url: "https://keep.googleapis.com/$discovery/rest?version=v1",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/keep_2020q4/v8/192px.svg",
     oauthAudience: "unsupported-user",
   },
   {
@@ -173,7 +154,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "YouTube Data",
     summary: "Channels, playlists, videos, comments, and uploads.",
     url: gd("youtube", "v3"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/youtube/v9/192px.svg",
     oauthAudience: "advanced-user",
   },
   {
@@ -181,7 +161,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Search Console",
     summary: "Sites, sitemaps, URL inspection, and search performance.",
     url: gd("searchconsole", "v1"),
-    icon: GOOGLE_G,
     oauthAudience: "standard-user",
   },
   {
@@ -189,7 +168,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Classroom",
     summary: "Courses, rosters, coursework, and grading.",
     url: gd("classroom", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/classroom/v7/192px.svg",
     oauthAudience: "advanced-user",
   },
   {
@@ -197,7 +175,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Admin Directory",
     summary: "Users, groups, org units, roles, and domain resources.",
     url: "https://admin.googleapis.com/$discovery/rest?version=directory_v1",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/admin_2020q4/v6/192px.svg",
     oauthAudience: "workspace-admin",
   },
   {
@@ -205,7 +182,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Admin Reports",
     summary: "Audit events, usage reports, and admin activity logs.",
     url: "https://admin.googleapis.com/$discovery/rest?version=reports_v1",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/admin_2020q4/v6/192px.svg",
     oauthAudience: "workspace-admin",
   },
   {
@@ -213,7 +189,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Apps Script",
     summary: "Projects, deployments, versions, processes, and metrics.",
     url: gd("script", "v1"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/apps_script/v10/192px.svg",
     oauthAudience: "advanced-user",
   },
   {
@@ -221,7 +196,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google BigQuery",
     summary: "Datasets, tables, jobs, and analytical queries.",
     url: gd("bigquery", "v2"),
-    icon: "https://fonts.gstatic.com/s/i/productlogos/google_cloud/v6/192px.svg",
     oauthAudience: "advanced-user",
   },
   {
@@ -229,7 +203,6 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     name: "Google Cloud Resource Manager",
     summary: "Projects, folders, organizations, and IAM hierarchy.",
     url: "https://cloudresourcemanager.googleapis.com/$discovery/rest?version=v3",
-    icon: "https://fonts.gstatic.com/s/i/productlogos/google_cloud/v6/192px.svg",
     oauthAudience: "advanced-user",
   },
 ];
@@ -342,7 +315,7 @@ export const googleCatalog: readonly IntegrationPreset[] = googleOpenApiPresets
     name: preset.name,
     summary: preset.summary,
     ...(preset.url ? { url: preset.url } : {}),
-    ...(preset.icon ? { icon: preset.icon } : {}),
+    logoDomain: GOOGLE_LOGO_DOMAIN,
     ...(preset.featured ? { featured: preset.featured } : {}),
     family: "google",
     specFormat: "google-discovery",

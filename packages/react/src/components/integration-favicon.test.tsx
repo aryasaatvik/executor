@@ -5,7 +5,8 @@ import {
   integrationFaviconUrl,
   integrationInferredUrl,
   integrationLocalIconUrl,
-  integrationPresetIconUrl,
+  integrationLogoUrl,
+  integrationPresetLogoDomain,
 } from "./integration-favicon";
 
 describe("IntegrationFavicon", () => {
@@ -26,6 +27,12 @@ describe("IntegrationFavicon", () => {
     );
   });
 
+  it("resolves canonical preset logo domains through the logo proxy", () => {
+    expect(integrationLogoUrl("google.com", 16)).toBe(
+      "https://integrations.sh/logo/google.com?sz=32",
+    );
+  });
+
   it("falls through to the placeholder when the proxy fails", () => {
     const url = "https://api.github.com/graphql";
     const primary = integrationFaviconSrc({ url, size: 20 });
@@ -41,30 +48,33 @@ describe("IntegrationFavicon", () => {
   it("resolves the Executor sidebar icon only when the integration id is threaded (cloud/self-host repro)", () => {
     // Reconstruct the props the multiplayer shell derives for the built-in
     // executor integration (EXECUTOR_INTEGRATION: kind "built-in", name "Executor", no
-    // displayUrl). The sidebar's IntegrationList builds icon/url exactly this way.
+    // displayUrl). The sidebar's IntegrationList builds logoDomain/url exactly this way.
     const slug = "executor";
     const name = "Executor";
-    const icon = integrationPresetIconUrl({ id: slug, kind: "built-in", name, url: undefined }, []);
+    const logoDomain = integrationPresetLogoDomain(
+      { id: slug, kind: "built-in", name, url: undefined },
+      [],
+    );
     const url = integrationInferredUrl({ id: slug, name }) ?? undefined;
 
     // The built-in integration matches no preset and has no inferable host, so the
-    // integrationId branch is the only thing that can resolve its icon.
-    expect(icon).toBeNull();
+    // integrationId branch is the only thing that can resolve its logo.
+    expect(logoDomain).toBeNull();
     expect(url).toBeUndefined();
 
     // Bug: cloud/self-host dropped integrationId, so the cascade fell through to null
     // and rendered the neutral BoxIcon placeholder.
-    expect(integrationFaviconSrc({ icon, url, size: 16 })).toBeNull();
+    expect(integrationFaviconSrc({ logoDomain, url, size: 16 })).toBeNull();
 
     // Fix: threading integrationId resolves the bundled Executor favicon.
-    expect(integrationFaviconSrc({ icon, integrationId: slug, url, size: 16 })).toBe(
+    expect(integrationFaviconSrc({ logoDomain, integrationId: slug, url, size: 16 })).toBe(
       "/favicon-32.png",
     );
   });
 
-  it("finds preset icons from an integration URL", () => {
+  it("finds preset logo domains from an integration URL", () => {
     expect(
-      integrationPresetIconUrl(
+      integrationPresetLogoDomain(
         {
           id: "google_sheets",
           kind: "googleDiscovery",
@@ -83,16 +93,16 @@ describe("IntegrationFavicon", () => {
                 name: "Google Sheets",
                 summary: "Spreadsheets.",
                 url: "https://www.googleapis.com/discovery/v1/apis/sheets/v4/rest",
-                icon: "https://example.com/sheets.svg",
+                logoDomain: "google.com",
               },
             ],
           },
         ],
       ),
-    ).toBe("https://example.com/sheets.svg");
+    ).toBe("google.com");
   });
 
-  it("does not fuzzy-match preset icons from names or slugs", () => {
+  it("does not fuzzy-match preset logo domains from names or slugs", () => {
     // Name/slug token matching is gone: without an exact defaultSlug or URL
     // match, the preset matcher declines and the cascade resolves through the
     // integrations.sh favicon instead, which is derived from the integration's
@@ -108,14 +118,14 @@ describe("IntegrationFavicon", () => {
             id: "sentry",
             name: "Sentry",
             summary: "Errors.",
-            icon: "https://example.com/sentry.png",
+            logoDomain: "sentry.io",
           },
         ],
       },
     ];
 
     expect(
-      integrationPresetIconUrl({ id: "sentry", kind: "mcp", name: "Sentry MCP" }, presets),
+      integrationPresetLogoDomain({ id: "sentry", kind: "mcp", name: "Sentry MCP" }, presets),
     ).toBeNull();
 
     // Migrated host-shaped integrations resolve through the inferred URL:
@@ -126,9 +136,9 @@ describe("IntegrationFavicon", () => {
     );
   });
 
-  it("prefers exact catalog defaultSlug icons for OpenAPI provider services", () => {
+  it("prefers exact catalog defaultSlug logo domains for OpenAPI provider services", () => {
     expect(
-      integrationPresetIconUrl({ id: "google_gmail", kind: "openapi", name: "Gmail" }, [
+      integrationPresetLogoDomain({ id: "google_gmail", kind: "openapi", name: "Gmail" }, [
         {
           key: "openapi",
           label: "OpenAPI",
@@ -140,12 +150,12 @@ describe("IntegrationFavicon", () => {
               name: "Gmail",
               summary: "Messages.",
               defaultSlug: "google_gmail",
-              icon: "https://example.com/gmail.png",
+              logoDomain: "google.com",
             },
           ],
         },
       ]),
-    ).toBe("https://example.com/gmail.png");
+    ).toBe("google.com");
   });
 
   it("matches presets on exact URL equality, not names", () => {
@@ -161,14 +171,14 @@ describe("IntegrationFavicon", () => {
             name: "Spotify",
             summary: "Music.",
             url: "https://api.spotify.com/v1",
-            icon: "https://example.com/spotify.png",
+            logoDomain: "spotify.com",
           },
         ],
       },
     ];
 
     expect(
-      integrationPresetIconUrl(
+      integrationPresetLogoDomain(
         {
           id: "spotify_web_api",
           kind: "openapi",
@@ -177,11 +187,11 @@ describe("IntegrationFavicon", () => {
         },
         presets,
       ),
-    ).toBe("https://example.com/spotify.png");
+    ).toBe("spotify.com");
 
     // Same name, different URL: no match — the URL-derived favicon takes over.
     expect(
-      integrationPresetIconUrl(
+      integrationPresetLogoDomain(
         {
           id: "spotify_web_api",
           kind: "openapi",
@@ -195,7 +205,7 @@ describe("IntegrationFavicon", () => {
 
   it("does not match a different brand sharing a word fragment (ClickHouse Cloud vs Cloudflare)", () => {
     expect(
-      integrationPresetIconUrl({ id: "clickhouse", kind: "mcp", name: "ClickHouse Cloud" }, [
+      integrationPresetLogoDomain({ id: "clickhouse", kind: "mcp", name: "ClickHouse Cloud" }, [
         {
           key: "mcp",
           label: "MCP",
@@ -206,7 +216,7 @@ describe("IntegrationFavicon", () => {
               id: "cloudflare",
               name: "Cloudflare",
               summary: "Workers, KV, D1, R2, and DNS management via MCP.",
-              icon: "https://integrations.sh/logo/cloudflare.com",
+              logoDomain: "cloudflare.com",
             },
           ],
         },

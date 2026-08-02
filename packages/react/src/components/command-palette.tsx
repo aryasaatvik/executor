@@ -5,7 +5,7 @@ import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { PlusIcon } from "lucide-react";
 import { trackEvent } from "../api/analytics";
 import type { Integration } from "@executor-js/sdk/shared";
-import { IntegrationFavicon, integrationPresetIconUrl } from "./integration-favicon";
+import { IntegrationFavicon, integrationPresetLogoDomain } from "./integration-favicon";
 import { integrationsOptimisticAtom } from "../api/atoms";
 import { useIntegrationPlugins } from "@executor-js/sdk/client";
 import {
@@ -70,7 +70,7 @@ export function CommandPalette(props: { open: boolean; onOpenChange: (open: bool
       presetName: string;
       presetSummary?: string;
       presetUrl?: string;
-      presetIcon?: string;
+      presetLogoDomain?: string;
     }> = [];
     for (const plugin of integrationPlugins) {
       for (const preset of plugin.presets ?? []) {
@@ -81,7 +81,7 @@ export function CommandPalette(props: { open: boolean; onOpenChange: (open: bool
           presetName: preset.name,
           presetSummary: preset.summary,
           presetUrl: preset.url,
-          presetIcon: preset.icon,
+          presetLogoDomain: preset.logoDomain,
         });
       }
     }
@@ -155,7 +155,7 @@ export function CommandPalette(props: { open: boolean; onOpenChange: (open: bool
                   onSelect={() => goToIntegration(s.id)}
                 >
                   <IntegrationFavicon
-                    icon={integrationPresetIconUrl(s, integrationPlugins)}
+                    logoDomain={integrationPresetLogoDomain(s, integrationPlugins)}
                     url={s.url}
                   />
                   <span className="flex-1 truncate">{s.name}</span>
@@ -193,16 +193,7 @@ export function CommandPalette(props: { open: boolean; onOpenChange: (open: bool
                 value={`preset ${e.presetName} ${e.presetSummary ?? ""} ${e.pluginLabel}`}
                 onSelect={() => goToPreset(e.pluginKey, e.presetId, e.presetUrl)}
               >
-                {e.presetIcon ? (
-                  <img
-                    src={e.presetIcon}
-                    alt=""
-                    className="size-4 shrink-0 object-contain"
-                    loading="lazy"
-                  />
-                ) : (
-                  <span aria-hidden className="size-4 shrink-0 rounded-sm bg-muted-foreground/20" />
-                )}
+                <IntegrationFavicon logoDomain={e.presetLogoDomain} url={e.presetUrl} />
                 <span className="flex-1 truncate">{e.presetName}</span>
                 <CommandShortcut>{e.pluginLabel}</CommandShortcut>
               </CommandItem>
