@@ -65,6 +65,20 @@ describe("IntegrationFavicon", () => {
     ).toBe("https://integrations.sh/logo/google.com?sz=32");
   });
 
+  it("uses dark-mode-safe local assets for integrations whose proxy logo is unsuitable", () => {
+    for (const integrationId of ["aws_docs", "code_grep", "exa_search_api", "openai_docs"]) {
+      const icon = integrationLocalIconUrl(integrationId);
+      expect(icon).toMatch(/^data:image\/svg\+xml,/);
+      expect(
+        integrationFaviconSrc({
+          integrationId,
+          url: "https://example.com",
+          size: 16,
+        }),
+      ).toBe(icon);
+    }
+  });
+
   it("resolves the Executor sidebar icon only when the integration id is threaded (cloud/self-host repro)", () => {
     // Reconstruct the props the multiplayer shell derives for the built-in
     // executor integration (EXECUTOR_INTEGRATION: kind "built-in", name "Executor", no
