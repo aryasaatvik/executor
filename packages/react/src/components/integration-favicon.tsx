@@ -4,8 +4,9 @@ import type { IntegrationPlugin } from "@executor-js/sdk/client";
 import { getDomain } from "tldts";
 
 // ---------------------------------------------------------------------------
-// IntegrationFavicon — renders a small favicon derived from an integration URL.
-// Falls back to a neutral icon if the URL is missing or the image fails to load.
+// IntegrationFavicon — renders a small logo through integrations.sh.
+// Falls back to a neutral icon if neither the preset nor integration yields a
+// registrable domain, or if the proxy image fails to load.
 // ---------------------------------------------------------------------------
 
 const integrationFaviconDomain = (url: string | undefined): string | null => {
@@ -19,7 +20,11 @@ const integrationFaviconDomain = (url: string | undefined): string | null => {
 // never resolve favicons against a third party directly.
 export function integrationFaviconUrl(url: string | undefined, size: number): string | null {
   const domain = integrationFaviconDomain(url);
-  if (!domain) return null;
+  return integrationLogoUrl(domain ?? undefined, size);
+}
+
+export function integrationLogoUrl(domain: string | undefined, size: number): string | null {
+  if (!domain || !getDomain(domain)) return null;
   return `https://integrations.sh/logo/${domain}?sz=${size * 2}`;
 }
 
@@ -95,7 +100,7 @@ export function integrationInferredUrl(integration: {
 // Cloud" rendered Cloudflare's logo via "cloud"). A missed match is recoverable
 // (the cascade falls through to the domain-derived integrations.sh favicon,
 // which is always the right brand); a wrong-brand icon is not.
-export function integrationPresetIconUrl(
+export function integrationPresetLogoDomain(
   integration: {
     readonly id: string;
     readonly kind: string;
@@ -107,8 +112,8 @@ export function integrationPresetIconUrl(
   const pluginKey = KIND_TO_PLUGIN_KEY[integration.kind] ?? integration.kind;
   const plugin = integrationPlugins.find((p) => p.key === pluginKey);
   const presets = plugin?.presets ?? [];
-  const exactSlugIcon = presets.find((p) => p.defaultSlug === integration.id)?.icon;
-  if (exactSlugIcon) return exactSlugIcon;
+  const exactSlugLogoDomain = presets.find((p) => p.defaultSlug === integration.id)?.logoDomain;
+  if (exactSlugLogoDomain) return exactSlugLogoDomain;
 
   const integrationUrl = normalizeUrl(integration.url);
   const integrationGoogleService = googleApiServiceFromUrl(integration.url);
@@ -122,17 +127,14 @@ export function integrationPresetIconUrl(
     );
   });
 
-  return preset?.icon ?? null;
+  return preset?.logoDomain ?? null;
 }
 
-// Resolution cascade for the rendered favicon: first non-null, non-failed of an
-// explicit preset icon, the bundled local icon for a known integration id, then
-// the integrations.sh logo proxy derived from the integration URL (which owns
-// its own upstream fallbacks). The built-in executor integration has no preset
-// icon and no URL, so it resolves ONLY through the integrationId branch: callers
-// that drop integrationId fall through to the neutral BoxIcon placeholder.
+// Resolution cascade: the built-in Executor mark, then the preset's canonical
+// domain, then the integration URL. Every remote image is served by
+// integrations.sh, so each console surface shares the same source and fallback.
 export function integrationFaviconSrc(args: {
-  icon?: string | null;
+  logoDomain?: string | null;
   integrationId?: string;
   url?: string;
   size: number;
@@ -141,26 +143,26 @@ export function integrationFaviconSrc(args: {
   const failedSrcs = args.failedSrcs ?? [];
   return (
     [
-      args.icon ?? null,
       integrationLocalIconUrl(args.integrationId),
+      integrationLogoUrl(args.logoDomain ?? undefined, args.size),
       integrationFaviconUrl(args.url, args.size),
     ].find((candidate) => candidate !== null && !failedSrcs.includes(candidate)) ?? null
   );
 }
 
 export function IntegrationFavicon({
-  icon,
+  logoDomain,
   integrationId,
   url,
   size = 16,
 }: {
-  icon?: string | null;
+  logoDomain?: string | null;
   integrationId?: string;
   url?: string;
   size?: number;
 }) {
   const [failedSrcs, setFailedSrcs] = useState<readonly string[]>([]);
-  const src = integrationFaviconSrc({ icon, integrationId, url, size, failedSrcs });
+  const src = integrationFaviconSrc({ logoDomain, integrationId, url, size, failedSrcs });
 
   if (!src) {
     return (

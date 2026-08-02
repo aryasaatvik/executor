@@ -565,7 +565,7 @@ export interface IntegrationPreset {
   readonly summary: string;
   readonly url?: string;
   readonly endpoint?: string;
-  readonly icon?: string;
+  readonly logoDomain?: string;
   readonly featured?: boolean;
   readonly family?: string;
   readonly specFormat?: string;

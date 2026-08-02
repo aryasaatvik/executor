@@ -38,7 +38,7 @@ import {
 import {
   IntegrationFavicon,
   integrationInferredUrl,
-  integrationPresetIconUrl,
+  integrationPresetLogoDomain,
 } from "../components/integration-favicon";
 import { groupIntegrations, type IntegrationFamilyGroup } from "../lib/integration-grouping";
 import { IntegrationHealthSummary } from "../components/integration-health-summary";
@@ -395,18 +395,11 @@ function PresetGrid(props: {
                     }}
                   >
                     <CardStackEntryMedia>
-                      {preset.icon ? (
-                        <img
-                          src={preset.icon}
-                          alt=""
-                          className="size-5 object-contain"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <svg viewBox="0 0 16 16" className="size-3.5" fill="none">
-                          <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.2" />
-                        </svg>
-                      )}
+                      <IntegrationFavicon
+                        logoDomain={preset.logoDomain}
+                        url={preset.url}
+                        size={20}
+                      />
                     </CardStackEntryMedia>
                     <CardStackEntryContent>
                       <CardStackEntryTitle>{preset.name}</CardStackEntryTitle>
@@ -454,7 +447,7 @@ function IntegrationGrid(props: { integrations: readonly Integration[] }) {
           data-testid={`integration-entry-${slug}`}
         >
           <IntegrationIconWithAccount
-            icon={integrationPresetIconUrl(
+            logoDomain={integrationPresetLogoDomain(
               { id: slug, kind: integration.kind, name, url: integration.displayUrl },
               integrationPlugins,
             )}
@@ -517,14 +510,15 @@ function IntegrationFamilyGroupCard(props: {
   renderEntry: (integration: Integration) => ReactNode;
 }) {
   const { group, plugin, renderEntry } = props;
-  const headerIcon =
-    plugin?.presets?.find((preset) => preset.family === group.family && preset.icon)?.icon ?? null;
+  const headerLogoDomain =
+    plugin?.presets?.find((preset) => preset.family === group.family && preset.logoDomain)
+      ?.logoDomain ?? null;
   return (
     <CardStack collapsible defaultOpen data-testid={`integration-group-${group.family}`}>
       <CardStackHeader>
         <span className="flex min-w-0 items-center gap-2">
           <span className="flex size-5 shrink-0 items-center justify-center">
-            <IntegrationFavicon icon={headerIcon} size={16} />
+            <IntegrationFavicon logoDomain={headerLogoDomain} size={16} />
           </span>
           <span className="truncate">{group.label}</span>
           <span className="shrink-0 font-mono text-xs font-normal text-muted-foreground">

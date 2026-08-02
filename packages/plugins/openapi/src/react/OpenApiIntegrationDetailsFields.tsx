@@ -38,7 +38,7 @@ export function OpenApiIntegrationDetailsFields(props: {
   readonly baseUrlHint?: string;
   readonly specUrl?: string;
   readonly onSpecUrlChange?: (value: string) => void;
-  readonly faviconIcon?: string | null;
+  readonly faviconLogoDomain?: string | null;
   readonly faviconUrl?: string;
   readonly namespaceReadOnly?: boolean;
   readonly specUrlDisabled?: boolean;
@@ -52,8 +52,12 @@ export function OpenApiIntegrationDetailsFields(props: {
     <CardStack>
       <CardStackContent className="border-t-0">
         <CardStackEntry>
-          {(props.faviconIcon || props.faviconUrl) && (
-            <IntegrationFavicon icon={props.faviconIcon} url={props.faviconUrl} size={16} />
+          {(props.faviconLogoDomain || props.faviconUrl) && (
+            <IntegrationFavicon
+              logoDomain={props.faviconLogoDomain}
+              url={props.faviconUrl}
+              size={16}
+            />
           )}
           <CardStackEntryContent>
             <CardStackEntryTitle>{props.title}</CardStackEntryTitle>

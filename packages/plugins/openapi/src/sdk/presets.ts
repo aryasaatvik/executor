@@ -6,7 +6,7 @@ export interface OpenApiPreset {
   readonly name: string;
   readonly summary: string;
   readonly url?: string;
-  readonly icon?: string;
+  readonly logoDomain?: string;
   readonly featured?: boolean;
   readonly family?: string;
   readonly specFormat?: string;
@@ -63,7 +63,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Figma",
     summary: "Files, comments, components, variables, projects, and webhooks.",
     url: "https://raw.githubusercontent.com/figma/rest-api-spec/refs/heads/main/openapi/openapi.yaml",
-    icon: "https://integrations.sh/logo/figma.com",
+    logoDomain: "figma.com",
     featured: true,
     defaultSlug: "figma_api",
     specOverrides: FIGMA_SPEC_OVERRIDES,
@@ -73,7 +73,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Stripe",
     summary: "Payments, subscriptions, customers, and invoices.",
     url: "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
-    icon: "https://integrations.sh/logo/stripe.com",
+    logoDomain: "stripe.com",
     featured: true,
   },
   {
@@ -81,7 +81,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "GitHub REST",
     summary: "Repos, issues, pull requests, actions, and users.",
     url: "https://raw.githubusercontent.com/github/rest-api-description/main/descriptions/api.github.com/api.github.com.json",
-    icon: "https://svgl.app/library/github_dark.svg",
+    logoDomain: "github.com",
     featured: true,
     authTemplate: [GITHUB_OAUTH_TEMPLATE],
   },
@@ -90,7 +90,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Vercel",
     summary: "Deployments, domains, projects, and edge config.",
     url: "https://openapi.vercel.sh",
-    icon: "https://integrations.sh/logo/vercel.com",
+    logoDomain: "vercel.com",
     featured: true,
   },
   {
@@ -98,7 +98,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Cloudflare",
     summary: "DNS, workers, pages, R2, and security rules.",
     url: "https://raw.githubusercontent.com/cloudflare/api-schemas/main/openapi.json",
-    icon: "https://integrations.sh/logo/cloudflare.com",
+    logoDomain: "cloudflare.com",
     featured: true,
   },
   {
@@ -106,7 +106,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Neon",
     summary: "Serverless Postgres: projects, branches, and endpoints.",
     url: "https://neon.tech/api_spec/release/v2.json",
-    icon: "https://integrations.sh/logo/neon.tech",
+    logoDomain: "neon.tech",
     featured: true,
   },
   {
@@ -114,7 +114,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "OpenAI",
     summary: "Models, files, responses, and fine-tuning.",
     url: "https://app.stainless.com/api/spec/documented/openai/openapi.documented.yml",
-    icon: "https://svgl.app/library/openai_dark.svg",
+    logoDomain: "openai.com",
     featured: true,
   },
   {
@@ -122,7 +122,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Sentry",
     summary: "Error tracking, performance monitoring, and releases.",
     url: "https://raw.githubusercontent.com/getsentry/sentry-api-schema/main/openapi-derefed.json",
-    icon: "https://svgl.app/library/sentry.svg",
+    logoDomain: "sentry.io",
     featured: true,
   },
   {
@@ -130,7 +130,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "PostHog",
     summary: "Product analytics, events, feature flags, and insights.",
     url: "https://us.posthog.com/api/schema/",
-    icon: "https://svgl.app/library/posthog.svg",
+    logoDomain: "posthog.com",
     featured: true,
   },
   {
@@ -138,7 +138,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Exa",
     summary: "Web search, similar links, content retrieval, and answers.",
     url: "https://raw.githubusercontent.com/exa-labs/openapi-spec/refs/heads/master/exa-openapi-spec.yaml",
-    icon: "https://integrations.sh/logo/exa.ai",
+    logoDomain: "exa.ai",
     featured: true,
   },
   {
@@ -146,7 +146,7 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Exa Websets",
     summary: "Websets, enrichments, webhooks, and monitors.",
     url: "https://raw.githubusercontent.com/exa-labs/openapi-spec/refs/heads/master/exa-websets-spec.yaml",
-    icon: "https://integrations.sh/logo/exa.ai",
+    logoDomain: "exa.ai",
     featured: true,
   },
   {
@@ -154,56 +154,56 @@ const openApiOnlyPresets: readonly OpenApiPreset[] = [
     name: "Axiom",
     summary: "Log ingestion, querying, datasets, and monitors.",
     url: "https://axiom.co/docs/restapi/versions/v2.json",
-    icon: "https://integrations.sh/logo/axiom.co",
+    logoDomain: "axiom.co",
   },
   {
     id: "asana",
     name: "Asana",
     summary: "Tasks, projects, teams, and workspace management.",
     url: "https://raw.githubusercontent.com/APIs-guru/openapi-directory/main/APIs/asana.com/1.0/openapi.yaml",
-    icon: "https://integrations.sh/logo/asana.com",
+    logoDomain: "asana.com",
   },
   {
     id: "twilio",
     name: "Twilio",
     summary: "SMS, voice, video, and messaging APIs.",
     url: "https://raw.githubusercontent.com/twilio/twilio-oai/main/spec/json/twilio_api_v2010.json",
-    icon: "https://integrations.sh/logo/twilio.com",
+    logoDomain: "twilio.com",
   },
   {
     id: "digitalocean",
     name: "DigitalOcean",
     summary: "Droplets, Kubernetes, databases, and networking.",
     url: "https://raw.githubusercontent.com/digitalocean/openapi/main/specification/DigitalOcean-public.v2.yaml",
-    icon: "https://integrations.sh/logo/digitalocean.com",
+    logoDomain: "digitalocean.com",
   },
   {
     id: "petstore",
     name: "Petstore",
     summary: "Classic OpenAPI demo, no auth required.",
     url: "https://petstore3.swagger.io/api/v3/openapi.json",
-    icon: "https://integrations.sh/logo/petstore3.swagger.io",
+    logoDomain: "petstore3.swagger.io",
   },
   {
     id: "val-town",
     name: "Val Town",
     summary: "Vals, runs, blobs, and email/web endpoints.",
     url: "https://api.val.town/openapi.json",
-    icon: "https://integrations.sh/logo/val.town",
+    logoDomain: "val.town",
   },
   {
     id: "resend",
     name: "Resend",
     summary: "Transactional email sending and domain management.",
     url: "https://raw.githubusercontent.com/resend/resend-openapi/main/resend.yaml",
-    icon: "https://integrations.sh/logo/resend.com",
+    logoDomain: "resend.com",
   },
   {
     id: "spotify",
     name: "Spotify",
     summary: "Tracks, albums, playlists, library, and playback.",
     url: "https://raw.githubusercontent.com/sonallux/spotify-web-api/refs/heads/main/official-spotify-open-api.yml",
-    icon: "https://svgl.app/library/spotify.svg",
+    logoDomain: "spotify.com",
   },
 ];
 

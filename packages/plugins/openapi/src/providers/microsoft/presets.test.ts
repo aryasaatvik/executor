@@ -272,12 +272,6 @@ describe("Microsoft Graph scope presets", () => {
     }
   });
 
-  it("declares product icons for each workload", () => {
-    for (const preset of microsoftGraphScopePresets) {
-      expect(preset.icon).toMatch(/^https:\/\/svgl\.app\/library\/.+\.svg$/);
-    }
-  });
-
   it("exports one catalog row per workload with stable slugs and Graph auth templates", () => {
     expect(microsoftCatalog.map((preset) => preset.defaultSlug)).toEqual([
       ...FROZEN_MICROSOFT_SLUGS,
