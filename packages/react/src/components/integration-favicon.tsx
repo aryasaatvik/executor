@@ -5,6 +5,35 @@ import { getDomain } from "tldts";
 
 import { EXECUTOR_ICON_SCHEME, resolveExecutorIcon } from "./preset-icon";
 
+const awsDocsIcon = new URL("../assets/integration-logos/aws-docs.svg", import.meta.url).href;
+const codeGrepIcon = new URL("../assets/integration-logos/code-grep.svg", import.meta.url).href;
+const exaSearchApiIcon = new URL("../assets/integration-logos/exa-search-api.svg", import.meta.url)
+  .href;
+const googleCalendarIcon = new URL(
+  "../assets/integration-logos/google-calendar.svg",
+  import.meta.url,
+).href;
+const googleDocsIcon = new URL("../assets/integration-logos/google-docs.svg", import.meta.url).href;
+const googleDriveIcon = new URL("../assets/integration-logos/google-drive.svg", import.meta.url)
+  .href;
+const googleFormsIcon = new URL("../assets/integration-logos/google-forms.svg", import.meta.url)
+  .href;
+const googleGmailIcon = new URL("../assets/integration-logos/google-gmail.svg", import.meta.url)
+  .href;
+const googleSearchConsoleIcon = new URL(
+  "../assets/integration-logos/google-search-console.svg",
+  import.meta.url,
+).href;
+const googleSheetsIcon = new URL("../assets/integration-logos/google-sheets.svg", import.meta.url)
+  .href;
+const googleSlidesIcon = new URL("../assets/integration-logos/google-slides.svg", import.meta.url)
+  .href;
+const googleYouTubeDataIcon = new URL(
+  "../assets/integration-logos/google-youtube-data.svg",
+  import.meta.url,
+).href;
+const openAiDocsIcon = new URL("../assets/integration-logos/openai-docs.svg", import.meta.url).href;
+
 // ---------------------------------------------------------------------------
 // IntegrationFavicon — renders a small favicon derived from an integration URL.
 // Falls back to a neutral icon if the URL is missing or the image fails to load.
@@ -25,9 +54,25 @@ export function integrationFaviconUrl(url: string | undefined, size: number): st
   return `https://integrations.sh/logo/${domain}?sz=${size * 2}`;
 }
 
+const LOCAL_INTEGRATION_ICON_URLS: Readonly<Record<string, string>> = {
+  executor: "/favicon-32.png",
+  aws_docs: awsDocsIcon,
+  code_grep: codeGrepIcon,
+  exa_search_api: exaSearchApiIcon,
+  google_calendar: googleCalendarIcon,
+  google_docs: googleDocsIcon,
+  google_drive: googleDriveIcon,
+  google_forms: googleFormsIcon,
+  google_gmail: googleGmailIcon,
+  google_search_console: googleSearchConsoleIcon,
+  google_sheets: googleSheetsIcon,
+  google_slides: googleSlidesIcon,
+  google_youtube_data: googleYouTubeDataIcon,
+  openai_docs: openAiDocsIcon,
+};
+
 export function integrationLocalIconUrl(integrationId: string | undefined): string | null {
-  if (integrationId !== "executor") return null;
-  return "/favicon-32.png";
+  return integrationId ? (LOCAL_INTEGRATION_ICON_URLS[integrationId] ?? null) : null;
 }
 
 const KIND_TO_PLUGIN_KEY: Record<string, string> = {
@@ -127,12 +172,11 @@ export function integrationPresetIconUrl(
   return preset?.icon ?? null;
 }
 
-// Resolution cascade for the rendered favicon: first non-null, non-failed of an
-// explicit preset icon, the bundled local icon for a known integration id, then
-// the integrations.sh logo proxy derived from the integration URL (which owns
-// its own upstream fallbacks). The built-in executor integration has no preset
-// icon and no URL, so it resolves ONLY through the integrationId branch: callers
-// that drop integrationId fall through to the neutral BoxIcon placeholder.
+// Resolution cascade for the rendered favicon: first non-null, non-failed of the
+// bundled local icon for a known integration id, an explicit preset icon, then
+// the integrations.sh logo proxy derived from the integration URL. Local assets
+// intentionally override unsuitable remote variants and preserve distinct Google
+// service marks. Unknown integrations still use upstream's preset and URL paths.
 export function integrationFaviconSrc(args: {
   icon?: string | null;
   integrationId?: string;
@@ -143,8 +187,8 @@ export function integrationFaviconSrc(args: {
   const failedSrcs = args.failedSrcs ?? [];
   return (
     [
-      args.icon ?? null,
       integrationLocalIconUrl(args.integrationId),
+      args.icon ?? null,
       integrationFaviconUrl(args.url, args.size),
     ].find((candidate) => candidate !== null && !failedSrcs.includes(candidate)) ?? null
   );
