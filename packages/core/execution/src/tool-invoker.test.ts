@@ -746,6 +746,40 @@ describe("tool discovery", () => {
     }),
   );
 
+  it.effect("keeps namespaced empty-query enumeration on the default catalog", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeSearchExecutor();
+      const calls: string[] = [];
+      const engine = createExecutionEngine({
+        executor,
+        codeExecutor,
+        toolDiscoveryProvider: {
+          searchTools: ({ query }) =>
+            Effect.sync(() => {
+              calls.push(query);
+              return { items: [], total: 0, hasMore: false, nextOffset: null };
+            }),
+        },
+      });
+
+      const result = yield* engine.execute(
+        'return await tools.search({ namespace: "github", query: "", limit: 100 });',
+        { onElicitation: acceptAll },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.result).toEqual(
+        expect.objectContaining({
+          items: expect.arrayContaining([
+            expect.objectContaining({ path: "github.org.main.listRepositoryIssues" }),
+          ]),
+          total: 3,
+        }),
+      );
+      expect(calls).toEqual([]);
+    }),
+  );
+
   it.effect("supports executor-scoped integration listing and tool search", () =>
     Effect.gen(function* () {
       const executor = yield* makeSearchExecutor();

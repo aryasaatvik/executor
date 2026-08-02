@@ -7,6 +7,7 @@ import {
   makeAiSearchToolDiscoveryProvider,
   reindexAiSearch,
   reindexAiSearchBatch,
+  statusAiSearch,
 } from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
 import { cyrb53 } from "./fingerprint";
@@ -43,7 +44,7 @@ const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollecti
   get: () => unusedEffect(),
   getMany: () => unusedEffect(),
   getForOwner: () => unusedEffect(),
-  getManyForOwner: () => unusedEffect(),
+  getManyForOwner: () => Effect.succeed(new Map()),
   list: () => unusedEffect(),
   put: () => unusedEffect(),
   putMany: () => unusedEffect(),
@@ -70,10 +71,13 @@ const makeAiSearchItems = () =>
     }),
     delete: async () => {},
     uploadAndPoll: async (name) => ({ id: `item:${name}`, key: name, status: "queued" }),
-    get: () => expect.unreachable("Unexpected AI Search item lookup"),
+    get: (itemId) => ({
+      info: async () => ({ id: itemId, key: itemId.replace(/^item:/, ""), status: "queued" }),
+      download: async () => expect.unreachable("Unexpected AI Search item download"),
+    }),
   }) satisfies Pick<AiSearchInstance, "items">["items"];
 
-const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search"> => ({
+const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search" | "stats"> => ({
   items: makeAiSearchItems(),
   search: async () => ({
     search_query: "create repo",
@@ -125,6 +129,7 @@ const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search"> => ({
       },
     ],
   }),
+  stats: async () => ({}),
 });
 
 describe("makeAiSearchToolDiscoveryProvider", () => {
@@ -338,6 +343,7 @@ describe("reindexAiSearch", () => {
           },
         },
         items: makeItemsCollection({
+          getManyForOwner: () => Effect.succeed(new Map([[githubRow.key, githubRow]])),
           list: () => Effect.succeed([githubRow]),
           putMany: ({ entries }) =>
             Effect.sync(() => {
@@ -397,9 +403,8 @@ describe("reindexAiSearch", () => {
     }),
   );
 
-  it.effect("records existing remote rows when a retry sees an orphaned AI Search item", () =>
+  it.effect("reuses a completed remote item for an unchanged local row", () =>
     Effect.gen(function* () {
-      const stored: AiSearchItemRow[] = [];
       const manifest = {
         path: "github.default.main.repos.create",
         name: "repos.create",
@@ -410,6 +415,15 @@ describe("reindexAiSearch", () => {
       };
       const fingerprint = "github.default.main.repos.create:v1:fingerprint:";
       const itemName = `tool-${cyrb53(`${manifest.path}\u0000${fingerprint}`).toString(36)}.md`;
+      const existing = {
+        ...githubRow,
+        data: {
+          ...githubRow.data,
+          key: itemName,
+          itemId: `remote:${itemName}`,
+          fingerprint,
+        },
+      };
 
       const result = yield* reindexAiSearchBatch({
         executor: {
@@ -422,19 +436,20 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            list: async () => ({
-              result: [{ id: `remote:${itemName}`, key: itemName, status: "completed" }],
-              result_info: { count: 1, total_count: 1, page: 1, per_page: 50 },
+            get: () => ({
+              info: async () => ({
+                id: existing.data.itemId,
+                key: existing.data.key,
+                status: "completed",
+              }),
+              download: async () => expect.unreachable("Unexpected AI Search item download"),
             }),
             upload: async () => expect.unreachable("Existing remote item should be reused"),
           },
         },
         items: makeItemsCollection({
-          list: () => Effect.succeed([]),
-          putMany: ({ entries }) =>
-            Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
-            }),
+          getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
+          list: () => Effect.succeed([existing]),
         }),
         owner: "org",
         namespace: "org",
@@ -442,16 +457,7 @@ describe("reindexAiSearch", () => {
         pageSize: 128,
       });
 
-      expect(result.indexed).toBe(1);
-      expect(stored).toMatchObject([
-        {
-          path: manifest.path,
-          itemId: `remote:${itemName}`,
-          key: itemName,
-          fingerprint,
-          status: "completed",
-        },
-      ]);
+      expect(result).toMatchObject({ indexed: 0, skipped: 1 });
     }),
   );
 
@@ -537,15 +543,13 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            list: async () => ({
-              result: [
-                {
-                  id: existing.data.itemId,
-                  key: existing.data.key,
-                  status: "error",
-                },
-              ],
-              result_info: { count: 1, total_count: 1, page: 1, per_page: 50 },
+            get: () => ({
+              info: async () => ({
+                id: existing.data.itemId,
+                key: existing.data.key,
+                status: "error",
+              }),
+              download: async () => expect.unreachable("Unexpected AI Search item download"),
             }),
             upload: async (name) => {
               uploadCount += 1;
@@ -554,6 +558,7 @@ describe("reindexAiSearch", () => {
           },
         },
         items: makeItemsCollection({
+          getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
           list: () => Effect.succeed([existing]),
           putMany: () => Effect.void,
         }),
@@ -563,6 +568,41 @@ describe("reindexAiSearch", () => {
 
       expect(result).toMatchObject({ indexed: 1, skipped: 0 });
       expect(uploadCount).toBe(1);
+    }),
+  );
+
+  it.effect("reads status from instance statistics without listing every remote item", () =>
+    Effect.gen(function* () {
+      const status = yield* statusAiSearch({
+        aiSearch: {
+          stats: async () => ({
+            queued: 2,
+            running: 3,
+            completed: 4,
+            error: 5,
+            skipped: 6,
+            outdated: 7,
+            last_activity: "2026-08-02T00:00:00.000Z",
+          }),
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([githubRow]),
+        }),
+        namespace: "org",
+      });
+
+      expect(status).toEqual({
+        namespace: "org",
+        indexed: 1,
+        lexical: null,
+        queued: 2,
+        running: 3,
+        completed: 4,
+        error: 5,
+        skipped: 6,
+        outdated: 7,
+        lastActivity: "2026-08-02T00:00:00.000Z",
+      });
     }),
   );
 
