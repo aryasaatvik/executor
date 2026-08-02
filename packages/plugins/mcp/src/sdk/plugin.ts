@@ -740,7 +740,7 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
     summary: preset.summary,
     ...("url" in preset && preset.url ? { url: preset.url } : {}),
     ...("endpoint" in preset && preset.endpoint ? { endpoint: preset.endpoint } : {}),
-    ...(preset.icon ? { icon: preset.icon } : {}),
+    ...(preset.logoDomain ? { logoDomain: preset.logoDomain } : {}),
     ...(preset.featured ? { featured: preset.featured } : {}),
     transport: ("transport" in preset && preset.transport === "stdio" ? "stdio" : "remote") as
       | "stdio"

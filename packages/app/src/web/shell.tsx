@@ -9,7 +9,10 @@ import {
   toolsAllAtom,
 } from "@executor-js/react/api/atoms";
 import { Button } from "@executor-js/react/components/button";
-import { integrationPresetIconUrl } from "@executor-js/react/components/integration-favicon";
+import {
+  integrationInferredUrl,
+  integrationPresetLogoDomain,
+} from "@executor-js/react/components/integration-favicon";
 import { IntegrationIconWithAccount } from "@executor-js/react/components/integration-icon-with-account";
 import { CommandPalette } from "@executor-js/react/components/command-palette";
 import { useClientPlugins, useIntegrationPlugins } from "@executor-js/sdk/client";
@@ -134,11 +137,16 @@ function IntegrationList(props: { pathname: string; onNavigate?: () => void }) {
                 ].join(" ")}
               >
                 <IntegrationIconWithAccount
-                  icon={integrationPresetIconUrl(
-                    { id: slug, kind: integration.kind },
+                  logoDomain={integrationPresetLogoDomain(
+                    { id: slug, kind: integration.kind, name, url: integration.displayUrl },
                     integrationPlugins,
                   )}
                   integrationId={slug}
+                  url={
+                    integration.displayUrl ??
+                    integrationInferredUrl({ id: slug, name }) ??
+                    undefined
+                  }
                   size="sm"
                 />
                 <span className="flex-1 truncate">{name}</span>
