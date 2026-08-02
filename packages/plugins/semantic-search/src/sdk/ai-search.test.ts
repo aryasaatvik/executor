@@ -183,11 +183,71 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     }),
   );
 
-  it.effect("ignores AI Search chunks whose item key is not tracked locally", () =>
+  it.effect("reconciles a provider-rewritten item key by canonical path", () =>
+    Effect.gen(function* () {
+      const provider = makeAiSearchToolDiscoveryProvider({
+        aiSearch: {
+          ...makeAiSearch(),
+          search: async () => ({
+            search_query: "create repo",
+            chunks: [
+              {
+                id: "chunk-1",
+                type: "text",
+                score: 0.7,
+                text: "create a repository",
+                item: {
+                  key: "provider-rewritten-key.md",
+                  metadata: {
+                    path: githubRow.key,
+                    name: githubRow.data.name,
+                    description: githubRow.data.description,
+                    integration: githubRow.data.integration,
+                  },
+                },
+              },
+            ],
+          }),
+        },
+        items: makeItemsCollection({
+          getMany: ({ keys }) =>
+            Effect.succeed(
+              new Map(
+                keys.flatMap((key) => (key === githubRow.key ? [[key, githubRow] as const] : [])),
+              ),
+            ),
+        }),
+      });
+
+      const page = yield* provider!.searchTools({
+        executor: undefined as never,
+        query: "create repo",
+        limit: 10,
+        offset: 0,
+      });
+
+      expect(page.items).toMatchObject([
+        {
+          path: githubRow.key,
+          name: githubRow.data.name,
+          score: 0.7,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("ignores AI Search chunks whose paths are not current locally", () =>
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
         aiSearch: makeAiSearch(),
-        items: makeItemsCollection({ list: () => Effect.succeed([githubRow]) }),
+        items: makeItemsCollection({
+          getMany: ({ keys }) =>
+            Effect.succeed(
+              new Map(
+                keys.flatMap((key) => (key === githubRow.key ? [[key, githubRow] as const] : [])),
+              ),
+            ),
+        }),
       });
 
       const page = yield* provider!.searchTools({
@@ -202,14 +262,11 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     }),
   );
 
-  it.effect("returns an empty page without querying AI Search when local rows are empty", () =>
+  it.effect("returns an empty page when no returned paths are current locally", () =>
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
-        aiSearch: {
-          ...makeAiSearch(),
-          search: () => expect.unreachable("AI Search should not be queried"),
-        },
-        items: makeItemsCollection({ list: () => Effect.succeed([]) }),
+        aiSearch: makeAiSearch(),
+        items: makeItemsCollection({ getMany: () => Effect.succeed(new Map()) }),
       });
 
       const page = yield* provider!.searchTools({

@@ -405,14 +405,6 @@ export const statusAiSearch = (input: {
 const matchesNamespace = (path: string, namespace: string | undefined): boolean =>
   !namespace || path === namespace || path.startsWith(`${namespace}.`);
 
-const rowToResult = (row: AiSearchItemRow, score: number): ToolDiscoveryResult => ({
-  path: row.path,
-  name: row.name,
-  description: row.description,
-  integration: row.integration,
-  score,
-});
-
 const getStringMetadata = (
   metadata: Readonly<Record<string, unknown>> | undefined,
   key: string,
@@ -452,23 +444,6 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
           return { items: [], total: 0, hasMore: false, nextOffset: null };
         }
         const limit = Math.min(50, Math.max(1, input.limit + input.offset));
-        const hasLocalRows = deps.items !== undefined;
-        const rowsByKey =
-          deps.items === undefined
-            ? undefined
-            : yield* deps.items.list().pipe(
-                Effect.map((rows) => new Map(rows.map((row) => [row.data.key, row.data]))),
-                Effect.mapError(
-                  (cause) =>
-                    new ExecutionToolError({
-                      message: "AI Search tool search failed.",
-                      cause,
-                    }),
-                ),
-              );
-        if (hasLocalRows && rowsByKey?.size === 0) {
-          return { items: [], total: 0, hasMore: false, nextOffset: null };
-        }
         const response = yield* Effect.tryPromise({
           try: () =>
             aiSearch.search({
@@ -486,15 +461,38 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
             new ExecutionToolError({ message: "AI Search tool search failed.", cause }),
         });
 
+        // AI Search carries the canonical tool metadata on every chunk. Validate its
+        // path against the current catalog, rather than reconciling its opaque item key
+        // with the local upload ledger. That key is provider-owned and may be rewritten
+        // during an upload, while the catalog path is the stable identity clients use.
+        const chunkResults = (response.chunks ?? []).flatMap((chunk) => {
+          const result = chunkToResult(chunk);
+          return result === null ? [] : [result];
+        });
+        const visiblePaths =
+          deps.items === undefined
+            ? undefined
+            : new Set(
+                (yield* deps.items
+                  .getMany({ keys: chunkResults.map((result) => result.path) })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ExecutionToolError({
+                          message: "AI Search tool search failed.",
+                          cause,
+                        }),
+                    ),
+                  )).keys(),
+              );
+
         const bestByPath = new Map<string, ToolDiscoveryResult>();
-        for (const chunk of response.chunks ?? []) {
-          const row = chunk.item?.key ? rowsByKey?.get(chunk.item.key) : undefined;
-          const result = row
-            ? rowToResult(row, chunk.score)
-            : hasLocalRows
-              ? null
-              : chunkToResult(chunk);
-          if (!result || !matchesNamespace(result.path, input.namespace)) continue;
+        for (const result of chunkResults) {
+          if (
+            (visiblePaths !== undefined && !visiblePaths.has(result.path)) ||
+            !matchesNamespace(result.path, input.namespace)
+          )
+            continue;
           const previous = bestByPath.get(result.path);
           if (!previous || result.score > previous.score) bestByPath.set(result.path, result);
         }
