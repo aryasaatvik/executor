@@ -19,6 +19,7 @@ describe("OpenAPI operation store", () => {
       const rows = new Map<string, PluginStorageEntry>();
       const capturedKeys: string[] = [];
       const storageKey = (collection: string, key: string) => `${collection}\0${key}`;
+      const unexpectedCollectionCall = () => Effect.die("Unexpected collection storage call");
       const now = new Date();
       const makeEntry = <T>(input: {
         readonly owner: "org" | "user";
@@ -38,7 +39,9 @@ describe("OpenAPI operation store", () => {
       const pluginStorage: PluginStorageFacade = {
         collection: () => ({
           get: () => Effect.succeed(null),
+          getMany: () => Effect.succeed(new Map()),
           getForOwner: () => Effect.succeed(null),
+          getManyForOwner: () => Effect.succeed(new Map()),
           list: () => Effect.succeed([]),
           put: (input) =>
             Effect.succeed(
@@ -49,9 +52,18 @@ describe("OpenAPI operation store", () => {
                 data: input.data,
               }),
             ),
+          putMany: unexpectedCollectionCall,
           query: () => Effect.succeed([]),
           count: () => Effect.succeed(0),
+          queryKeyset: () => Effect.succeed({ entries: [], nextCursor: null }),
+          aggregate: {
+            count: unexpectedCollectionCall,
+            groupCount: unexpectedCollectionCall,
+            timeBuckets: unexpectedCollectionCall,
+            stats: unexpectedCollectionCall,
+          },
           remove: () => Effect.void,
+          removeMany: unexpectedCollectionCall,
         }),
         get: <T = unknown>(input: { readonly collection: string; readonly key: string }) =>
           Effect.succeed(
@@ -59,11 +71,36 @@ describe("OpenAPI operation store", () => {
               | PluginStorageEntry<T>
               | undefined) ?? null,
           ),
+        getMany: <T = unknown>(input: { readonly collection: string; readonly keys: readonly string[] }) =>
+          Effect.succeed(
+            new Map(
+              input.keys.flatMap((key) => {
+                const row = rows.get(storageKey(input.collection, key)) as
+                  | PluginStorageEntry<T>
+                  | undefined;
+                return row === undefined ? [] : [[key, row] as const];
+              }),
+            ),
+          ),
         getForOwner: <T = unknown>(input: { readonly collection: string; readonly key: string }) =>
           Effect.succeed(
             (rows.get(storageKey(input.collection, input.key)) as
               | PluginStorageEntry<T>
               | undefined) ?? null,
+          ),
+        getManyForOwner: <T = unknown>(input: {
+          readonly collection: string;
+          readonly keys: readonly string[];
+        }) =>
+          Effect.succeed(
+            new Map(
+              input.keys.flatMap((key) => {
+                const row = rows.get(storageKey(input.collection, key)) as
+                  | PluginStorageEntry<T>
+                  | undefined;
+                return row === undefined ? [] : [[key, row] as const];
+              }),
+            ),
           ),
         list: <T = unknown>(input: { readonly collection: string; readonly keyPrefix?: string }) =>
           Effect.succeed(
