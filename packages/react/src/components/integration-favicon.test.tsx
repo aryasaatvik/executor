@@ -68,7 +68,7 @@ describe("IntegrationFavicon", () => {
   it("uses dark-mode-safe local assets for integrations whose proxy logo is unsuitable", () => {
     for (const integrationId of ["aws_docs", "code_grep", "exa_search_api", "openai_docs"]) {
       const icon = integrationLocalIconUrl(integrationId);
-      expect(icon).toMatch(/^data:image\/svg\+xml,/);
+      expect(icon).toMatch(/^data:image\/svg\+xml(?:;base64)?,/);
       expect(
         integrationFaviconSrc({
           integrationId,
