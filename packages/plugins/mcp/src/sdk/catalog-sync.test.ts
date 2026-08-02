@@ -262,7 +262,6 @@ describe("MCP tools/list pagination", () => {
         createMcpConnector({
           transport: "remote",
           endpoint: server.url("/mcp"),
-          remoteTransport: "streamable-http",
         }),
       );
 

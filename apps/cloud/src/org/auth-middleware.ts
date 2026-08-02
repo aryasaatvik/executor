@@ -82,7 +82,7 @@ const OrgAuthMiddleware = HttpRouter.middleware<{
           actor: {
             kind: "user",
             id: session.accountId,
-            label: session.name ?? (session.email.length > 0 ? session.email : null),
+            label: session.name ?? session.email,
           },
         });
 

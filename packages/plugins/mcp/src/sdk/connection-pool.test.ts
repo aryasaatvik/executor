@@ -25,7 +25,6 @@ const invoke = (input: {
     connector: createMcpConnector({
       transport: "remote",
       endpoint: input.endpoint,
-      remoteTransport: "streamable-http",
     }),
     connectionPool: input.pool,
     connectionPoolKey: input.endpoint,

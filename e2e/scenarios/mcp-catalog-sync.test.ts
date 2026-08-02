@@ -378,7 +378,6 @@ scenario(
           name: "Paged catalog MCP",
           endpoint: fixture.url,
           slug,
-          remoteTransport: "streamable-http",
         },
       });
 
@@ -445,7 +444,6 @@ scenario(
           name: "Flaky MCP",
           endpoint: fixture.url,
           slug,
-          remoteTransport: "streamable-http",
         },
       });
 
