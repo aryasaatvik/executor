@@ -32,10 +32,29 @@ const execute = (
     catch: (cause) => new DataMigrationError({ migration: MIGRATION_NAME, cause }),
   });
 
+const jsonDecoder = new TextDecoder();
+
+const jsonText = (value: unknown): string | undefined => {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return jsonDecoder.decode(value);
+  if (value instanceof ArrayBuffer) return jsonDecoder.decode(new Uint8Array(value));
+  if (
+    Array.isArray(value) &&
+    value.every(
+      (item): item is number =>
+        typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 255,
+    )
+  ) {
+    return jsonDecoder.decode(new Uint8Array(value));
+  }
+  return undefined;
+};
+
 const parseJsonLike = (value: unknown): unknown => {
-  if (typeof value !== "string") return value;
+  const text = jsonText(value);
+  if (text === undefined) return value;
   try {
-    return JSON.parse(value) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return value;
   }
@@ -89,6 +108,7 @@ const readDatabaseInput = (
   options: {
     readonly blobBackend?: MigrationInput["blobBackend"];
     readonly blobs?: readonly BlobRow[];
+    readonly tenants?: readonly string[];
   } = {},
 ): Effect.Effect<MigrationInput, DataMigrationError> =>
   Effect.gen(function* () {
@@ -108,8 +128,12 @@ const readDatabaseInput = (
           )
        ORDER BY tenant, slug`,
     );
+    const selectedTenants = options.tenants ? new Set(options.tenants) : undefined;
+    const selectedIntegrations = integrations.rows.filter(
+      (row) => selectedTenants?.has(String(row.tenant)) ?? true,
+    );
     const monolithTenants = new Set(
-      integrations.rows
+      selectedIntegrations
         .filter((row) => row.plugin_id === "google" || row.plugin_id === "microsoft")
         .map((row) => String(row.tenant)),
     );
@@ -169,7 +193,7 @@ const readDatabaseInput = (
 
     const tenantFilter = (row: Record<string, unknown>) => monolithTenants.has(String(row.tenant));
     return {
-      integrations: integrations.rows.filter(tenantFilter).map(
+      integrations: selectedIntegrations.filter(tenantFilter).map(
         (row): IntegrationRow => ({
           tenant: String(row.tenant),
           slug: String(row.slug),
@@ -523,6 +547,8 @@ export const runSqliteProviderServiceSplitMigration = (
     readonly beforeStampOrg?: (org: OrgPlan) => Effect.Effect<void, DataMigrationError>;
     readonly blobBackend?: MigrationInput["blobBackend"];
     readonly blobs?: readonly BlobRow[];
+    /** Limits a targeted recovery to the affected tenant, never other pending legacy rows. */
+    readonly tenants?: readonly string[];
   } = {},
 ): Effect.Effect<number, DataMigrationError> =>
   Effect.gen(function* () {
