@@ -1105,7 +1105,7 @@ export const graphqlPlugin = definePlugin((options?: GraphqlPluginOptions) => {
       summary: preset.summary,
       url: preset.url,
       endpoint: preset.endpoint,
-      ...(preset.icon ? { icon: preset.icon } : {}),
+      ...(preset.logoDomain ? { logoDomain: preset.logoDomain } : {}),
       ...(preset.featured ? { featured: preset.featured } : {}),
     })),
     storage: (deps): GraphqlStore => makeDefaultGraphqlStore(deps),

@@ -242,7 +242,7 @@ export default function AddOpenApiIntegration(props: {
   const firstServerUrl = firstServer
     ? resolveServerUrl(firstServer.url, Option.getOrUndefined(firstServer.variables), {})
     : "";
-  const previewPresetIcon = activePreset?.icon ?? null;
+  const previewPresetLogoDomain = activePreset?.logoDomain ?? null;
 
   const resolvedBaseUrl = baseUrl.trim();
   const resolvedIntegrationId =
@@ -577,7 +577,7 @@ export default function AddOpenApiIntegration(props: {
             setPreview(null);
             setBaseUrl("");
           }}
-          faviconIcon={previewPresetIcon}
+          faviconLogoDomain={previewPresetLogoDomain}
           faviconUrl={resolvedBaseUrl || firstServerUrl}
         />
       ) : null}

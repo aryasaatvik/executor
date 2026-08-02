@@ -12,7 +12,6 @@ export {
   googlePhotosOpenApiBundlePreset,
   googlePhotosOpenApiPresets,
   googlePhotosPresetIds,
-  GOOGLE_PHOTOS_ICON,
   GOOGLE_PHOTOS_PRESET_ID,
   googleStandardUserOAuthPresets,
   googleOAuthConsentScopes,

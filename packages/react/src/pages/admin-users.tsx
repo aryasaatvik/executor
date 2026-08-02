@@ -21,7 +21,7 @@ import { ErrorState } from "../components/error-state";
 import {
   IntegrationFavicon,
   integrationInferredUrl,
-  integrationPresetIconUrl,
+  integrationPresetLogoDomain,
 } from "../components/integration-favicon";
 import { PageContainer, PageHeader } from "../components/page";
 import {
@@ -151,7 +151,7 @@ function HealthIndicator(props: { readonly status: HealthStatus }) {
  *  nothing it doesn't have to), so brand marks come from the tenant's own
  *  integration catalog, which the admin can read on the product plane. */
 type IconLookup = (integration: IntegrationSlug) => {
-  readonly icon: string | null;
+  readonly logoDomain: string | null;
   readonly url: string | undefined;
   readonly name: string;
 };
@@ -169,8 +169,8 @@ const useIntegrationIcons = (): IconLookup => {
     const found = integrations.find((row) => String(row.slug) === slug);
     const name = found?.name || slug;
     return {
-      icon: found
-        ? integrationPresetIconUrl(
+      logoDomain: found
+        ? integrationPresetLogoDomain(
             { id: slug, kind: found.kind, name, url: found.displayUrl },
             integrationPlugins,
           )
@@ -218,7 +218,7 @@ function ConnectionGrid(props: {
     <div className="flex min-w-0 items-center gap-1.5">
       <div className="flex min-w-0 flex-wrap items-center gap-1">
         {states.slice(0, 8).map((state) => {
-          const { icon, url, name } = props.icons(state.integration);
+          const { logoDomain, url, name } = props.icons(state.integration);
           return (
             <span
               key={state.integration}
@@ -235,7 +235,7 @@ function ConnectionGrid(props: {
               }
             >
               <IntegrationFavicon
-                icon={icon}
+                logoDomain={logoDomain}
                 integrationId={String(state.integration)}
                 url={url}
                 size={16}
@@ -424,7 +424,7 @@ function UserDetail(props: {
               <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
                 {connected.flatMap((state) =>
                   state.connections.map((connection) => {
-                    const { icon, url, name } = props.icons(connection.integration);
+                    const { logoDomain, url, name } = props.icons(connection.integration);
                     return (
                       <div
                         key={`${connection.integration}/${connection.owner}/${connection.name}`}
@@ -432,7 +432,7 @@ function UserDetail(props: {
                       >
                         <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center">
                           <IntegrationFavicon
-                            icon={icon}
+                            logoDomain={logoDomain}
                             integrationId={String(connection.integration)}
                             url={url}
                             size={16}
@@ -484,7 +484,7 @@ function UserDetail(props: {
             ) : (
               <div className="mt-3 overflow-hidden rounded-lg border border-border bg-card">
                 {available.map((state) => {
-                  const { icon, url, name } = props.icons(state.integration);
+                  const { logoDomain, url, name } = props.icons(state.integration);
                   const link = connectLinkUrl(state.integration, origin, props.orgSlug);
                   return (
                     <div
@@ -493,7 +493,7 @@ function UserDetail(props: {
                     >
                       <span className="flex size-5 shrink-0 items-center justify-center opacity-40 grayscale">
                         <IntegrationFavicon
-                          icon={icon}
+                          logoDomain={logoDomain}
                           integrationId={String(state.integration)}
                           url={url}
                           size={16}

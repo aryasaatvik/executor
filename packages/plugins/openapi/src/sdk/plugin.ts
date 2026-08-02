@@ -700,7 +700,7 @@ export const openApiPlugin = definePlugin<
         name: preset.name,
         summary: preset.summary,
         ...(preset.url ? { url: preset.url } : {}),
-        ...(preset.icon ? { icon: preset.icon } : {}),
+        ...(preset.logoDomain ? { logoDomain: preset.logoDomain } : {}),
         ...(preset.featured ? { featured: preset.featured } : {}),
         ...(preset.family ? { family: preset.family } : {}),
         ...(preset.specFormat ? { specFormat: preset.specFormat } : {}),

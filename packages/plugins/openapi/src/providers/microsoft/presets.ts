@@ -4,7 +4,6 @@ export interface MicrosoftGraphPreset {
   readonly id: string;
   readonly name: string;
   readonly summary: string;
-  readonly icon?: string;
   readonly featured?: boolean;
 }
 
@@ -20,7 +19,6 @@ export interface MicrosoftGraphScopePreset {
   readonly id: string;
   readonly name: string;
   readonly summary: string;
-  readonly icon?: string;
   readonly scopes: readonly string[];
   readonly exactPaths?: readonly string[];
   readonly pathPrefixes?: readonly string[];
@@ -29,8 +27,7 @@ export interface MicrosoftGraphScopePreset {
   readonly audience: MicrosoftGraphScopeAudience;
 }
 
-const MICROSOFT_ICON = "https://integrations.sh/logo/microsoft.com";
-const svglIcon = (name: string) => `https://svgl.app/library/${name}.svg`;
+const MICROSOFT_LOGO_DOMAIN = "microsoft.com";
 
 export const MICROSOFT_GRAPH_OPENAPI_URL =
   "https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/v1.0/openapi.yaml";
@@ -60,7 +57,6 @@ export const microsoftGraphPreset: MicrosoftGraphPreset = {
   id: MICROSOFT_GRAPH_PRESET_ID,
   name: "Microsoft Graph",
   summary: "Bundle Microsoft 365 workloads into one Graph integration and one OAuth consent.",
-  icon: MICROSOFT_ICON,
   featured: true,
 };
 
@@ -69,7 +65,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "profile",
     name: "Profile",
     summary: "Signed-in user profile and photo.",
-    icon: svglIcon("microsoft"),
     scopes: ["User.Read"],
     exactPaths: ["/me", "/me/photo", "/me/photo/$value"],
     featured: true,
@@ -79,7 +74,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "me-surface",
     name: "My Graph Operations",
     summary: "All operation groups rooted under /me.",
-    icon: svglIcon("microsoft"),
     scopes: ["User.Read"],
     pathPrefixes: ["/me"],
     audience: "productivity",
@@ -88,7 +82,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "mail",
     name: "Outlook Mail",
     summary: "Messages, folders, attachments, settings, and send mail.",
-    icon: svglIcon("microsoft-outlook"),
     scopes: ["Mail.ReadWrite", "Mail.Send", "MailboxSettings.ReadWrite"],
     pathPrefixes: [
       "/me/messages",
@@ -110,7 +103,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "calendar",
     name: "Outlook Calendar",
     summary: "Calendars, events, and scheduling.",
-    icon: svglIcon("microsoft-outlook"),
     scopes: ["Calendars.ReadWrite"],
     pathPrefixes: [
       "/me/calendar",
@@ -135,7 +127,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "contacts",
     name: "Outlook Contacts",
     summary: "Contacts, contact folders, and people suggestions.",
-    icon: svglIcon("microsoft-outlook"),
     scopes: ["Contacts.ReadWrite", "People.Read.All"],
     pathPrefixes: [
       "/me/contacts",
@@ -151,7 +142,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "tasks",
     name: "To Do Tasks",
     summary: "Task lists, tasks, and checklist items.",
-    icon: svglIcon("microsoft-todo"),
     scopes: ["Tasks.ReadWrite"],
     pathPrefixes: ["/me/todo", "/users/{user-id}/todo"],
     audience: "productivity",
@@ -160,7 +150,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "planner",
     name: "Planner",
     summary: "Plans, buckets, tasks, assignments, and Planner user data.",
-    icon: svglIcon("microsoft"),
     scopes: ["Tasks.ReadWrite"],
     pathPrefixes: [
       "/planner",
@@ -174,7 +163,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "files",
     name: "OneDrive Files",
     summary: "Drives, files, folders, sharing links, and permissions.",
-    icon: svglIcon("microsoft-onedrive"),
     scopes: ["Files.ReadWrite.All", "Sites.ReadWrite.All"],
     pathPrefixes: [
       "/me/drive",
@@ -194,7 +182,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "excel",
     name: "Excel Workbooks",
     summary: "Workbook tables, worksheets, ranges, charts, and sessions.",
-    icon: svglIcon("microsoft-excel"),
     scopes: ["Files.ReadWrite.All"],
     pathPrefixes: [
       "/me/drive/items/{driveItem-id}/workbook",
@@ -208,7 +195,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "sites",
     name: "SharePoint Sites",
     summary: "Sites, lists, pages, columns, content types, and stores.",
-    icon: svglIcon("microsoft-sharepoint"),
     scopes: ["Sites.ReadWrite.All"],
     pathPrefixes: ["/sites"],
     featured: true,
@@ -218,7 +204,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "onenote",
     name: "OneNote",
     summary: "Notebooks, sections, pages, and page content.",
-    icon: svglIcon("microsoft-onenote"),
     scopes: ["Notes.ReadWrite"],
     pathPrefixes: [
       "/me/onenote",
@@ -232,7 +217,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "teams-chat",
     name: "Teams Chats",
     summary: "Chats, chat messages, installed apps, and members.",
-    icon: svglIcon("microsoft-teams"),
     scopes: ["Chat.ReadWrite"],
     pathPrefixes: ["/me/chats", "/chats"],
     audience: "collaboration",
@@ -241,7 +225,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "teams-channels",
     name: "Teams Channels",
     summary: "Teams, channels, channel messages, replies, and joined teams.",
-    icon: svglIcon("microsoft-teams"),
     scopes: [
       "Team.ReadBasic.All",
       "Channel.ReadBasic.All",
@@ -261,7 +244,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "meetings-calls",
     name: "Meetings and Calls",
     summary: "Online meetings, calls, call records, and communications APIs.",
-    icon: svglIcon("microsoft-teams"),
     scopes: ["OnlineMeetings.ReadWrite"],
     pathPrefixes: ["/communications", "/me/onlineMeetings", "/users/{user-id}/onlineMeetings"],
     audience: "collaboration",
@@ -270,7 +252,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "users",
     name: "Users",
     summary: "User objects plus user-scoped Graph operations.",
-    icon: svglIcon("microsoft"),
     scopes: ["User.ReadWrite.All", "Directory.Read.All"],
     pathPrefixes: ["/users", "/users(userPrincipalName='{userPrincipalName}')"],
     featured: true,
@@ -280,7 +261,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "groups",
     name: "Groups",
     summary: "Groups, settings, lifecycle policies, and group-scoped operations.",
-    icon: svglIcon("microsoft"),
     scopes: ["Group.ReadWrite.All", "Directory.Read.All"],
     pathPrefixes: [
       "/groups",
@@ -295,7 +275,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "directory",
     name: "Directory",
     summary: "Directory roles, objects, contacts, contracts, and invitations.",
-    icon: svglIcon("microsoft"),
     scopes: ["Directory.Read.All"],
     pathPrefixes: [
       "/contacts",
@@ -314,7 +293,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "applications",
     name: "Applications",
     summary: "Applications, service principals, app templates, catalogs, and grants.",
-    icon: svglIcon("microsoft"),
     scopes: ["Application.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"],
     pathPrefixes: [
       "/applications",
@@ -333,7 +311,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "identity",
     name: "Identity and Governance",
     summary: "Identity, governance, policies, access reviews, roles, and providers.",
-    icon: svglIcon("microsoft"),
     scopes: ["Policy.ReadWrite.ConditionalAccess", "RoleManagement.Read.Directory"],
     pathPrefixes: [
       "/agreementAcceptances",
@@ -354,7 +331,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "admin-reports",
     name: "Admin and Reports",
     summary: "Admin centers, audit logs, domains, reports, organization, and tenants.",
-    icon: svglIcon("microsoft"),
     scopes: ["AuditLog.Read.All", "Reports.Read.All"],
     pathPrefixes: [
       "/admin",
@@ -372,7 +348,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "security-compliance",
     name: "Security and Compliance",
     summary: "Security, compliance, privacy, information protection, and data policy.",
-    icon: svglIcon("microsoft"),
     scopes: ["SecurityEvents.Read.All"],
     pathPrefixes: [
       "/compliance",
@@ -387,7 +362,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "devices",
     name: "Devices and Intune",
     summary: "Devices, device management, Intune apps, managed devices, and policies.",
-    icon: svglIcon("microsoft"),
     scopes: ["DeviceManagementApps.ReadWrite.All", "DeviceManagementManagedDevices.ReadWrite.All"],
     pathPrefixes: [
       "/devices",
@@ -401,7 +375,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "education",
     name: "Education",
     summary: "Classes, schools, education users, assignments, and reports.",
-    icon: svglIcon("microsoft"),
     scopes: [],
     pathPrefixes: ["/education"],
     audience: "admin-security",
@@ -410,7 +383,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "search",
     name: "Microsoft Search",
     summary: "Search across Microsoft Graph content connectors.",
-    icon: svglIcon("microsoft"),
     scopes: ["ExternalItem.Read.All", "Acronym.Read.All", "Bookmark.Read.All", "QnA.Read.All"],
     pathPrefixes: ["/search"],
     audience: "platform-business",
@@ -419,7 +391,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "external-connections",
     name: "External Connections",
     summary: "External connections, schemas, items, and content connectors.",
-    icon: svglIcon("microsoft"),
     scopes: ["ExternalConnection.ReadWrite.OwnedBy", "ExternalItem.ReadWrite.OwnedBy"],
     pathPrefixes: ["/connections", "/external"],
     audience: "platform-business",
@@ -428,7 +399,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "solutions",
     name: "Solutions and Employee Experience",
     summary: "Bookings, virtual events, backup, employee experience, and Copilot.",
-    icon: svglIcon("microsoft"),
     scopes: [],
     pathPrefixes: ["/copilot", "/employeeExperience", "/solutions"],
     audience: "platform-business",
@@ -437,7 +407,6 @@ export const microsoftGraphScopePresets: readonly MicrosoftGraphScopePreset[] = 
     id: "platform-services",
     name: "Platform Services",
     summary: "Places, print, storage, subscriptions, functions, filters, and extensions.",
-    icon: svglIcon("microsoft"),
     scopes: ["Place.Read.All", "Printer.ReadWrite.All"],
     pathPrefixes: [
       "/filterOperators",
@@ -554,7 +523,7 @@ export const microsoftCatalog: readonly IntegrationPreset[] = microsoftGraphScop
     name: preset.name,
     summary: preset.summary,
     url: microsoftGraphCatalogUrl(preset.id),
-    ...(preset.icon ? { icon: preset.icon } : {}),
+    logoDomain: MICROSOFT_LOGO_DOMAIN,
     ...(preset.featured ? { featured: preset.featured } : {}),
     family: "microsoft",
     specFormat: "microsoft-graph",
