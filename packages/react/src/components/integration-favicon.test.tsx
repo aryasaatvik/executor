@@ -8,6 +8,10 @@ import {
   integrationPresetIconUrl,
 } from "./integration-favicon";
 
+const expectBundledSvg = (url: string | null): void => {
+  expect(url).toMatch(/^(?:data:image\/svg\+xml(?:;base64)?,|file:.*\.svg$)/);
+};
+
 describe("IntegrationFavicon", () => {
   it("resolves favicons only through the integrations.sh logo proxy", () => {
     expect(integrationFaviconUrl("https://api.github.com/graphql", 20)).toBe(
@@ -36,6 +40,40 @@ describe("IntegrationFavicon", () => {
   it("uses the Executor favicon for the built-in executor integration", () => {
     expect(integrationLocalIconUrl("executor")).toBe("/favicon-32.png");
     expect(integrationLocalIconUrl("openapi")).toBeNull();
+  });
+
+  it("uses bundled product assets for Google services before the logo proxy", () => {
+    const calendar = integrationLocalIconUrl("google_calendar");
+    expectBundledSvg(calendar);
+    expect(
+      integrationFaviconSrc({
+        integrationId: "google_calendar",
+        icon: "https://integrations.sh/logo/google.com?sz=32",
+        size: 16,
+      }),
+    ).toBe(calendar);
+    expect(
+      integrationFaviconSrc({
+        integrationId: "google_calendar",
+        icon: "https://integrations.sh/logo/google.com?sz=32",
+        size: 16,
+        failedSrcs: [calendar ?? ""],
+      }),
+    ).toBe("https://integrations.sh/logo/google.com?sz=32");
+  });
+
+  it("uses dark-mode-safe local assets for integrations whose proxy logo is unsuitable", () => {
+    for (const integrationId of ["aws_docs", "code_grep", "exa_search_api", "openai_docs"]) {
+      const icon = integrationLocalIconUrl(integrationId);
+      expectBundledSvg(icon);
+      expect(
+        integrationFaviconSrc({
+          integrationId,
+          url: "https://example.com",
+          size: 16,
+        }),
+      ).toBe(icon);
+    }
   });
 
   it("resolves the Executor sidebar icon only when the integration id is threaded (cloud/self-host repro)", () => {
