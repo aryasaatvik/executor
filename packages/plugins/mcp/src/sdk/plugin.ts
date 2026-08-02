@@ -632,7 +632,6 @@ const connectionPoolKey = (
   JSON.stringify({
     endpoint: input.endpoint,
     transport: input.transport,
-    remoteTransport: input.remoteTransport,
     headers: sortedRecord(input.headers),
     queryParams: sortedRecord(input.queryParams),
     template,

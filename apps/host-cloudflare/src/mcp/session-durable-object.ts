@@ -133,7 +133,7 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
         sessionMeta.organizationName,
         { mcpResource: sessionMeta.resource },
       ).pipe(
-        Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle, this.cfEnv.ANALYTICS)),
+        Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle, self.cfEnv.ANALYTICS)),
       );
       // Attribute every run from this MCP session to its actor — carried from the
       // gate's principal (a host that sets a non-user actor, e.g. a service token)

@@ -399,14 +399,6 @@ const isElicitationDeclinedError = (
   "action" in value &&
   (value.action === "cancel" || value.action === "decline");
 
-export type ToolDiscoveryResult = {
-  readonly path: string;
-  readonly name: string;
-  readonly description?: string;
-  readonly integration: string;
-  readonly score: number;
-};
-
 export type ExecutorIntegrationListItem = {
   readonly id: string;
   readonly name: string;
@@ -417,39 +409,6 @@ export type ExecutorIntegrationListItem = {
   readonly toolCount: number;
 };
 
-export type ToolDiscoveryInput = {
-  readonly executor: Executor;
-  readonly query: string;
-  readonly namespace?: string;
-  readonly limit: number;
-  readonly offset: number;
-};
-
-export interface ToolDiscoveryProvider {
-  readonly searchTools: (
-    input: ToolDiscoveryInput,
-  ) => Effect.Effect<PagedResult<ToolDiscoveryResult>, ExecutionToolError>;
-}
-
-/**
- * Page of results from a list-style discovery tool. Shared by
- * `tools.search` and `tools.executor.integrations.list` so the model sees one
- * consistent shape:
- *
- *   - `items`      — the page (slice).
- *   - `total`      — count after filtering, before pagination. The model
- *                    can use this to detect truncation.
- *   - `hasMore`    — convenience flag for `(offset + items.length) < total`.
- *   - `nextOffset` — concrete offset for the next page when `hasMore`,
- *                    `null` otherwise. Pre-computing it removes a class of
- *                    off-by-one mistakes when the model paginates.
- */
-export type PagedResult<T> = {
-  readonly items: readonly T[];
-  readonly total: number;
-  readonly hasMore: boolean;
-  readonly nextOffset: number | null;
-};
 const paginate = <T>(all: readonly T[], offset: number, limit: number): PagedResult<T> => {
   const total = all.length;
   const start = Math.min(Math.max(offset, 0), total);
