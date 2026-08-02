@@ -288,6 +288,30 @@ describe("providerServiceSplitDataMigration", () => {
     }),
   );
 
+  it.effect("limits a targeted recovery to its affected tenant", () =>
+    Effect.gen(function* () {
+      const db = yield* Effect.promise(() => createSqliteTestFumaDb({ tables: collectTables() }));
+      const client = db.client;
+
+      yield* seedCalendarOrg(client, "org_1");
+      yield* seedCalendarOrg(client, "org_2");
+
+      expect(
+        yield* runSqliteProviderServiceSplitMigration(client, { tenants: ["org_1"] }),
+      ).toBe(1);
+
+      const integrations = yield* Effect.promise(() =>
+        client.execute("SELECT tenant, slug, plugin_id FROM integration ORDER BY tenant, slug"),
+      );
+      expect(integrations.rows).toEqual([
+        { tenant: "org_1", slug: "google_calendar", plugin_id: "openapi" },
+        { tenant: "org_2", slug: "google", plugin_id: "google" },
+      ]);
+
+      yield* Effect.promise(() => db.close());
+    }),
+  );
+
   it.effect("skips a specHash-less org intact and still migrates healthy orgs", () =>
     Effect.gen(function* () {
       const db = yield* Effect.promise(() => createSqliteTestFumaDb({ tables: collectTables() }));
