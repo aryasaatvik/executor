@@ -389,10 +389,16 @@ const makeFullInvoker = (
           return Effect.fail(offset);
         }
 
-        return toolDiscoveryProvider
+        const query = args.query ?? "";
+        const provider =
+          query.length === 0 && (args.namespace?.length ?? 0) > 0
+            ? defaultToolDiscoveryProvider
+            : toolDiscoveryProvider;
+
+        return provider
           .searchTools({
             executor,
-            query: args.query ?? "",
+            query,
             limit,
             namespace: args.namespace,
             offset,
