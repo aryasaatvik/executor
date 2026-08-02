@@ -28,15 +28,16 @@ export type QuickJsExecutorOptions = {
   maxStackSizeBytes?: number;
 };
 
-// Allow pre-loading a QuickJS module (e.g. with custom WASM bytes for compiled binaries)
-let preloadedModule: QuickJSWASMModule | null = null;
+// Allow hosts to begin loading a QuickJS module before the first execution
+// (e.g. with custom Workers WASM bytes). The first execution awaits the same
+// promise, so Durable Object startup never needs to block on WASM setup.
+let preloadedModule: Promise<QuickJSWASMModule> | null = null;
 
-export const setQuickJSModule = (mod: QuickJSWASMModule) => {
-  preloadedModule = mod;
+export const setQuickJSModule = (mod: QuickJSWASMModule | Promise<QuickJSWASMModule>) => {
+  preloadedModule = Promise.resolve(mod);
 };
 
-const resolveQuickJS = (): Promise<QuickJSWASMModule> =>
-  preloadedModule ? Promise.resolve(preloadedModule) : getQuickJS();
+const resolveQuickJS = (): Promise<QuickJSWASMModule> => preloadedModule ?? getQuickJS();
 
 /**
  * Run a sealed, self-contained bundle in a QuickJS sandbox.
