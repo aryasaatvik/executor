@@ -33,7 +33,7 @@ import type {
 import type { ToolSearchIndex } from "./tool-search-index";
 
 export interface AiSearchToolSearchBackendOptions {
-  readonly aiSearch: Pick<AiSearchInstance, "items" | "search"> | undefined;
+  readonly aiSearch: Pick<AiSearchInstance, "items" | "search" | "stats"> | undefined;
   readonly namespace?: string;
 }
 
@@ -113,28 +113,15 @@ const deleteItemBestEffort = (
   itemId: string,
 ): Effect.Effect<void, never> => deleteItem(aiSearch, itemId).pipe(Effect.catch(() => Effect.void));
 
-function listAiSearchItems(
+const getAiSearchItem = (
   aiSearch: Pick<AiSearchInstance, "items">,
-): Effect.Effect<readonly AiSearchItemInfo[], SemanticSearchError> {
-  return Effect.gen(function* () {
-    const all: AiSearchItemInfo[] = [];
-    let page = 1;
-    while (true) {
-      const result = yield* Effect.tryPromise({
-        try: () => aiSearch.items.list({ page, per_page: 50 }),
-        catch: (cause) =>
-          new SemanticSearchError({ message: "Failed to list AI Search items.", cause }),
-      });
-      all.push(...result.result);
-      const info = result.result_info;
-      const total = info?.total_count;
-      const perPage = info?.per_page ?? 50;
-      if (total !== undefined ? all.length >= total : result.result.length < perPage) break;
-      page += 1;
-    }
-    return all;
+  itemId: string,
+): Effect.Effect<AiSearchItemInfo, SemanticSearchError> =>
+  Effect.tryPromise({
+    try: () => aiSearch.items.get(itemId).info(),
+    catch: (cause) =>
+      new SemanticSearchError({ message: `Failed to get AI Search item "${itemId}".`, cause }),
   });
-}
 
 const toIndexedItemRow = (
   document: ToolSearchDocument,
@@ -219,13 +206,33 @@ export const reindexAiSearchBatch = (input: {
     const page = manifests.slice(batch.offset, batch.offset + batch.pageSize);
     const nextOffset =
       batch.offset + page.length < manifests.length ? batch.offset + page.length : null;
-    const livePaths = new Set(manifests.map((manifest) => manifest.path));
-    const existingEntries = yield* input.items
-      .list()
-      .pipe(Effect.mapError(mapStorageError("Failed to list AI Search item rows.")));
-    const existingByPath = new Map(existingEntries.map((entry) => [entry.key, entry.data]));
+    const shouldRemoveStale = batch.maxTools === undefined && nextOffset === null;
+    const livePaths = new Set(shouldRemoveStale ? manifests.map((manifest) => manifest.path) : []);
+    const existingByPath = yield* input.items
+      .getManyForOwner({
+        owner: input.owner,
+        keys: page.map((manifest) => manifest.path),
+      })
+      .pipe(
+        Effect.map((entries) => new Map([...entries].map(([key, entry]) => [key, entry.data]))),
+        Effect.mapError(mapStorageError("Failed to load AI Search item rows for this batch.")),
+      );
+    const prepared = page.map((manifest) => ({
+      manifest,
+      fingerprint: toolItemKey(manifest),
+      previous: existingByPath.get(manifest.path),
+    }));
     const remoteByKey = new Map(
-      (yield* listAiSearchItems(aiSearch)).map((item) => [item.key, item]),
+      yield* Effect.forEach(
+        prepared.flatMap(({ previous, fingerprint }) =>
+          previous?.fingerprint === fingerprint ? [previous] : [],
+        ),
+        (previous) =>
+          getAiSearchItem(aiSearch, previous.itemId).pipe(
+            Effect.map((item) => [previous.key, item] as const),
+          ),
+        { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+      ),
     );
     let skipped = 0;
     const changed: {
@@ -233,9 +240,7 @@ export const reindexAiSearchBatch = (input: {
       readonly previous?: AiSearchItemRow;
     }[] = [];
 
-    for (const manifest of page) {
-      const previous = existingByPath.get(manifest.path);
-      const fingerprint = toolItemKey(manifest);
+    for (const { manifest, fingerprint, previous } of prepared) {
       const remote = previous === undefined ? undefined : remoteByKey.get(previous.key);
       if (
         previous?.fingerprint === fingerprint &&
@@ -295,10 +300,13 @@ export const reindexAiSearchBatch = (input: {
       );
     }
 
-    const removedEntries =
-      batch.maxTools === undefined && nextOffset === null
-        ? existingEntries.filter((entry) => !livePaths.has(entry.key))
-        : [];
+    const removedEntries = shouldRemoveStale
+      ? (yield* input.items
+          .list()
+          .pipe(Effect.mapError(mapStorageError("Failed to list AI Search item rows.")))).filter(
+          (entry) => !livePaths.has(entry.key),
+        )
+      : [];
     if (removedEntries.length > 0) {
       yield* input.items
         .removeMany({
@@ -364,46 +372,33 @@ export const reindexAiSearch = (input: {
   });
 
 export const statusAiSearch = (input: {
-  readonly aiSearch: Pick<AiSearchInstance, "items">;
+  readonly aiSearch: Pick<AiSearchInstance, "stats">;
   readonly items: ItemsCollection;
   readonly namespace: string;
 }): Effect.Effect<SemanticSearchStatus, SemanticSearchError> =>
   Effect.gen(function* () {
-    const [rows, aiItems] = yield* Effect.all(
+    const [rows, stats] = yield* Effect.all(
       [
         input.items.list().pipe(Effect.mapError(mapStorageError("Failed to list AI Search rows."))),
-        listAiSearchItems(input.aiSearch),
+        Effect.tryPromise({
+          try: () => input.aiSearch.stats(),
+          catch: (cause) =>
+            new SemanticSearchError({ message: "Failed to read AI Search status.", cause }),
+        }),
       ] as const,
       { concurrency: 2 },
     );
-    const aiByKey = new Map(aiItems.map((item) => [item.key, item]));
-    const counts = {
-      queued: 0,
-      running: 0,
-      completed: 0,
-      error: 0,
-      skipped: 0,
-      outdated: 0,
-    };
-    let lastActivity: string | undefined;
-    for (const row of rows) {
-      const remote = aiByKey.get(row.data.key);
-      const status = remote?.status;
-      if (status === "skipped") {
-        counts.skipped += 1;
-      } else if (status === "outdated") {
-        counts.outdated += 1;
-      } else {
-        counts[toStatus(status)] += 1;
-      }
-      if (!lastActivity || row.data.updatedAt > lastActivity) lastActivity = row.data.updatedAt;
-    }
     return {
       namespace: input.namespace,
       indexed: rows.length,
       lexical: null,
-      ...counts,
-      ...(lastActivity ? { lastActivity } : {}),
+      queued: stats.queued ?? 0,
+      running: stats.running ?? 0,
+      completed: stats.completed ?? 0,
+      error: stats.error ?? 0,
+      skipped: stats.skipped ?? 0,
+      outdated: stats.outdated ?? 0,
+      ...(stats.last_activity ? { lastActivity: stats.last_activity } : {}),
     };
   });
 
