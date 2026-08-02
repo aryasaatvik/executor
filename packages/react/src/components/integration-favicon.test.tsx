@@ -45,6 +45,40 @@ describe("IntegrationFavicon", () => {
     expect(integrationLocalIconUrl("openapi")).toBeNull();
   });
 
+  it("uses bundled product assets for Google services before the logo proxy", () => {
+    const calendar = integrationLocalIconUrl("google_calendar");
+    expect(calendar).toMatch(/^data:image\/svg\+xml,/);
+    expect(
+      integrationFaviconSrc({
+        integrationId: "google_calendar",
+        logoDomain: "google.com",
+        size: 16,
+      }),
+    ).toBe(calendar);
+    expect(
+      integrationFaviconSrc({
+        integrationId: "google_calendar",
+        logoDomain: "google.com",
+        size: 16,
+        failedSrcs: [calendar ?? ""],
+      }),
+    ).toBe("https://integrations.sh/logo/google.com?sz=32");
+  });
+
+  it("uses dark-mode-safe local assets for integrations whose proxy logo is unsuitable", () => {
+    for (const integrationId of ["aws_docs", "code_grep", "exa_search_api", "openai_docs"]) {
+      const icon = integrationLocalIconUrl(integrationId);
+      expect(icon).toMatch(/^data:image\/svg\+xml(?:;base64)?,/);
+      expect(
+        integrationFaviconSrc({
+          integrationId,
+          url: "https://example.com",
+          size: 16,
+        }),
+      ).toBe(icon);
+    }
+  });
+
   it("resolves the Executor sidebar icon only when the integration id is threaded (cloud/self-host repro)", () => {
     // Reconstruct the props the multiplayer shell derives for the built-in
     // executor integration (EXECUTOR_INTEGRATION: kind "built-in", name "Executor", no

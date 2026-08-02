@@ -2,6 +2,19 @@ import { BoxIcon } from "lucide-react";
 import { useState } from "react";
 import type { IntegrationPlugin } from "@executor-js/sdk/client";
 import { getDomain } from "tldts";
+import awsDocsIcon from "../assets/integration-logos/aws-docs.svg";
+import codeGrepIcon from "../assets/integration-logos/code-grep.svg";
+import exaSearchApiIcon from "../assets/integration-logos/exa-search-api.svg";
+import googleCalendarIcon from "../assets/integration-logos/google-calendar.svg";
+import googleDocsIcon from "../assets/integration-logos/google-docs.svg";
+import googleDriveIcon from "../assets/integration-logos/google-drive.svg";
+import googleFormsIcon from "../assets/integration-logos/google-forms.svg";
+import googleGmailIcon from "../assets/integration-logos/google-gmail.svg";
+import googleSearchConsoleIcon from "../assets/integration-logos/google-search-console.svg";
+import googleSheetsIcon from "../assets/integration-logos/google-sheets.svg";
+import googleSlidesIcon from "../assets/integration-logos/google-slides.svg";
+import googleYouTubeDataIcon from "../assets/integration-logos/google-youtube-data.svg";
+import openAiDocsIcon from "../assets/integration-logos/openai-docs.svg";
 
 // ---------------------------------------------------------------------------
 // IntegrationFavicon — renders a small logo through integrations.sh.
@@ -28,9 +41,25 @@ export function integrationLogoUrl(domain: string | undefined, size: number): st
   return `https://integrations.sh/logo/${domain}?sz=${size * 2}`;
 }
 
+const LOCAL_INTEGRATION_ICON_URLS: Readonly<Record<string, string>> = {
+  executor: "/favicon-32.png",
+  aws_docs: awsDocsIcon,
+  code_grep: codeGrepIcon,
+  exa_search_api: exaSearchApiIcon,
+  google_calendar: googleCalendarIcon,
+  google_docs: googleDocsIcon,
+  google_drive: googleDriveIcon,
+  google_forms: googleFormsIcon,
+  google_gmail: googleGmailIcon,
+  google_search_console: googleSearchConsoleIcon,
+  google_sheets: googleSheetsIcon,
+  google_slides: googleSlidesIcon,
+  google_youtube_data: googleYouTubeDataIcon,
+  openai_docs: openAiDocsIcon,
+};
+
 export function integrationLocalIconUrl(integrationId: string | undefined): string | null {
-  if (integrationId !== "executor") return null;
-  return "/favicon-32.png";
+  return integrationId ? (LOCAL_INTEGRATION_ICON_URLS[integrationId] ?? null) : null;
 }
 
 const KIND_TO_PLUGIN_KEY: Record<string, string> = {
@@ -130,9 +159,9 @@ export function integrationPresetLogoDomain(
   return preset?.logoDomain ?? null;
 }
 
-// Resolution cascade: the built-in Executor mark, then the preset's canonical
+// Resolution cascade: bundled product assets, then the preset's canonical
 // domain, then the integration URL. Every remote image is served by
-// integrations.sh, so each console surface shares the same source and fallback.
+// integrations.sh, so each console surface shares the same remote fallback.
 export function integrationFaviconSrc(args: {
   logoDomain?: string | null;
   integrationId?: string;
