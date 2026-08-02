@@ -38,7 +38,7 @@ const d1BinaryJsonClient = (client: SqliteDataMigrationClient): SqliteDataMigrat
           Object.entries(row).map(([key, value]) => [
             key,
             D1_JSON_COLUMNS.has(key) && typeof value === "string"
-              ? new TextEncoder().encode(value)
+              ? Array.from(new TextEncoder().encode(value))
               : value,
           ]),
         ),
@@ -318,7 +318,7 @@ describe("providerServiceSplitDataMigration", () => {
     }),
   );
 
-  it.effect("decodes binary JSON returned by D1", () =>
+  it.effect("decodes byte-array JSON returned by D1", () =>
     Effect.gen(function* () {
       const db = yield* Effect.promise(() => createSqliteTestFumaDb({ tables: collectTables() }));
       const client = db.client;
