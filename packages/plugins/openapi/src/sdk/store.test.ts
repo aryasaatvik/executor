@@ -71,7 +71,10 @@ describe("OpenAPI operation store", () => {
               | PluginStorageEntry<T>
               | undefined) ?? null,
           ),
-        getMany: <T = unknown>(input: { readonly collection: string; readonly keys: readonly string[] }) =>
+        getMany: <T = unknown>(input: {
+          readonly collection: string;
+          readonly keys: readonly string[];
+        }) =>
           Effect.succeed(
             new Map(
               input.keys.flatMap((key) => {
