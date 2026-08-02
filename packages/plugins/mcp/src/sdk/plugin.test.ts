@@ -269,7 +269,6 @@ const seedCallToolExecutor = (input: {
         name: "Call tool fixture",
         endpoint: server.url("/mcp"),
         slug: input.slug,
-        remoteTransport: "streamable-http",
         ...(input.oauth ? { auth: { kind: "oauth2" as const } } : {}),
       });
       yield* executor.connections.create({
@@ -620,7 +619,6 @@ describe("mcpPlugin", () => {
       const error = yield* createMcpConnector({
         transport: "remote",
         endpoint: "https://internal.example/mcp",
-        remoteTransport: "streamable-http",
         httpClientLayer,
       }).pipe(Effect.flip);
 
