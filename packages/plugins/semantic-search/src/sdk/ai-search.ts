@@ -57,21 +57,14 @@ const AI_SEARCH_REWRITE_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 const nowIso = (): string => new Date().toISOString();
 
 const isReusableRemoteStatus = (status: string | undefined): boolean =>
-  status === undefined ||
-  status === "queued" ||
-  status === "running" ||
-  status === "completed";
+  status === undefined || status === "queued" || status === "running" || status === "completed";
+
+const isKnownStatus = (status: string): status is AiSearchItemStatus =>
+  status === "queued" || status === "running" || status === "completed" || status === "error";
 
 const toStatus = (status: string | undefined): AiSearchItemStatus => {
-  switch (status) {
-    case "queued":
-    case "running":
-    case "completed":
-    case "error":
-      return status;
-    default:
-      return status === undefined ? "queued" : "error";
-  }
+  if (status === undefined) return "queued";
+  return isKnownStatus(status) ? status : "error";
 };
 
 const toItemName = (document: ToolSearchDocument): string =>
