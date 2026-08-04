@@ -3740,6 +3740,10 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 input.missingOAuthScopes && input.missingOAuthScopes.length > 0
                   ? { missingOAuthScopes: input.missingOAuthScopes }
                   : null,
+              // A re-consent exchanged a new credential successfully. Keep no
+              // stale expired/degraded verdict from the previous grant; the
+              // automatic health probe will record the new credential's state.
+              last_health: null,
               updated_at: now,
             };
             if (existing) {

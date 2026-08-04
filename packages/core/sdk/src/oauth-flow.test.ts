@@ -1068,6 +1068,7 @@ describe("oauth token refresh in resolveConnectionValue", () => {
           (cleared?.provider_state as { oauthReauthRequiredAt?: number } | null)
             ?.oauthReauthRequiredAt,
         ).toBeUndefined();
+        expect(cleared?.last_health).toBeNull();
       }),
     ),
   );
