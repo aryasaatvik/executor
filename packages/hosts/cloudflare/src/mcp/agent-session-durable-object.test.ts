@@ -307,32 +307,30 @@ describe("McpAgentSessionDOBase apps capability persistence", () => {
 });
 
 describe("McpAgentSessionDOBase transport restore", () => {
-  it("restores a same-session request after idle disposal leaves a stale server transport", async () => {
+  it("validates a same-session request after idle disposal without restoring the runtime", async () => {
     const session = await makeHarnessSession();
+    let onStartCalls = 0;
+    session.runMcpAgentOnStart = async () => {
+      onStartCalls += 1;
+    };
 
     await session.alarm();
 
     await expect(
       session.validateMcpSessionOwner({ accountId: "user-1", organizationId: "org-1" }),
     ).resolves.toBe("ok");
+    expect(onStartCalls).toBe(0);
+    expect(session.initialized).toBe(false);
+    expect(session.engine).toBeNull();
+    expect(session.server).toBeUndefined();
   });
 
-  it("single-flights concurrent same-session restore after idle disposal", async () => {
+  it("does not start runtime for concurrent owner validations after idle disposal", async () => {
     const session = await makeHarnessSession();
-    const firstRestoreEntered = makeDeferred();
-    const finishRestore = makeDeferred();
     let onStartCalls = 0;
-    let restoredServer: McpServer | undefined;
 
     session.runMcpAgentOnStart = async () => {
       onStartCalls += 1;
-      const restored = session.server ?? makeServer();
-      restoredServer ??= restored;
-      session.server = restored;
-      firstRestoreEntered.resolve();
-      await finishRestore.promise;
-      await restored.connect(new RestoredTransport());
-      session.initialized = true;
     };
 
     await session.alarm();
@@ -346,16 +344,12 @@ describe("McpAgentSessionDOBase transport restore", () => {
       organizationId: "org-1",
     });
 
-    await firstRestoreEntered.promise;
-    await Promise.resolve();
-    finishRestore.resolve();
-
     await expect(Promise.all([first, second])).resolves.toEqual(["ok", "ok"]);
-    expect(onStartCalls).toBe(1);
-    expect(session.server).toBe(restoredServer);
+    expect(onStartCalls).toBe(0);
+    expect(session.initialized).toBe(false);
   });
 
-  it("single-flights SDK onStart callers with same-session restore", async () => {
+  it("does not race SDK onStart with owner validation", async () => {
     const session = await makeHarnessSession();
     const firstStartEntered = makeDeferred();
     const finishStart = makeDeferred();
