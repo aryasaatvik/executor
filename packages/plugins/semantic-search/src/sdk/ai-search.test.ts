@@ -276,10 +276,7 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
         enabled: true,
         match_threshold: 0.1,
       });
-      expect(requests[1]?.ai_search_options?.query_rewrite).toEqual({
-        enabled: true,
-        model: "@cf/meta/llama-3.1-8b-instruct-fast",
-      });
+      expect(requests[1]?.ai_search_options?.query_rewrite).toBeUndefined();
     }),
   );
 

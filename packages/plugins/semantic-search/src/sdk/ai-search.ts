@@ -52,7 +52,6 @@ const AI_SEARCH_UPLOAD_BATCH_SIZE = 25;
 // Keep AI Search authoritative while lowering only its native retrieval/rerank
 // cutoff for this sparse tool catalog.
 const AI_SEARCH_MATCH_THRESHOLD = 0.1;
-const AI_SEARCH_REWRITE_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -544,17 +543,6 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
                     : {}),
                   return_on_failure: true,
                 },
-                // A namespace gives the native rewriter enough catalog context
-                // to resolve operation-shaped requests without changing the
-                // unscoped wording used for broad web/tool discovery.
-                ...(input.namespace
-                  ? {
-                      query_rewrite: {
-                        enabled: true,
-                        model: AI_SEARCH_REWRITE_MODEL,
-                      },
-                    }
-                  : {}),
                 reranking: { enabled: true, match_threshold: AI_SEARCH_MATCH_THRESHOLD },
               },
             }),
