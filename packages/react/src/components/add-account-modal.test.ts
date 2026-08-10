@@ -351,6 +351,36 @@ describe("createCredentialPayloadOrigin", () => {
       }),
     ).toBeNull();
   });
+
+  it("omits blank optional strategy inputs", () => {
+    expect(
+      createCredentialPayloadOrigin({
+        origin: "paste",
+        inputs: [
+          { variable: "role_arn", label: "Role ARN" },
+          { variable: "external_id", label: "External ID", optional: true },
+        ],
+        values: { role_arn: " arn:aws:iam::123456789012:role/Executor ", external_id: " " },
+        onePasswordItemId: "",
+        singleInput: false,
+      }),
+    ).toEqual({ values: { role_arn: "arn:aws:iam::123456789012:role/Executor" } });
+  });
+
+  it("still rejects a blank required strategy input", () => {
+    expect(
+      createCredentialPayloadOrigin({
+        origin: "paste",
+        inputs: [
+          { variable: "role_arn", label: "Role ARN" },
+          { variable: "external_id", label: "External ID", optional: true },
+        ],
+        values: { role_arn: "", external_id: "tenant" },
+        onePasswordItemId: "",
+        singleInput: false,
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("runCimdConnect", () => {
