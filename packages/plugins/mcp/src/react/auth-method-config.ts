@@ -18,6 +18,7 @@ import {
 } from "@executor-js/react/lib/shared-auth-method-codec";
 
 import { wireAuthInputFromShared } from "@executor-js/react/lib/shared-auth-method-codec";
+import { awsIamCredentialInputs } from "../sdk/types";
 import type {
   McpAuthMethod,
   McpAuthMethodInput,
@@ -47,7 +48,8 @@ const stdioEnvEditorValue = (method: McpStdioEnvMethod): AuthTemplateEditorValue
  *  request-shaped dialect; none/oauth2 pass through). */
 export const mcpWireAuthInput = (
   method: McpAuthMethod | McpCanonicalAuthMethodInput,
-): McpAuthMethodInput => wireAuthInputFromShared(method) as McpAuthMethodInput;
+): McpAuthMethodInput =>
+  method.kind === "aws_iam" ? method : (wireAuthInputFromShared(method) as McpAuthMethodInput);
 
 const oauthAuthMethod = (
   slug: string,
@@ -65,6 +67,16 @@ const oauthAuthMethod = (
     ...(scopes !== undefined ? { scopes } : {}),
     supportsDynamicRegistration: true,
   },
+});
+
+const awsIamAuthMethod = (slug: string): AuthMethod => ({
+  id: slug,
+  label: "AWS IAM role",
+  kind: "apikey",
+  source: "spec",
+  template: AuthTemplateSlug.make(slug),
+  placements: [],
+  credentialInputs: awsIamCredentialInputs,
 });
 
 /** Convert a generic editor value into one MCP auth-method input (no slug —
@@ -97,6 +109,7 @@ export function editorValueFromMcpAuthMethod(method: McpAuthMethod): AuthTemplat
     };
   }
   if (method.kind === "stdio_env") return stdioEnvEditorValue(method);
+  if (method.kind === "aws_iam") return { kind: "none" };
   return editorValueFromSharedMethod(method);
 }
 
@@ -111,6 +124,7 @@ export function authMethodsFromConfig(
   return methods.map((method: McpAuthMethod): AuthMethod => {
     if (method.kind === "oauth2") return oauthAuthMethod(method.slug, endpoint, method.scopes);
     if (method.kind === "stdio_env") return stdioEnvAuthMethod(method);
+    if (method.kind === "aws_iam") return awsIamAuthMethod(method.slug);
     return authMethodFromSharedTemplate(method);
   });
 }
