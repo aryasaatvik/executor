@@ -66,6 +66,22 @@ export interface AuthMethodOAuthDescriptor {
   readonly supportsClientIdMetadataDocument?: boolean;
 }
 
+/** One value collected when an authentication strategy needs credential
+ * material that is not itself an HTTP placement. Provider-backed strategies
+ * such as AWS IAM use these inputs to derive the request credential at runtime
+ * (for example, exchanging an assumed role for a short-lived bearer token). */
+export interface AuthMethodCredentialInputDescriptor {
+  /** Stable key used in the connection's encrypted values map. */
+  readonly variable: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly placeholder?: string;
+  /** Secret inputs are masked in the account form. Defaults to true. */
+  readonly secret?: boolean;
+  /** Optional inputs may be omitted when creating or validating a connection. */
+  readonly optional?: boolean;
+}
+
 /** A single declared auth method on an integration's catalog response. */
 export interface AuthMethodDescriptor {
   /** Stable id within the integration (e.g. the auth template slug). */
@@ -75,6 +91,10 @@ export interface AuthMethodDescriptor {
   /** The auth-template slug a connection binds against. */
   readonly template: string;
   readonly placements?: readonly AuthPlacementDescriptor[];
+  /** Named credential values consumed by the owning plugin rather than
+   * rendered directly onto an HTTP request. Mutually exclusive with
+   * placement-derived inputs for built-in methods. */
+  readonly credentialInputs?: readonly AuthMethodCredentialInputDescriptor[];
   readonly oauth?: AuthMethodOAuthDescriptor;
 }
 
