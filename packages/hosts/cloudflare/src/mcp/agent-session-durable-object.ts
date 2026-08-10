@@ -763,19 +763,21 @@ export abstract class McpAgentSessionDOBase<
         if (destroyPending === true) return "terminated" as const;
         const sessionMeta = yield* self.loadSessionMeta();
         if (!sessionMeta) return "not_found" as const;
-        if (self.initialized) {
+        const owner =
+          identity.accountId === sessionMeta.userId &&
+          identity.organizationId === sessionMeta.organizationId
+            ? ("ok" as const)
+            : ("forbidden" as const);
+        if (owner === "ok" && self.initialized) {
           yield* Effect.promise(() => self.markActivity()).pipe(
             Effect.withSpan("McpSessionDO.markActivity"),
           );
-        } else {
-          yield* Effect.promise(() => self.onStart()).pipe(
-            Effect.withSpan("McpSessionDO.restore_transport_runtime"),
-          );
         }
-        return identity.accountId === sessionMeta.userId &&
-          identity.organizationId === sessionMeta.organizationId
-          ? ("ok" as const)
-          : ("forbidden" as const);
+        // Owner validation is intentionally storage-only. A cold session is
+        // initialized by PartyServer's fetch path below; starting it here
+        // would run outside PartyServer's single blockConcurrencyWhile lock,
+        // so a concurrent fetch can wait on the same DO startup indefinitely.
+        return owner;
       }).pipe(
         Effect.withSpan("McpSessionDO.validateMcpSessionOwner"),
         // oxlint-disable-next-line executor/no-effect-escape-hatch -- boundary: DO RPC exposes Promise results
