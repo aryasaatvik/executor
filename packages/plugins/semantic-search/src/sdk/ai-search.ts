@@ -50,10 +50,15 @@ const AI_SEARCH_UPLOAD_BATCH_SIZE = 25;
 
 const nowIso = (): string => new Date().toISOString();
 
+const isReusableRemoteStatus = (status: string | undefined): boolean =>
+  status === undefined || status === "queued" || status === "running" || status === "completed";
+
 const toStatus = (status: string | undefined): AiSearchItemStatus =>
   status === "queued" || status === "running" || status === "completed" || status === "error"
     ? status
-    : "queued";
+    : status === undefined
+      ? "queued"
+      : "error";
 
 const toItemName = (document: ToolSearchDocument): string =>
   `tool-${cyrb53(`${document.path}\u0000${document.fingerprint}`).toString(36)}.md`;
@@ -105,7 +110,10 @@ const deleteItem = (
   Effect.tryPromise({
     try: () => aiSearch.items.delete(itemId),
     catch: (cause) =>
-      new SemanticSearchError({ message: `Failed to delete AI Search item "${itemId}".`, cause }),
+      new SemanticSearchError({
+        message: `Failed to delete AI Search item "${itemId}".`,
+        cause,
+      }),
   }).pipe(Effect.asVoid);
 
 const deleteItemBestEffort = (
@@ -120,7 +128,10 @@ const getAiSearchItem = (
   Effect.tryPromise({
     try: () => aiSearch.items.get(itemId).info(),
     catch: (cause) =>
-      new SemanticSearchError({ message: `Failed to get AI Search item "${itemId}".`, cause }),
+      new SemanticSearchError({
+        message: `Failed to get AI Search item "${itemId}".`,
+        cause,
+      }),
   });
 
 const toIndexedItemRow = (
@@ -156,7 +167,7 @@ const uploadDocument = (
 ): Effect.Effect<UploadedDocument, SemanticSearchError> =>
   Effect.gen(function* () {
     const itemName = toItemName(document);
-    if (remote !== undefined && remote.status !== "error") {
+    if (remote !== undefined && isReusableRemoteStatus(remote.status)) {
       return {
         deleteOnStorageFailure: false,
         uploadedItemId: remote.id,
@@ -202,7 +213,9 @@ export const reindexAiSearchBatch = (input: {
   const aiSearch = input.aiSearch;
   return Effect.gen(function* () {
     const batch = normalizeBatchInput(input);
-    const manifests = yield* listToolManifests(input.executor, { maxTools: batch.maxTools });
+    const manifests = yield* listToolManifests(input.executor, {
+      maxTools: batch.maxTools,
+    });
     const page = manifests.slice(batch.offset, batch.offset + batch.pageSize);
     const nextOffset =
       batch.offset + page.length < manifests.length ? batch.offset + page.length : null;
@@ -245,7 +258,7 @@ export const reindexAiSearchBatch = (input: {
       if (
         previous?.fingerprint === fingerprint &&
         remote !== undefined &&
-        remote.status !== "error"
+        isReusableRemoteStatus(remote.status)
       ) {
         skipped += 1;
         continue;
@@ -383,7 +396,10 @@ export const statusAiSearch = (input: {
         Effect.tryPromise({
           try: () => input.aiSearch.stats(),
           catch: (cause) =>
-            new SemanticSearchError({ message: "Failed to read AI Search status.", cause }),
+            new SemanticSearchError({
+              message: "Failed to read AI Search status.",
+              cause,
+            }),
         }),
       ] as const,
       { concurrency: 2 },
@@ -404,14 +420,6 @@ export const statusAiSearch = (input: {
 
 const matchesNamespace = (path: string, namespace: string | undefined): boolean =>
   !namespace || path === namespace || path.startsWith(`${namespace}.`);
-
-const rowToResult = (row: AiSearchItemRow, score: number): ToolDiscoveryResult => ({
-  path: row.path,
-  name: row.name,
-  description: row.description,
-  integration: row.integration,
-  score,
-});
 
 const getStringMetadata = (
   metadata: Readonly<Record<string, unknown>> | undefined,
@@ -451,24 +459,7 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
         if (!query) {
           return { items: [], total: 0, hasMore: false, nextOffset: null };
         }
-        const limit = Math.min(50, Math.max(1, input.limit + input.offset));
-        const hasLocalRows = deps.items !== undefined;
-        const rowsByKey =
-          deps.items === undefined
-            ? undefined
-            : yield* deps.items.list().pipe(
-                Effect.map((rows) => new Map(rows.map((row) => [row.data.key, row.data]))),
-                Effect.mapError(
-                  (cause) =>
-                    new ExecutionToolError({
-                      message: "AI Search tool search failed.",
-                      cause,
-                    }),
-                ),
-              );
-        if (hasLocalRows && rowsByKey?.size === 0) {
-          return { items: [], total: 0, hasMore: false, nextOffset: null };
-        }
+        const integration = input.namespace?.split(".", 1)[0];
         const response = yield* Effect.tryPromise({
           try: () =>
             aiSearch.search({
@@ -476,25 +467,55 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
               ai_search_options: {
                 retrieval: {
                   retrieval_type: "hybrid",
-                  max_num_results: limit,
+                  // Retrieve a broad candidate set before deduplication and paging. Asking
+                  // AI Search for only the caller's page size makes plausible tools vanish
+                  // when several chunks belong to one tool or beat the desired integration.
+                  max_num_results: 50,
+                  ...(integration ? { filters: { integration: { $eq: integration } } } : {}),
                   return_on_failure: true,
                 },
                 reranking: { enabled: true },
               },
             }),
           catch: (cause) =>
-            new ExecutionToolError({ message: "AI Search tool search failed.", cause }),
+            new ExecutionToolError({
+              message: "AI Search tool search failed.",
+              cause,
+            }),
         });
 
+        // AI Search carries the canonical tool metadata on every chunk. Validate its
+        // path against the current catalog, rather than reconciling its opaque item key
+        // with the local upload ledger. That key is provider-owned and may be rewritten
+        // during an upload, while the catalog path is the stable identity clients use.
+        const chunkResults = (response.chunks ?? []).flatMap((chunk) => {
+          const result = chunkToResult(chunk);
+          return result === null ? [] : [result];
+        });
+        const visiblePaths =
+          deps.items === undefined
+            ? undefined
+            : new Set(
+                (yield* deps.items
+                  .getMany({ keys: chunkResults.map((result) => result.path) })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new ExecutionToolError({
+                          message: "AI Search tool search failed.",
+                          cause,
+                        }),
+                    ),
+                  )).keys(),
+              );
+
         const bestByPath = new Map<string, ToolDiscoveryResult>();
-        for (const chunk of response.chunks ?? []) {
-          const row = chunk.item?.key ? rowsByKey?.get(chunk.item.key) : undefined;
-          const result = row
-            ? rowToResult(row, chunk.score)
-            : hasLocalRows
-              ? null
-              : chunkToResult(chunk);
-          if (!result || !matchesNamespace(result.path, input.namespace)) continue;
+        for (const result of chunkResults) {
+          if (
+            (visiblePaths !== undefined && !visiblePaths.has(result.path)) ||
+            !matchesNamespace(result.path, input.namespace)
+          )
+            continue;
           const previous = bestByPath.get(result.path);
           if (!previous || result.score > previous.score) bestByPath.set(result.path, result);
         }
@@ -575,7 +596,10 @@ export const makeAiSearchToolSearchBackend = (
                   })),
                   Effect.mapError(
                     (cause) =>
-                      new SemanticSearchError({ message: "AI Search query failed.", cause }),
+                      new SemanticSearchError({
+                        message: "AI Search query failed.",
+                        cause,
+                      }),
                   ),
                 )
             : notConfigured(),
