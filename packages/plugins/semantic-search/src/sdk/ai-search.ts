@@ -459,6 +459,7 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
         if (!query) {
           return { items: [], total: 0, hasMore: false, nextOffset: null };
         }
+        const integration = input.namespace?.split(".", 1)[0];
         const response = yield* Effect.tryPromise({
           try: () =>
             aiSearch.search({
@@ -470,9 +471,7 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
                   // AI Search for only the caller's page size makes plausible tools vanish
                   // when several chunks belong to one tool or beat the desired integration.
                   max_num_results: 50,
-                  ...(input.namespace
-                    ? { filters: { integration: { $eq: input.namespace } } }
-                    : {}),
+                  ...(integration ? { filters: { integration: { $eq: integration } } } : {}),
                   return_on_failure: true,
                 },
                 reranking: { enabled: true },

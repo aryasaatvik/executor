@@ -195,7 +195,7 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     }),
   );
 
-  it.effect("pushes an integration namespace into AI Search retrieval", () =>
+  it.effect("pushes the integration segment of a path namespace into AI Search retrieval", () =>
     Effect.gen(function* () {
       let request: Parameters<AiSearchInstance["search"]>[0] | undefined;
       const provider = makeAiSearchToolDiscoveryProvider({
@@ -212,7 +212,7 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
       yield* provider!.searchTools({
         executor: undefined as never,
         query: "authenticated user",
-        namespace: "github_api",
+        namespace: "github_api.default",
         limit: 5,
         offset: 0,
       });
