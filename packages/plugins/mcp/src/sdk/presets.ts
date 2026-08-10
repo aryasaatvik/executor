@@ -1,3 +1,5 @@
+import type { McpAuthMethodInput } from "./types";
+
 export interface McpRemotePreset {
   readonly id: string;
   readonly name: string;
@@ -6,6 +8,9 @@ export interface McpRemotePreset {
   readonly endpoint: string;
   readonly logoDomain?: string;
   readonly featured?: boolean;
+  /** Built-in authentication strategy for providers whose credentials are
+   * resolved by the MCP plugin rather than authored as request placements. */
+  readonly authenticationTemplate?: readonly McpAuthMethodInput[];
   readonly transport?: undefined;
 }
 
@@ -24,6 +29,25 @@ export interface McpStdioPreset {
 export type McpPreset = McpRemotePreset | McpStdioPreset;
 
 export const mcpPresets: readonly McpPreset[] = [
+  {
+    id: "aws-mcp",
+    name: "AWS MCP",
+    summary: "AWS documentation, APIs, and automation through the managed AWS MCP Server.",
+    url: "https://aws-mcp.us-east-1.api.aws/mcp",
+    endpoint: "https://aws-mcp.us-east-1.api.aws/mcp",
+    logoDomain: "aws.amazon.com",
+    featured: true,
+    authenticationTemplate: [{ kind: "aws_iam" }],
+  },
+  {
+    id: "aws-mcp-eu-central-1",
+    name: "AWS MCP (Europe)",
+    summary: "AWS documentation, APIs, and automation through the Frankfurt AWS MCP Server.",
+    url: "https://aws-mcp.eu-central-1.api.aws/mcp",
+    endpoint: "https://aws-mcp.eu-central-1.api.aws/mcp",
+    logoDomain: "aws.amazon.com",
+    authenticationTemplate: [{ kind: "aws_iam" }],
+  },
   {
     id: "emulate-mcp",
     name: "Emulate MCP",
