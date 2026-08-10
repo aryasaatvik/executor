@@ -45,6 +45,11 @@ import {
 import type { CodexPluginEntry } from "./codex-plugins";
 import { createMcpConnector, type ConnectorInput, type McpConnector } from "./connection";
 import { createMcpConnectionPool } from "./connection-pool";
+import {
+  createAwsIamTokenManager,
+  isManagedAwsMcpEndpoint,
+  type AwsIamTokenManager,
+} from "./aws-iam";
 import { discoverToolsFromInput } from "./discover";
 import {
   McpConnectionError,
@@ -72,6 +77,7 @@ import {
   type McpIntegrationConfig as McpIntegrationConfigType,
   type McpStdioEnvMethod,
   type McpStdioIntegrationConfig,
+  awsIamCredentialInputs,
 } from "./types";
 
 const MCP_PLUGIN_ID = "mcp" as const;
@@ -639,13 +645,19 @@ const selectAuthMethod = (
   return methods.length === 1 ? methods[0] : undefined;
 };
 
+type BuiltConnectorInput = ConnectorInput & { readonly credentialVersion?: number };
+
 const buildConnectorInput = (
   config: McpIntegrationConfigType,
   values: Record<string, string | null>,
   templateSlug: string | null,
   allowStdio: boolean,
   httpClientLayer?: Layer.Layer<HttpClient.HttpClient>,
-): Effect.Effect<ConnectorInput, McpConnectionError> => {
+  awsIam?: {
+    readonly manager: AwsIamTokenManager;
+    readonly connectionKey: string;
+  },
+): Effect.Effect<BuiltConnectorInput, McpConnectionError> => {
   if (config.transport === "stdio") {
     if (!allowStdio) {
       return Effect.fail(
@@ -694,6 +706,44 @@ const buildConnectorInput = (
   } else if (auth?.kind === "oauth2") {
     const token = values[TOKEN_VARIABLE];
     if (token != null) authProvider = makeOAuthProvider(token);
+  } else if (auth?.kind === "aws_iam") {
+    if (!awsIam || !httpClientLayer) {
+      return Effect.fail(
+        new McpConnectionError({
+          transport: "streamable-http",
+          message: "AWS IAM authentication is unavailable in this host",
+        }),
+      );
+    }
+    if (!isManagedAwsMcpEndpoint(config.endpoint)) {
+      return Effect.fail(
+        new McpConnectionError({
+          transport: "streamable-http",
+          message: "AWS IAM authentication can only be used with a managed AWS MCP endpoint",
+        }),
+      );
+    }
+    return awsIam.manager.resolve(awsIam.connectionKey, config.endpoint, values).pipe(
+      Effect.provide(httpClientLayer),
+      Effect.map((resolved) => ({
+        transport: "remote" as const,
+        endpoint: config.endpoint,
+        queryParams: Object.keys(queryParams).length > 0 ? queryParams : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        authProvider: makeOAuthProvider(resolved.accessToken),
+        credentialVersion: resolved.version,
+        httpClientLayer,
+      })),
+      Effect.mapError(
+        (error) =>
+          new McpConnectionError({
+            transport: "streamable-http",
+            // oxlint-disable-next-line executor/no-unknown-error-message -- typed AwsIamAuthError from the strategy resolver
+            message: error.message,
+            ...(error.httpStatus !== undefined ? { httpStatus: error.httpStatus } : {}),
+          }),
+      ),
+    );
   }
 
   return Effect.succeed({
@@ -790,6 +840,7 @@ export const connectionPoolKey = (
             queryParams: sortedRecord(input.queryParams),
             template,
             values: sortedRecord(values),
+            credentialVersion: input.credentialVersion,
           }
         : {
             owner: identity.owner,
@@ -839,6 +890,14 @@ const describeStdioEnvAuthMethod = (method: McpStdioEnvMethod): AuthMethodDescri
   placements: method.vars.map((name) => ({ carrier: "env", name, prefix: "", variable: name })),
 });
 
+const describeAwsIamAuthMethod = (slug: string): AuthMethodDescriptor => ({
+  id: slug,
+  label: "AWS IAM role",
+  kind: "apikey",
+  template: slug,
+  credentialInputs: awsIamCredentialInputs,
+});
+
 export const describeMcpAuthMethods = (
   record: IntegrationRecord,
 ): readonly AuthMethodDescriptor[] => {
@@ -851,6 +910,7 @@ export const describeMcpAuthMethods = (
   const methods = config.authenticationTemplate ?? [];
   return methods.map((method: McpAuthMethod): AuthMethodDescriptor => {
     if (method.kind === "stdio_env") return describeStdioEnvAuthMethod(method);
+    if (method.kind === "aws_iam") return describeAwsIamAuthMethod(method.slug);
     if (method.kind === "apikey") return describeApiKeyAuthMethod(method);
     if (method.kind === "oauth2") {
       return {
@@ -908,6 +968,7 @@ export interface McpPluginOptions {
 export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
   const allowStdio = options?.dangerouslyAllowStdioMCP ?? false;
   const connectionPool = createMcpConnectionPool();
+  const awsIamTokenManager = createAwsIamTokenManager();
 
   const presetEntries = (
     allowStdio
@@ -943,7 +1004,8 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
     // factory reads `allowStdio` and gates the stdio tab + presets.
     clientConfig: { allowStdio },
     storage: () => ({}),
-    close: () => connectionPool.close(),
+    close: () =>
+      connectionPool.close().pipe(Effect.tap(() => Effect.sync(() => awsIamTokenManager.clear()))),
 
     extension: (ctx: PluginCtx) => {
       const httpClientLayer = options?.httpClientLayer ?? ctx.httpClientLayer;
@@ -1541,6 +1603,10 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           template === null ? null : String(template),
           allowStdio,
           httpClientLayer,
+          {
+            manager: awsIamTokenManager,
+            connectionKey: `${connection.owner}:${connection.integration}:${connection.name}`,
+          },
         ).pipe(Effect.result);
 
         if (Result.isFailure(built)) {
@@ -1636,6 +1702,10 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
           String(credential.template),
           allowStdio,
           invokeHttpClientLayer,
+          {
+            manager: awsIamTokenManager,
+            connectionKey: `${credential.owner}:${credential.integration}:${credential.connection}`,
+          },
         );
         const connector: McpConnector = createMcpConnector(connectorInput);
         const poolKey = isPoolableConnectorInput(connectorInput)
@@ -1900,18 +1970,54 @@ export const mcpPlugin = definePlugin((options?: McpPluginOptions) => {
             }
           }
         }
+        const httpClientLayer = options?.httpClientLayer ?? ctx.httpClientLayer;
+        const method = selectAuthMethod(parsed, String(credential.template));
+        const awsIdentity =
+          method?.kind === "aws_iam"
+            ? yield* awsIamTokenManager
+                .resolve(
+                  `${credential.owner}:${credential.integration}:${credential.connection}`,
+                  parsed.transport === "remote" ? parsed.endpoint : "",
+                  credential.values,
+                )
+                .pipe(
+                  Effect.provide(httpClientLayer),
+                  Effect.mapError(
+                    (error) =>
+                      new McpConnectionError({
+                        transport: "streamable-http",
+                        // oxlint-disable-next-line executor/no-unknown-error-message -- typed AwsIamAuthError from the strategy resolver
+                        message: error.message,
+                        ...(error.httpStatus !== undefined ? { httpStatus: error.httpStatus } : {}),
+                      }),
+                  ),
+                )
+            : undefined;
         const connector = yield* buildConnectorInput(
           parsed,
           credential.values,
           credential.template === null ? null : String(credential.template),
           allowStdio,
-          options?.httpClientLayer ?? ctx.httpClientLayer,
+          httpClientLayer,
+          {
+            manager: awsIamTokenManager,
+            connectionKey: `${credential.owner}:${credential.integration}:${credential.connection}`,
+          },
         );
 
         return yield* discoverToolsFromInput(connector).pipe(
           Effect.map(
             () =>
-              ({ status: "healthy" as const, checkedAt: Date.now() }) satisfies HealthCheckResult,
+              ({
+                status: "healthy" as const,
+                checkedAt: Date.now(),
+                ...(awsIdentity
+                  ? {
+                      identity: `${awsIdentity.accountId} · ${awsIdentity.arn}`,
+                      detail: `Authenticated as ${awsIdentity.arn}`,
+                    }
+                  : {}),
+              }) satisfies HealthCheckResult,
           ),
           Effect.catchTag("McpToolDiscoveryError", (error) =>
             Effect.succeed({
