@@ -245,7 +245,7 @@ export default function AddMcpIntegration(props: {
 
   const remoteIdentity = useIntegrationIdentity({
     fallbackName:
-      (!isStdioPreset && preset?.transport === undefined ? preset.name : undefined) ??
+      (preset && !isStdioPreset && preset.transport === undefined ? preset.name : undefined) ??
       integrationDisplayNameFromUrl(state.url, "MCP") ??
       probe?.serverName ??
       probe?.name ??
