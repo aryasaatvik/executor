@@ -97,6 +97,7 @@ export const OrgAuthLive = Layer.effect(
           // empty (the WorkOS control plane doesn't resolve them here; no cloud
           // handler reads them) and `organizationName` is unused by AuthContext.
           const auth = authContextFromPrincipal({
+            kind: "member",
             accountId: session.accountId,
             organizationId: result.organizationId,
             organizationName: "",
