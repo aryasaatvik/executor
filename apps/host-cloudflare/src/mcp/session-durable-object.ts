@@ -101,12 +101,18 @@ const makeCloudflareModernRuntime = (
   lifecycle: CloudflareModernLifecycle = {},
 ): BuiltModernMcpRuntime => {
   const artifactOrigin = sessionMeta.webOrigin ?? config.webBaseUrl;
+  // Keep modern per-request executions attributed exactly like the legacy
+  // session path. The edge already carried the authenticated actor into the
+  // session metadata; dropping it here makes new modern runs disappear from
+  // the Runs actor facet.
+  const actor = sessionMeta.actor ?? { kind: "user", id: sessionMeta.userId, label: null };
   return {
     engine: runtime.engine,
     buildServer: (options) =>
       buildMcpServer({
         engine: runtime.engine,
         description: runtime.description,
+        trigger: { kind: "mcp", actor },
         artifacts: runtime.executor.artifacts,
         connections: runtime.executor.connections,
         artifactsEnabled: sessionMeta.artifactsEnabled ?? true,
@@ -158,6 +164,7 @@ export const makeCloudflareModernMcpServerBuilder = (
           organizationName: config.organizationName,
           organizationSlug: config.organizationSlug,
           userId: principal.accountId,
+          actor: session.actor ?? principal.actor,
           resource,
           elicitationMode: session.elicitationMode,
           artifactsEnabled: session.artifactsEnabled,

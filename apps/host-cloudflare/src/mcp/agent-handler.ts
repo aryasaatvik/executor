@@ -216,6 +216,7 @@ export const makeCloudflareMcpAgentHandler = (
         {
           accountId: outcome.principal.accountId,
           organizationId: outcome.principal.organizationId,
+          actor: outcome.principal.actor,
         },
         defaultMcpResource,
       );
@@ -267,6 +268,7 @@ export const makeCloudflareMcpAgentHandler = (
         {
           accountId: outcome.principal.accountId,
           organizationId: outcome.principal.organizationId,
+          actor: outcome.principal.actor,
         },
         defaultMcpResource,
       ),

@@ -12,17 +12,31 @@
 // DO worker bundle that reaches it can be bundled by wrangler/esbuild.
 // ---------------------------------------------------------------------------
 
-import { Effect } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { mcpResourceKey, type McpResource } from "@executor-js/host-mcp";
+import type { ExecutionActor } from "@executor-js/sdk/core";
 
 export const INTERNAL_ACCOUNT_ID_HEADER = "x-executor-mcp-account-id";
 export const INTERNAL_ORGANIZATION_ID_HEADER = "x-executor-mcp-organization-id";
 export const INTERNAL_RESOURCE_KEY_HEADER = "x-executor-mcp-resource-key";
+/** Serialized only by the authenticated Worker before a request enters the DO. */
+export const INTERNAL_ACTOR_HEADER = "x-executor-mcp-actor";
+
+const ExecutionActorSchema = Schema.Struct({
+  kind: Schema.String,
+  id: Schema.String,
+  label: Schema.NullOr(Schema.String),
+});
+const decodeExecutionActor = Schema.decodeUnknownOption(
+  Schema.fromJsonString(ExecutionActorSchema),
+);
 
 /** The verified identity used to stamp the DO's internal owner headers. */
 export type VerifiedTokenHeaders = {
   readonly accountId: string;
   readonly organizationId: string;
+  /** Credential identity used for run attribution, when the host knows it. */
+  readonly actor?: ExecutionActor;
 };
 
 /** Parsed worker-stamped identity and resource received by a session DO. */
@@ -35,8 +49,11 @@ export const verifiedMcpRequestHeaders = (request: Request): VerifiedMcpRequestH
   const accountId = request.headers.get(INTERNAL_ACCOUNT_ID_HEADER);
   const organizationId = request.headers.get(INTERNAL_ORGANIZATION_ID_HEADER);
   const resourceKey = request.headers.get(INTERNAL_RESOURCE_KEY_HEADER);
+  const actorHeader = request.headers.get(INTERNAL_ACTOR_HEADER);
+  const actor =
+    actorHeader === null ? undefined : Option.getOrUndefined(decodeExecutionActor(actorHeader));
   return accountId && organizationId && resourceKey
-    ? { accountId, organizationId, resourceKey }
+    ? { accountId, organizationId, resourceKey, ...(actor ? { actor } : {}) }
     : null;
 };
 
@@ -125,6 +142,8 @@ export const withVerifiedIdentityHeaders = (
   headers.set(INTERNAL_ACCOUNT_ID_HEADER, token.accountId);
   headers.set(INTERNAL_ORGANIZATION_ID_HEADER, token.organizationId ?? "");
   headers.set(INTERNAL_RESOURCE_KEY_HEADER, mcpResourceKey(resource));
+  if (token.actor) headers.set(INTERNAL_ACTOR_HEADER, JSON.stringify(token.actor));
+  else headers.delete(INTERNAL_ACTOR_HEADER);
   return new Request(request, { headers });
 };
 

@@ -997,6 +997,7 @@ export abstract class McpAgentSessionDOBase<
       session: {
         organizationId: sessionMeta.organizationId,
         userId: sessionMeta.userId,
+        actor: sessionMeta.actor,
         elicitationMode: sessionMeta.elicitationMode ?? "model",
         artifactsEnabled: sessionMeta.artifactsEnabled,
         resource: sessionMeta.resource,
@@ -1329,6 +1330,7 @@ export abstract class McpAgentSessionDOBase<
       session: {
         organizationId: verified.organizationId,
         userId: verified.accountId,
+        actor: verified.actor,
         elicitationMode: readElicitationMode(request),
         artifactsEnabled: readArtifactsEnabled(request),
         resource: mcpResourceFromKey(verified.resourceKey),

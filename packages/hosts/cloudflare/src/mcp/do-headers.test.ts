@@ -1,10 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Tracer } from "effect";
 
-import { currentPropagationHeaders } from "./do-headers";
+import {
+  INTERNAL_ACTOR_HEADER,
+  currentPropagationHeaders,
+  verifiedMcpRequestHeaders,
+  withVerifiedIdentityHeaders,
+} from "./do-headers";
+import { defaultMcpResource } from "@executor-js/host-mcp";
 
 const TRACE_ID = "0af7651916cd43dd8448eb211c80319c";
 const SPAN_ID = "b7ad6b7169203331";
+const ACTOR = { kind: "service-token", id: "token_test", label: "test token" } as const;
 
 describe("currentPropagationHeaders", () => {
   it("emits a traceparent from an external parent span (the worker edge span)", async () => {
@@ -45,5 +52,32 @@ describe("currentPropagationHeaders", () => {
     const headers = await Effect.runPromise(currentPropagationHeaders(request));
     expect(headers.tracestate).toBe("vendor=state");
     expect(headers.baggage).toBe("k=v");
+  });
+});
+
+describe("verified MCP identity headers", () => {
+  it("round-trips an actor and clears stale client input", () => {
+    const request = new Request("https://executor.sh/mcp", {
+      headers: { [INTERNAL_ACTOR_HEADER]: "stale-client-value" },
+    });
+    const serviceRequest = withVerifiedIdentityHeaders(
+      request,
+      { accountId: "acct_test", organizationId: "org_test", actor: ACTOR },
+      defaultMcpResource,
+    );
+
+    expect(verifiedMcpRequestHeaders(serviceRequest)).toMatchObject({
+      accountId: "acct_test",
+      organizationId: "org_test",
+      actor: ACTOR,
+    });
+
+    const humanRequest = withVerifiedIdentityHeaders(
+      serviceRequest,
+      { accountId: "acct_test", organizationId: "org_test" },
+      defaultMcpResource,
+    );
+    expect(humanRequest.headers.has(INTERNAL_ACTOR_HEADER)).toBe(false);
+    expect(verifiedMcpRequestHeaders(humanRequest)?.actor).toBeUndefined();
   });
 });

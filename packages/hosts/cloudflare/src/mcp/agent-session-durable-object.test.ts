@@ -19,6 +19,11 @@ const SESSION_ID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789ab
 const ACCOUNT_ID = "acct_test";
 const ORGANIZATION_ID = "org_test";
 const REQUEST_STATE_KEY = "0123456789abcdef0123456789abcdef";
+const SERVICE_TOKEN_ACTOR = {
+  kind: "service-token",
+  id: "phoenix-token",
+  label: "phoenix",
+} as const;
 
 class MemoryStorage implements DurableObjectStorage, DurableObjectTransaction {
   private readonly values = new Map<string, unknown>();
@@ -210,6 +215,7 @@ class HarnessSession extends McpAgentSessionDOBase<
       organizationId: token.organizationId,
       organizationName: "Test Org",
       userId: token.userId,
+      actor: token.actor,
       elicitationMode: token.elicitationMode,
       artifactsEnabled: token.artifactsEnabled,
       resource: token.resource,
@@ -238,10 +244,10 @@ class HarnessSession extends McpAgentSessionDOBase<
   }
 }
 
-const verifiedRequest = (request: Request): Request =>
+const verifiedRequest = (request: Request, actor?: typeof SERVICE_TOKEN_ACTOR): Request =>
   withVerifiedIdentityHeaders(
     request,
-    { accountId: ACCOUNT_ID, organizationId: ORGANIZATION_ID },
+    { accountId: ACCOUNT_ID, organizationId: ORGANIZATION_ID, actor },
     defaultMcpResource,
   );
 
@@ -558,6 +564,40 @@ describe("McpAgentSessionDOBase session serving", () => {
     } finally {
       await harness.client.close();
     }
+  });
+
+  it("persists a service-token actor from the worker-stamped legacy request", async () => {
+    const state = new MemoryDurableObjectState();
+    const session = new HarnessSession(state, {} as Cloudflare.Env);
+    const response = await session.fetch(
+      verifiedRequest(
+        new Request("https://executor.test/mcp", {
+          method: "POST",
+          headers: {
+            accept: "application/json, text/event-stream",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "service-token-test", version: "1.0.0" },
+            },
+          }),
+        }),
+        SERVICE_TOKEN_ACTOR,
+      ),
+    );
+    await response.text();
+
+    await expect(
+      state.storage.get<SessionMeta>("executor:mcp:v2:session-meta"),
+    ).resolves.toMatchObject({
+      actor: SERVICE_TOKEN_ACTOR,
+    });
   });
 
   it("returns a clean 404 for storage created by the retired Agent stack", async () => {
