@@ -144,7 +144,7 @@ const ServiceTokensHandlers = HttpApiBuilder.group(ServiceTokensApiBundle, "serv
           const auth = yield* AuthContext;
           return yield* ext.alias(payload.commonName, {
             machineName: payload.machineName ?? null,
-            email: auth.email.length > 0 ? auth.email : null,
+            email: auth.email && auth.email.length > 0 ? auth.email : null,
             name: auth.name,
           });
         }),
