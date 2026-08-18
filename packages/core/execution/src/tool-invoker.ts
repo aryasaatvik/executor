@@ -7,6 +7,8 @@ import type {
   ToolError,
   Tool,
   ToolSchemaView,
+} from "@executor-js/sdk/core";
+import type {
   PagedResult,
   ToolDiscoveryInput,
   ToolDiscoveryProvider,
