@@ -220,7 +220,6 @@ export const ExecutionsHandlers = HttpApiBuilder.group(ExecutorApi, "executions"
               trigger: { kind: "http", actor },
             }),
           );
-          );
 
           if (outcome.status === "completed") {
             const formatted = formatExecuteResult(outcome.result);

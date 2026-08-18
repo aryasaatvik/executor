@@ -150,6 +150,7 @@ export const authContextFromPlatform = (principal: PlatformPrincipal): AuthConte
   name: null,
   avatarUrl: null,
   roles: [],
+  actor: { kind: "platform", id: principal.keyId, label: null },
 });
 
 // Optional per-failure render hints. Self-host produces the bare error (these
