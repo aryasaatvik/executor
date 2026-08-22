@@ -153,6 +153,20 @@ export const googleOpenApiPresets: readonly GoogleOpenApiPreset[] = [
     oauthAudience: "standard-user",
   },
   {
+    id: "google-analytics-data",
+    name: "Google Analytics Data",
+    summary: "Reports, realtime metrics, funnels, and audience exports for GA4 properties.",
+    url: "https://analyticsdata.googleapis.com/$discovery/rest?version=v1beta",
+    oauthAudience: "standard-user",
+  },
+  {
+    id: "google-analytics-admin",
+    name: "Google Analytics Admin",
+    summary: "Accounts, properties, data streams, key events, and analytics configuration.",
+    url: "https://analyticsadmin.googleapis.com/$discovery/rest?version=v1beta",
+    oauthAudience: "standard-user",
+  },
+  {
     id: "google-classroom",
     name: "Google Classroom",
     summary: "Courses, rosters, coursework, and grading.",
@@ -241,6 +255,8 @@ export const googleOAuthConsentScopes: Readonly<Record<string, readonly string[]
   "google-keep": ["https://www.googleapis.com/auth/keep"],
   "google-youtube-data": ["https://www.googleapis.com/auth/youtube"],
   "google-search-console": ["https://www.googleapis.com/auth/webmasters"],
+  "google-analytics-data": ["https://www.googleapis.com/auth/analytics.readonly"],
+  "google-analytics-admin": ["https://www.googleapis.com/auth/analytics.readonly"],
   "google-classroom": ["https://www.googleapis.com/auth/classroom.courses"],
   "google-admin-directory": ["https://www.googleapis.com/auth/admin.directory.user"],
   "google-admin-reports": ["https://www.googleapis.com/auth/admin.reports.audit.readonly"],
@@ -281,6 +297,7 @@ const GOOGLE_HEALTH_CHECKS: Readonly<Record<string, HealthCheckSpec>> = {
     args: { part: "id", mine: true },
   },
   "google-search-console": { operation: "webmasters.sites.list" },
+  "google-analytics-admin": { operation: "analyticsadmin.accountSummaries.list" },
   "google-classroom": { operation: "classroom.courses.list" },
   "google-admin-directory": {
     operation: "directory.users.list",
