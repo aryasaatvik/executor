@@ -3,7 +3,12 @@ import { Effect } from "effect";
 import { compileOpenApiSpec } from "@executor-js/plugin-openapi";
 
 import { convertGoogleDiscoveryBundleToOpenApi } from "./discovery";
-import { googleCatalog, googleOpenApiPresets, googleStandardUserOAuthPresets } from "./presets";
+import {
+  googleCatalog,
+  googleCatalogOAuthScopesForPreset,
+  googleOpenApiPresets,
+  googleStandardUserOAuthPresets,
+} from "./presets";
 
 const googleHealthCheckDiscoveryFixtures = {
   "google-calendar": {
@@ -170,6 +175,46 @@ const googleHealthCheckDiscoveryFixtures = {
       },
     },
   },
+  "google-analytics-admin": {
+    url: "https://analyticsadmin.googleapis.com/$discovery/rest?version=v1beta",
+    document: {
+      name: "analyticsadmin",
+      version: "v1beta",
+      title: "Google Analytics Admin API",
+      rootUrl: "https://analyticsadmin.googleapis.com/",
+      servicePath: "",
+      resources: {
+        accountSummaries: {
+          methods: {
+            list: {
+              id: "analyticsadmin.accountSummaries.list",
+              path: "v1beta/accountSummaries",
+              httpMethod: "GET",
+              response: { $ref: "GoogleAnalyticsAdminV1betaListAccountSummariesResponse" },
+            },
+          },
+        },
+      },
+      schemas: {
+        GoogleAnalyticsAdminV1betaListAccountSummariesResponse: {
+          type: "object",
+          properties: {
+            accountSummaries: {
+              type: "array",
+              items: { $ref: "GoogleAnalyticsAdminV1betaAccountSummary" },
+            },
+          },
+        },
+        GoogleAnalyticsAdminV1betaAccountSummary: {
+          type: "object",
+          properties: {
+            account: { type: "string" },
+            displayName: { type: "string" },
+          },
+        },
+      },
+    },
+  },
 } as const;
 
 const FROZEN_GOOGLE_SLUGS = [
@@ -188,6 +233,8 @@ const FROZEN_GOOGLE_SLUGS = [
   "google_keep",
   "google_youtube_data",
   "google_search_console",
+  "google_analytics_data",
+  "google_analytics_admin",
   "google_classroom",
   "google_admin_directory",
   "google_admin_reports",
@@ -204,6 +251,8 @@ it("keeps Select all limited to Google services that can use normal user OAuth",
   expect(standardIds).toContain("google-tasks");
   expect(standardIds).toContain("google-people");
   expect(standardIds).toContain("google-search-console");
+  expect(standardIds).toContain("google-analytics-data");
+  expect(standardIds).toContain("google-analytics-admin");
 
   expect(standardIds).not.toContain("google-youtube-data");
   expect(standardIds).not.toContain("google-cloud-resource-manager");
@@ -211,6 +260,20 @@ it("keeps Select all limited to Google services that can use normal user OAuth",
   expect(standardIds).not.toContain("google-keep");
   expect(standardIds).not.toContain("google-admin-directory");
   expect(standardIds).not.toContain("google-admin-reports");
+});
+
+it("uses read-only OAuth for both Google Analytics APIs", () => {
+  const readOnlyScope = "https://www.googleapis.com/auth/analytics.readonly";
+  const writeScopes = [
+    "https://www.googleapis.com/auth/analytics",
+    "https://www.googleapis.com/auth/analytics.edit",
+  ];
+
+  for (const presetId of ["google-analytics-data", "google-analytics-admin"]) {
+    const scopes = googleCatalogOAuthScopesForPreset(presetId);
+    expect(scopes).toContain(readOnlyScope);
+    for (const writeScope of writeScopes) expect(scopes).not.toContain(writeScope);
+  }
 });
 
 it("classifies every Google service for bundle OAuth UX", () => {
@@ -273,6 +336,7 @@ it("omits Google health checks when the service spec has no stable cheap read", 
     "google-slides",
     "google-forms",
     "google-photos-picker",
+    "google-analytics-data",
     "google-admin-reports",
   ];
 
