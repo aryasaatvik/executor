@@ -158,6 +158,11 @@ const toIndexedItemRow = (
   ...(pendingDeleteItemId === undefined ? {} : { pendingDeleteItemId }),
 });
 
+const withoutPendingDeleteItemId = ({
+  pendingDeleteItemId: _pendingDeleteItemId,
+  ...row
+}: AiSearchItemRow): AiSearchItemRow => row;
+
 interface UploadedDocument {
   readonly deleteOnStorageFailure: boolean;
   readonly uploadedItemId: string;
@@ -176,12 +181,16 @@ const uploadDocument = (
     if (remote !== undefined && isReusableRemoteStatus(remote.status)) {
       const pendingDeleteItemId = previous?.pendingDeleteItemId;
       if (pendingDeleteItemId !== undefined && remote.status === "completed") {
-        yield* deleteItemBestEffort(aiSearch, pendingDeleteItemId);
+        const deletion = yield* deleteItem(aiSearch, pendingDeleteItemId).pipe(Effect.result);
         return {
           deleteOnStorageFailure: false,
           uploadedItemId: remote.id,
           key: document.path,
-          row: toIndexedItemRow(document, remote),
+          row: toIndexedItemRow(
+            document,
+            remote,
+            Result.isSuccess(deletion) ? undefined : pendingDeleteItemId,
+          ),
         };
       }
       return {
@@ -208,19 +217,12 @@ const uploadDocument = (
       previous !== undefined && previous.key !== itemName
         ? previous.itemId
         : previous?.pendingDeleteItemId;
-    if (pendingDeleteItemId !== undefined && uploaded.status === "completed") {
-      yield* deleteItemBestEffort(aiSearch, pendingDeleteItemId);
-    }
 
     return {
       deleteOnStorageFailure: true,
       uploadedItemId: uploaded.id,
       key: document.path,
-      row: toIndexedItemRow(
-        document,
-        uploaded,
-        uploaded.status === "completed" ? undefined : pendingDeleteItemId,
-      ),
+      row: toIndexedItemRow(document, uploaded, pendingDeleteItemId),
     };
   });
 
@@ -242,12 +244,16 @@ export const reindexAiSearchBatch = (input: {
       [
         listToolManifests(input.executor, { maxTools: batch.maxTools }),
         input.executor.integrations.list().pipe(
-          Effect.mapError(
-            (cause) =>
-              new SemanticSearchError({
-                message: "Failed to list integration context for AI Search indexing.",
-                cause,
-              }),
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              console.warn(
+                JSON.stringify({
+                  event: "tool_search_index_integration_context_failed",
+                  cause,
+                }),
+              );
+              return [];
+            }),
           ),
         ),
       ] as const,
@@ -386,6 +392,57 @@ export const reindexAiSearchBatch = (input: {
           ),
           Effect.mapError(mapStorageError("Failed to record AI Search item rows.")),
         );
+
+      const replacements = uploaded.filter(
+        (entry) => entry.row.status === "completed" && entry.row.pendingDeleteItemId !== undefined,
+      );
+      if (replacements.length > 0) {
+        const cleanupResults = yield* Effect.forEach(
+          replacements,
+          (entry) =>
+            deleteItem(aiSearch, entry.row.pendingDeleteItemId!).pipe(
+              Effect.map(() => entry),
+              Effect.result,
+            ),
+          { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+        );
+        const cleaned = cleanupResults.flatMap((result) =>
+          Result.isSuccess(result) ? [result.success] : [],
+        );
+        const cleanupFailures = cleanupResults.filter((result) => Result.isFailure(result));
+        for (const failure of cleanupFailures) {
+          console.warn(
+            JSON.stringify({
+              event: "tool_search_index_previous_item_delete_failed",
+              cause: Result.isFailure(failure) ? failure.failure : undefined,
+            }),
+          );
+        }
+        if (cleaned.length > 0) {
+          yield* input.items
+            .putMany({
+              owner: input.owner,
+              entries: cleaned.map((entry) => ({
+                key: entry.key,
+                data: withoutPendingDeleteItemId(entry.row),
+              })),
+            })
+            .pipe(
+              Effect.mapError(mapStorageError("Failed to finalize AI Search item rows.")),
+              Effect.tapError((cause) =>
+                Effect.sync(() => {
+                  console.warn(
+                    JSON.stringify({
+                      event: "tool_search_index_previous_item_cleanup_persist_failed",
+                      cause,
+                    }),
+                  );
+                }),
+              ),
+              Effect.catch(() => Effect.void),
+            );
+        }
+      }
     }
 
     const removedEntries = shouldRemoveStale

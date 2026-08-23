@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { AiSearchInstance } from "@cloudflare/workers-types";
-import { type PluginStorageCollectionFacade, type PluginStorageEntry } from "@executor-js/sdk/core";
+import {
+  StorageError,
+  type PluginStorageCollectionFacade,
+  type PluginStorageEntry,
+} from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import {
@@ -492,6 +496,57 @@ describe("reindexAiSearch", () => {
     }),
   );
 
+  it.effect("continues indexing when integration context is unavailable", () =>
+    Effect.gen(function* () {
+      let uploadedContent = "";
+      const stored: AiSearchItemRow[] = [];
+
+      const result = yield* reindexAiSearch({
+        executor: {
+          integrations: { list: () => Effect.fail("integration list unavailable") },
+          tools: {
+            manifest: () =>
+              Effect.succeed([
+                {
+                  path: "github.default.main.repos.create",
+                  name: "repos.create",
+                  description: "Create a repository",
+                  integration: "github",
+                  fingerprintVersion: "v1",
+                  indexFingerprint: "fingerprint",
+                },
+              ]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            upload: async (name, content) => {
+              uploadedContent = String(content);
+              return { id: `item:${name}`, key: name, status: "queued" };
+            },
+          },
+        },
+        items: makeItemsCollection({
+          list: () => Effect.succeed([]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.data));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
+      expect(uploadedContent).toContain("# github.default.main.repos.create");
+      expect(uploadedContent).not.toContain("Integration name:");
+      expect(stored).toHaveLength(1);
+    }),
+  );
+
   it.effect("removes stale rows even when deleting the remote AI Search item fails", () =>
     Effect.gen(function* () {
       const removed: string[] = [];
@@ -575,7 +630,57 @@ describe("reindexAiSearch", () => {
       expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
       expect(stored[0]?.itemId).toMatch(/^new:tool-[a-z0-9]+\.md$/);
       expect(stored[0]?.key).toBe(stored[0]?.itemId.replace(/^new:/, ""));
+      expect(stored[0]?.pendingDeleteItemId).toBe(githubRow.data.itemId);
       expect(deleted).toEqual(["item:github.repos.create.md"]);
+    }),
+  );
+
+  it.effect("keeps the previous remote item when local row persistence fails", () =>
+    Effect.gen(function* () {
+      const deleted: string[] = [];
+      const error = yield* Effect.flip(
+        reindexAiSearch({
+          executor: {
+            integrations: { list: () => Effect.succeed([]) },
+            tools: {
+              manifest: () =>
+                Effect.succeed([
+                  {
+                    path: "github.default.main.repos.create",
+                    name: "repos.create",
+                    description: "Create a repository",
+                    integration: "github",
+                    fingerprintVersion: "v1",
+                    indexFingerprint: "new-fingerprint",
+                  },
+                ]),
+              schema: () => Effect.fail("schema unavailable"),
+            },
+          } as never,
+          aiSearch: {
+            ...makeAiSearch(),
+            items: {
+              ...makeAiSearchItems(),
+              upload: async (name) => ({ id: `new:${name}`, key: name, status: "completed" }),
+              delete: async (id) => {
+                deleted.push(id);
+              },
+            },
+          },
+          items: makeItemsCollection({
+            getManyForOwner: () => Effect.succeed(new Map([[githubRow.key, githubRow]])),
+            putMany: () =>
+              Effect.fail(new StorageError({ message: "row persistence failed", cause: "test" })),
+          }),
+          owner: "org",
+          namespace: "org",
+        }),
+      );
+
+      expect(error).toMatchObject({ message: "Failed to record AI Search item rows." });
+      expect(deleted).toHaveLength(1);
+      expect(deleted[0]).not.toBe(githubRow.data.itemId);
+      expect(deleted[0]).toMatch(/^new:tool-[a-z0-9]+\.md$/);
     }),
   );
 
@@ -873,7 +978,7 @@ describe("reindexAiSearch", () => {
       expect(result).toMatchObject({ indexed: 1, skipped: 0 });
       expect(deleted).toEqual(["stale:item", "previous:item"]);
       expect(stored[0]?.itemId).toBe("replacement:" + itemName);
-      expect(stored[0]?.pendingDeleteItemId).toBeUndefined();
+      expect(stored.at(-1)?.pendingDeleteItemId).toBeUndefined();
     }),
   );
 
