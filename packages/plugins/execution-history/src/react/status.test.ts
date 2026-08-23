@@ -27,4 +27,9 @@ describe("actorTone", () => {
     const uniqueDots = new Set(ids.map((id) => actorTone(id).dot));
     expect(uniqueDots.size).toBeGreaterThan(1);
   });
+
+  it("does not use hues that read as failed", () => {
+    const classes = ACTOR_PALETTE.flatMap((tone) => [tone.dot, tone.text]).join(" ");
+    expect(classes).not.toMatch(/\b(bg|text)-(rose|pink|red|destructive)(-|$)/);
+  });
 });

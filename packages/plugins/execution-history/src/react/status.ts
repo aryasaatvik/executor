@@ -113,16 +113,17 @@ const MUTED_ACTOR_TONE: ActorTone = {
   text: "text-muted-foreground",
 };
 
-/** Identity-stable hues. Avoids status (emerald/sky/amber/red) and trigger
- *  (violet/cyan/slate) so a row's three dots stay independently readable. */
+/** Identity-stable hues. Avoids status (emerald/sky/amber/red), trigger
+ *  (violet/cyan/slate), and rose/pink — those read as failed even on a
+ *  completed row. */
 export const ACTOR_PALETTE: readonly ActorTone[] = [
   { dot: "bg-fuchsia-500", text: "text-fuchsia-600 dark:text-fuchsia-300" },
   { dot: "bg-orange-500", text: "text-orange-600 dark:text-orange-300" },
   { dot: "bg-teal-500", text: "text-teal-600 dark:text-teal-300" },
-  { dot: "bg-rose-500", text: "text-rose-600 dark:text-rose-300" },
+  { dot: "bg-blue-500", text: "text-blue-600 dark:text-blue-300" },
   { dot: "bg-indigo-500", text: "text-indigo-600 dark:text-indigo-300" },
   { dot: "bg-lime-500", text: "text-lime-600 dark:text-lime-300" },
-  { dot: "bg-pink-500", text: "text-pink-600 dark:text-pink-300" },
+  { dot: "bg-purple-500", text: "text-purple-600 dark:text-purple-300" },
   { dot: "bg-yellow-500", text: "text-yellow-700 dark:text-yellow-300" },
 ];
 
