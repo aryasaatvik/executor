@@ -10,6 +10,7 @@ import {
   statusAiSearch,
 } from "./ai-search";
 import { type aiSearchItems, type AiSearchItemRow } from "./collections";
+import { toolItemKey } from "./documents";
 import { cyrb53 } from "./fingerprint";
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
@@ -149,11 +150,10 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
         aiSearch: makeAiSearch(),
-        items: undefined,
       });
 
       const page = yield* provider!.searchTools({
-        executor: undefined as never,
+        executor: { tools: { manifest: () => Effect.succeed([]) } } as never,
         query: "create repo",
         limit: 10,
         offset: 0,
@@ -173,7 +173,6 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
         aiSearch: makeAiSearch(),
-        items: undefined,
       });
 
       const unfiltered = yield* provider!.searchTools({
@@ -206,7 +205,6 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
             return makeAiSearch().search(input);
           },
         },
-        items: undefined,
       });
 
       yield* provider!.searchTools({
@@ -250,14 +248,6 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
             ],
           }),
         },
-        items: makeItemsCollection({
-          getMany: ({ keys }) =>
-            Effect.succeed(
-              new Map(
-                keys.flatMap((key) => (key === githubRow.key ? [[key, githubRow] as const] : [])),
-              ),
-            ),
-        }),
       });
 
       const page = yield* provider!.searchTools({
@@ -277,44 +267,110 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
     }),
   );
 
-  it.effect("ignores AI Search chunks whose paths are not current locally", () =>
+  it.effect("pushes an integration namespace into AI Search retrieval", () =>
+    Effect.gen(function* () {
+      const requests: Parameters<AiSearchInstance["search"]>[0][] = [];
+      const provider = makeAiSearchToolDiscoveryProvider({
+        aiSearch: {
+          ...makeAiSearch(),
+          search: async (input) => {
+            requests.push(input);
+            return makeAiSearch().search(input);
+          },
+        },
+      });
+
+      yield* provider!.searchTools({
+        executor: { tools: { manifest: () => Effect.succeed([]) } } as never,
+        query: "authenticated user",
+        limit: 5,
+        offset: 0,
+      });
+      yield* provider!.searchTools({
+        executor: { tools: { manifest: () => Effect.succeed([]) } } as never,
+        query: "authenticated user",
+        namespace: "github_api",
+        limit: 5,
+        offset: 0,
+      });
+
+      expect(requests[0]?.ai_search_options?.retrieval).toMatchObject({
+        retrieval_type: "hybrid",
+        match_threshold: 0.1,
+        max_num_results: 50,
+        return_on_failure: true,
+      });
+      expect(requests[0]?.ai_search_options?.reranking).toEqual({
+        enabled: true,
+        match_threshold: 0.1,
+      });
+      expect(requests[0]?.ai_search_options?.query_rewrite).toBeUndefined();
+      expect(requests[1]?.ai_search_options?.retrieval).toMatchObject({
+        retrieval_type: "hybrid",
+        match_threshold: 0.1,
+        max_num_results: 50,
+        filters: { integration: { $eq: "github_api" } },
+        return_on_failure: true,
+      });
+      expect(requests[1]?.ai_search_options?.reranking).toEqual({
+        enabled: true,
+        match_threshold: 0.1,
+      });
+    }),
+  );
+
+  it.effect("returns AI Search chunks while the local indexing ledger lags", () =>
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
         aiSearch: makeAiSearch(),
-        items: makeItemsCollection({
-          getMany: ({ keys }) =>
-            Effect.succeed(
-              new Map(
-                keys.flatMap((key) => (key === githubRow.key ? [[key, githubRow] as const] : [])),
-              ),
-            ),
-        }),
       });
 
       const page = yield* provider!.searchTools({
-        executor: undefined as never,
+        executor: { tools: { manifest: () => Effect.succeed([]) } } as never,
         query: "tool",
         limit: 10,
         offset: 0,
       });
 
-      expect(page.items.map((item) => item.path)).toEqual(["github.default.main.repos.create"]);
-      expect(page.total).toBe(1);
+      expect(page.items.map((item) => item.path)).toEqual([
+        "github.default.main.repos.create",
+        "slack.default.main.messages.send",
+      ]);
+      expect(page.total).toBe(2);
     }),
   );
 
-  it.effect("returns an empty page when no returned paths are current locally", () =>
+  it.effect("returns an empty page when AI Search finds no chunks", () =>
     Effect.gen(function* () {
       const provider = makeAiSearchToolDiscoveryProvider({
-        aiSearch: makeAiSearch(),
-        items: makeItemsCollection({
-          getMany: () => Effect.succeed(new Map()),
-        }),
+        aiSearch: {
+          ...makeAiSearch(),
+          search: async () => ({ search_query: "stripe list balance", chunks: [] }),
+        },
       });
 
       const page = yield* provider!.searchTools({
-        executor: undefined as never,
-        query: "tool",
+        executor: {
+          tools: {
+            manifest: () =>
+              Effect.succeed([
+                {
+                  path: "stripe_api.org.main.balance.getBalance",
+                  name: "balance.getBalance",
+                  description: "Retrieve the current account balance.",
+                  integration: "stripe_api",
+                },
+                {
+                  path: "stripe_api.org.main.customers.list",
+                  name: "customers.list",
+                  description: "List customers.",
+                  integration: "stripe_api",
+                },
+              ]),
+          },
+        } as never,
+        query: "stripe list balance",
+        namespace: "stripe_api",
         limit: 10,
         offset: 0,
       });
@@ -327,6 +383,46 @@ describe("makeAiSearchToolDiscoveryProvider", () => {
       });
     }),
   );
+
+  it.effect("surfaces AI Search failures instead of substituting a local ranking", () =>
+    Effect.gen(function* () {
+      const provider = makeAiSearchToolDiscoveryProvider({
+        aiSearch: {
+          ...makeAiSearch(),
+          search: () => {
+            const deferred =
+              Promise.withResolvers<Awaited<ReturnType<AiSearchInstance["search"]>>>();
+            deferred.reject("AI Search unavailable");
+            return deferred.promise;
+          },
+        },
+      });
+
+      const error = yield* Effect.flip(
+        provider!.searchTools({
+          executor: {
+            tools: {
+              manifest: () =>
+                Effect.succeed([
+                  {
+                    path: "github_api.org.main.repos.listForAuthenticatedUser",
+                    name: "repos.listForAuthenticatedUser",
+                    description: "List repositories for the authenticated user.",
+                    integration: "github_api",
+                  },
+                ]),
+            },
+          } as never,
+          query: "list",
+          namespace: "github_api",
+          limit: 10,
+          offset: 0,
+        }),
+      );
+
+      expect(error).toMatchObject({ message: "AI Search tool search failed." });
+    }),
+  );
 });
 
 describe("reindexAiSearch", () => {
@@ -337,6 +433,16 @@ describe("reindexAiSearch", () => {
 
       const result = yield* reindexAiSearch({
         executor: {
+          integrations: {
+            list: () =>
+              Effect.succeed([
+                {
+                  slug: "github",
+                  name: "GitHub",
+                  description: "Repositories, issues, pull requests, actions, and users.",
+                },
+              ]),
+          },
           tools: {
             manifest: () =>
               Effect.succeed([
@@ -375,9 +481,14 @@ describe("reindexAiSearch", () => {
 
       expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
       expect(uploadedContent).toContain("# github.default.main.repos.create");
+      expect(uploadedContent).toContain("Integration name: GitHub");
+      expect(uploadedContent).toContain(
+        "Integration purpose: Repositories, issues, pull requests, actions, and users.",
+      );
       expect(uploadedContent).toContain("Description: Create a repository");
       expect(uploadedContent).not.toContain("Input schema");
-      expect(stored[0]?.fingerprint).toBe("github.default.main.repos.create:v1:fingerprint:");
+      expect(stored[0]?.fingerprint).toContain("ai-search-tool-document/v2:");
+      expect(stored[0]?.fingerprint).toContain(":GitHub:Repositories, issues");
     }),
   );
 
@@ -386,6 +497,7 @@ describe("reindexAiSearch", () => {
       const removed: string[] = [];
       const result = yield* reindexAiSearch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () => Effect.succeed([]),
           },
@@ -422,6 +534,7 @@ describe("reindexAiSearch", () => {
       const stored: AiSearchItemRow[] = [];
       const result = yield* reindexAiSearch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () =>
               Effect.succeed([
@@ -441,11 +554,7 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            upload: async (name) => ({
-              id: `new:${name}`,
-              key: name,
-              status: "queued",
-            }),
+            upload: async (name) => ({ id: `new:${name}`, key: name, status: "completed" }),
             delete: async (id) => {
               deleted.push(id);
             },
@@ -484,6 +593,7 @@ describe("reindexAiSearch", () => {
 
       const result = yield* reindexAiSearch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () => Effect.succeed(manifests),
             schema: () => Effect.fail("schema unavailable"),
@@ -526,7 +636,7 @@ describe("reindexAiSearch", () => {
         fingerprintVersion: "v1",
         indexFingerprint: "fingerprint",
       };
-      const fingerprint = "github.default.main.repos.create:v1:fingerprint:";
+      const fingerprint = toolItemKey(manifest);
       const itemName = `tool-${cyrb53(`${manifest.path}\u0000${fingerprint}`).toString(36)}.md`;
       const existing = {
         ...githubRow,
@@ -540,6 +650,7 @@ describe("reindexAiSearch", () => {
 
       const result = yield* reindexAiSearchBatch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () => Effect.succeed([manifest]),
             schema: () => Effect.fail("schema unavailable"),
@@ -588,6 +699,7 @@ describe("reindexAiSearch", () => {
 
       const result = yield* reindexAiSearchBatch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () => Effect.succeed(manifests),
             schema: () => Effect.fail("schema unavailable"),
@@ -645,12 +757,13 @@ describe("reindexAiSearch", () => {
         ...githubRow,
         data: {
           ...githubRow.data,
-          fingerprint: "github.default.main.repos.create:v1:fingerprint:",
+          fingerprint: toolItemKey(manifest),
         },
       };
 
       const result = yield* reindexAiSearch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () => Effect.succeed([manifest]),
             schema: () => Effect.fail("schema unavailable"),
@@ -685,6 +798,82 @@ describe("reindexAiSearch", () => {
 
       expect(result).toMatchObject({ indexed: 1, skipped: 0 });
       expect(uploadCount).toBe(1);
+    }),
+  );
+
+  it.effect("replaces remote items that report an outdated AI Search status", () =>
+    Effect.gen(function* () {
+      const deleted: string[] = [];
+      const stored: AiSearchItemRow[] = [];
+      const manifest = {
+        path: "github.default.main.repos.create",
+        name: "repos.create",
+        description: "Create a repository",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: "fingerprint",
+      };
+      const fingerprint = toolItemKey(manifest);
+      const itemName = `tool-${cyrb53(`${manifest.path}\u0000${fingerprint}`).toString(36)}.md`;
+      const existing = {
+        ...githubRow,
+        data: {
+          ...githubRow.data,
+          key: itemName,
+          itemId: "stale:item",
+          fingerprint,
+          pendingDeleteItemId: "previous:item",
+        },
+      };
+
+      const result = yield* reindexAiSearchBatch({
+        executor: {
+          integrations: { list: () => Effect.succeed([]) },
+          tools: {
+            manifest: () => Effect.succeed([manifest]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            get: () => ({
+              info: async () => ({
+                id: existing.data.itemId,
+                key: existing.data.key,
+                status: "outdated" as never,
+              }),
+              download: async () => expect.unreachable("Unexpected AI Search item download"),
+            }),
+            upload: async (name) => ({
+              id: `replacement:${name}`,
+              key: name,
+              status: "completed",
+            }),
+            delete: async (id) => {
+              deleted.push(id);
+            },
+          },
+        },
+        items: makeItemsCollection({
+          getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
+          list: () => Effect.succeed([existing]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.data));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+        offset: 0,
+        pageSize: 1,
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0 });
+      expect(deleted).toEqual(["stale:item", "previous:item"]);
+      expect(stored[0]?.itemId).toBe("replacement:" + itemName);
+      expect(stored[0]?.pendingDeleteItemId).toBeUndefined();
     }),
   );
 
@@ -736,6 +925,7 @@ describe("reindexAiSearch", () => {
 
       yield* reindexAiSearch({
         executor: {
+          integrations: { list: () => Effect.succeed([]) },
           tools: {
             manifest: () =>
               Effect.succeed([

@@ -18,6 +18,12 @@ export const AiSearchItemRow = Schema.Struct({
   status: AiSearchItemStatus,
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
+  /**
+   * The previous provider item stays live until its replacement is completed.
+   * This prevents an eventual-consistency gap while AI Search processes the
+   * newly uploaded document.
+   */
+  pendingDeleteItemId: Schema.optional(Schema.String),
 });
 export type AiSearchItemRow = typeof AiSearchItemRow.Type;
 
