@@ -630,7 +630,7 @@ describe("reindexAiSearch", () => {
       expect(result).toMatchObject({ indexed: 1, skipped: 0, removed: 0 });
       expect(stored[0]?.itemId).toMatch(/^new:tool-[a-z0-9]+\.md$/);
       expect(stored[0]?.key).toBe(stored[0]?.itemId.replace(/^new:/, ""));
-      expect(stored[0]?.pendingDeleteItemId).toBe(githubRow.data.itemId);
+      expect(stored[0]?.pendingDeleteItemIds).toEqual([githubRow.data.itemId]);
       expect(deleted).toEqual(["item:github.repos.create.md"]);
     }),
   );
@@ -935,7 +935,7 @@ describe("reindexAiSearch", () => {
           key: itemName,
           itemId: "stale:item",
           fingerprint,
-          pendingDeleteItemId: "previous:item",
+          pendingDeleteItemIds: ["previous:item"],
         },
       };
 
@@ -986,7 +986,86 @@ describe("reindexAiSearch", () => {
       expect(result).toMatchObject({ indexed: 1, skipped: 0 });
       expect(deleted).toEqual(expect.arrayContaining(["stale:item", "previous:item"]));
       expect(stored[0]?.itemId).toBe("replacement:" + itemName);
-      expect(stored.at(-1)?.pendingDeleteItemId).toBeUndefined();
+      expect(stored.at(-1)?.pendingDeleteItemIds).toBeUndefined();
+    }),
+  );
+
+  it.effect("retains every failed replacement deletion for retry", () =>
+    Effect.gen(function* () {
+      const deleted: string[] = [];
+      const stored: AiSearchItemRow[] = [];
+      const manifest = {
+        path: "github.default.main.repos.create",
+        name: "repos.create",
+        description: "Create a repository",
+        integration: "github",
+        fingerprintVersion: "v1",
+        indexFingerprint: "fingerprint",
+      };
+      const fingerprint = toolItemKey(manifest);
+      const itemName = `tool-${cyrb53(`${manifest.path}\u0000${fingerprint}`).toString(36)}.md`;
+      const existing = {
+        ...githubRow,
+        data: {
+          ...githubRow.data,
+          key: itemName,
+          itemId: "stale:item",
+          fingerprint,
+          pendingDeleteItemIds: ["previous:item"],
+        },
+      };
+
+      const result = yield* reindexAiSearchBatch({
+        executor: {
+          integrations: { list: () => Effect.succeed([]) },
+          tools: {
+            manifest: () => Effect.succeed([manifest]),
+            schema: () => Effect.fail("schema unavailable"),
+          },
+        } as never,
+        aiSearch: {
+          ...makeAiSearch(),
+          items: {
+            ...makeAiSearchItems(),
+            get: () => ({
+              info: async () => ({
+                id: existing.data.itemId,
+                key: existing.data.key,
+                status: "outdated" as never,
+              }),
+              download: async () => expect.unreachable("Unexpected AI Search item download"),
+            }),
+            upload: async (name) => ({
+              id: `replacement:${name}`,
+              key: name,
+              status: "completed",
+            }),
+            delete: async (id) => {
+              deleted.push(id);
+              if (id === "previous:item") {
+                // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: test double for rejected AI Search delete promise
+                throw new Error("previous deletion failed");
+              }
+            },
+          },
+        },
+        items: makeItemsCollection({
+          getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
+          list: () => Effect.succeed([existing]),
+          putMany: ({ entries }) =>
+            Effect.sync(() => {
+              stored.push(...entries.map((entry) => entry.data));
+            }),
+        }),
+        owner: "org",
+        namespace: "org",
+        offset: 0,
+        pageSize: 1,
+      });
+
+      expect(result).toMatchObject({ indexed: 1, skipped: 0 });
+      expect(deleted).toEqual(expect.arrayContaining(["stale:item", "previous:item"]));
+      expect(stored.at(-1)?.pendingDeleteItemIds).toEqual(["previous:item"]);
     }),
   );
 

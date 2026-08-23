@@ -68,6 +68,13 @@ const toStatus = (status: string | undefined): AiSearchItemStatus =>
 const toItemName = (document: ToolSearchDocument): string =>
   `tool-${cyrb53(`${document.path}\u0000${document.fingerprint}`).toString(36)}.md`;
 
+const uniqueItemIds = (ids: readonly (string | undefined)[]): string[] => [
+  ...new Set(ids.filter(Predicate.isNotUndefined)),
+];
+
+const pendingDeleteItemIdsForRow = (row: AiSearchItemRow): string[] =>
+  uniqueItemIds([...(row.pendingDeleteItemIds ?? []), row.pendingDeleteItemId]);
+
 const normalizeBatchInput = (
   input: SemanticSearchReindexBatchInput,
 ): SemanticSearchReindexBatchInput => ({
@@ -142,7 +149,7 @@ const getAiSearchItem = (
 const toIndexedItemRow = (
   document: ToolSearchDocument,
   uploaded: AiSearchItemInfo,
-  pendingDeleteItemId?: string,
+  pendingDeleteItemIds?: readonly string[],
 ): AiSearchItemRow => ({
   path: document.path,
   key: uploaded.key,
@@ -155,13 +162,25 @@ const toIndexedItemRow = (
   fingerprint: document.fingerprint,
   status: toStatus(uploaded.status),
   updatedAt: nowIso(),
-  ...(pendingDeleteItemId === undefined ? {} : { pendingDeleteItemId }),
+  ...(pendingDeleteItemIds === undefined || pendingDeleteItemIds.length === 0
+    ? {}
+    : { pendingDeleteItemIds: uniqueItemIds(pendingDeleteItemIds) }),
 });
 
-const withoutPendingDeleteItemId = ({
-  pendingDeleteItemId: _pendingDeleteItemId,
-  ...row
-}: AiSearchItemRow): AiSearchItemRow => row;
+const withPendingDeleteItemIds = (
+  row: AiSearchItemRow,
+  pendingDeleteItemIds: readonly string[],
+): AiSearchItemRow => {
+  const {
+    pendingDeleteItemId: _pendingDeleteItemId,
+    pendingDeleteItemIds: _previousPendingDeleteItemIds,
+    ...base
+  } = row;
+  const uniquePendingDeleteItemIds = uniqueItemIds(pendingDeleteItemIds);
+  return uniquePendingDeleteItemIds.length === 0
+    ? base
+    : { ...base, pendingDeleteItemIds: uniquePendingDeleteItemIds };
+};
 
 interface UploadedDocument {
   readonly deleteOnStorageFailure: boolean;
@@ -171,10 +190,6 @@ interface UploadedDocument {
   readonly deferredDeleteItemIds: readonly string[];
 }
 
-const uniqueItemIds = (ids: readonly (string | undefined)[]): string[] => [
-  ...new Set(ids.filter(Predicate.isNotUndefined)),
-];
-
 const uploadDocument = (
   aiSearch: Pick<AiSearchInstance, "items">,
   document: ToolSearchDocument,
@@ -183,19 +198,23 @@ const uploadDocument = (
 ): Effect.Effect<UploadedDocument, SemanticSearchError> =>
   Effect.gen(function* () {
     const itemName = toItemName(document);
+    const previousPendingDeleteItemIds =
+      previous === undefined ? [] : pendingDeleteItemIdsForRow(previous);
     if (remote !== undefined && isReusableRemoteStatus(remote.status)) {
-      const pendingDeleteItemId = previous?.pendingDeleteItemId;
-      if (pendingDeleteItemId !== undefined && remote.status === "completed") {
-        const deletion = yield* deleteItem(aiSearch, pendingDeleteItemId).pipe(Effect.result);
+      if (previousPendingDeleteItemIds.length > 0 && remote.status === "completed") {
+        const deletions = yield* Effect.forEach(
+          previousPendingDeleteItemIds,
+          (itemId) => deleteItem(aiSearch, itemId).pipe(Effect.result),
+          { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+        );
+        const failedPendingDeleteItemIds = previousPendingDeleteItemIds.filter((_, index) =>
+          Result.isFailure(deletions[index]),
+        );
         return {
           deleteOnStorageFailure: false,
           uploadedItemId: remote.id,
           key: document.path,
-          row: toIndexedItemRow(
-            document,
-            remote,
-            Result.isSuccess(deletion) ? undefined : pendingDeleteItemId,
-          ),
+          row: toIndexedItemRow(document, remote, failedPendingDeleteItemIds),
           deferredDeleteItemIds: [],
         };
       }
@@ -203,7 +222,7 @@ const uploadDocument = (
         deleteOnStorageFailure: false,
         uploadedItemId: remote.id,
         key: document.path,
-        row: toIndexedItemRow(document, remote, pendingDeleteItemId),
+        row: toIndexedItemRow(document, remote, previousPendingDeleteItemIds),
         deferredDeleteItemIds: [],
       };
     }
@@ -218,18 +237,17 @@ const uploadDocument = (
 
     const deferredDeleteItemIds = uniqueItemIds(
       remote !== undefined && !isReusableRemoteStatus(remote.status)
-        ? [remote.id, previous?.pendingDeleteItemId]
+        ? [remote.id, ...previousPendingDeleteItemIds]
         : remote === undefined && previous !== undefined && previous.key !== itemName
-          ? [previous.itemId, previous.pendingDeleteItemId]
-          : [previous?.pendingDeleteItemId],
+          ? [previous.itemId, ...previousPendingDeleteItemIds]
+          : previousPendingDeleteItemIds,
     );
-    const pendingDeleteItemId = deferredDeleteItemIds[0];
 
     return {
       deleteOnStorageFailure: true,
       uploadedItemId: uploaded.id,
       key: document.path,
-      row: toIndexedItemRow(document, uploaded, pendingDeleteItemId),
+      row: toIndexedItemRow(document, uploaded, deferredDeleteItemIds),
       deferredDeleteItemIds: toStatus(uploaded.status) === "completed" ? deferredDeleteItemIds : [],
     };
   });
@@ -338,7 +356,7 @@ export const reindexAiSearchBatch = (input: {
         previous?.fingerprint === fingerprint &&
         remote !== undefined &&
         isReusableRemoteStatus(remote.status) &&
-        previous.pendingDeleteItemId === undefined
+        pendingDeleteItemIdsForRow(previous).length === 0
       ) {
         skipped += 1;
         continue;
@@ -404,7 +422,8 @@ export const reindexAiSearchBatch = (input: {
       const replacements = uploaded.filter(
         (entry) =>
           entry.row.status === "completed" &&
-          (entry.deferredDeleteItemIds.length > 0 || entry.row.pendingDeleteItemId !== undefined),
+          (entry.deferredDeleteItemIds.length > 0 ||
+            pendingDeleteItemIdsForRow(entry.row).length > 0),
       );
       if (replacements.length > 0) {
         const cleanupResults = yield* Effect.forEach(
@@ -413,9 +432,7 @@ export const reindexAiSearchBatch = (input: {
             const itemIds =
               entry.deferredDeleteItemIds.length > 0
                 ? entry.deferredDeleteItemIds
-                : entry.row.pendingDeleteItemId === undefined
-                  ? []
-                  : [entry.row.pendingDeleteItemId];
+                : pendingDeleteItemIdsForRow(entry.row);
             return Effect.forEach(
               itemIds,
               (itemId) => deleteItem(aiSearch, itemId).pipe(Effect.result),
@@ -423,9 +440,6 @@ export const reindexAiSearchBatch = (input: {
             ).pipe(Effect.map((results) => ({ entry, itemIds, results })));
           },
           { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
-        );
-        const cleaned = cleanupResults.flatMap(({ entry, results }) =>
-          results.every((result) => Result.isSuccess(result)) ? [entry] : [],
         );
         for (const { itemIds, results } of cleanupResults) {
           for (const [index, result] of results.entries()) {
@@ -440,13 +454,16 @@ export const reindexAiSearchBatch = (input: {
             }
           }
         }
-        if (cleaned.length > 0) {
+        if (cleanupResults.length > 0) {
           yield* input.items
             .putMany({
               owner: input.owner,
-              entries: cleaned.map((entry) => ({
+              entries: cleanupResults.map(({ entry, itemIds, results }) => ({
                 key: entry.key,
-                data: withoutPendingDeleteItemId(entry.row),
+                data: withPendingDeleteItemIds(
+                  entry.row,
+                  itemIds.filter((_, index) => Result.isFailure(results[index])),
+                ),
               })),
             })
             .pipe(
