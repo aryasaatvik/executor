@@ -1,22 +1,22 @@
 # Executor upgrade topology
 
-Use live Git and filesystem state as the authority. Paths below are defaults for Saatvik's current setup; the preflight helper accepts overrides.
+Use live Git and filesystem state as the authority. The preflight helper discovers the Executor worktree family and accepts explicit path overrides.
 
 ## Checkouts
 
-| Role              | Default path                                               | Ownership                                                                                                       |
-| ----------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Fork history      | `/Users/aryasaatvik/Developer/executor`                    | `dev`, Git history, ordinary feature PRs, and upstream-rebase promotion                                         |
-| Linked packages   | `/Users/aryasaatvik/Developer/executor-worktrees/selfhost` | Detached checkout whose `packages/**/src` files are consumed by the hosted instance through `bun link` symlinks |
-| Upstream snapshot | `/Users/aryasaatvik/Developer/executor-worktrees/upstream` | Clean detached view of the exact fetched `upstream/main` SHA                                                    |
-| Hosted instance   | `/Users/aryasaatvik/Developer/AryaLabsHQ/executor`         | Cloudflare composition deployed at `executor.arya.sh`                                                           |
+| Role              | Discovery or override                      | Ownership                                                                                                       |
+| ----------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Fork history      | Worktree on `dev`, or `--main`             | Git history, ordinary feature PRs, and upstream-rebase promotion                                                |
+| Linked packages   | Worktree named `selfhost`, or `--selfhost` | Detached checkout whose `packages/**/src` files are consumed by the hosted instance through `bun link` symlinks |
+| Upstream snapshot | Worktree named `upstream`, or `--upstream` | Clean detached view of the exact fetched `upstream/main` SHA                                                    |
+| Hosted instance   | `EXECUTOR_HOST_CHECKOUT`, or `--host`      | Cloudflare composition deployed for this fork                                                                   |
 
 The hosted repository consumes `@executor-js/*` as TypeScript source through links into the selfhost checkout. A successful build in the fork history checkout does not prove that those links or the hosted composition are correct.
 
 ## Source-of-truth rules
 
 - Package and plugin changes belong in the Executor monorepo, initially in an isolated candidate and ultimately on `dev`.
-- Host-only bindings, routes, secrets wiring, migrations, queues, and deployment configuration belong in `AryaLabsHQ/executor`.
+- Host-only bindings, routes, secrets wiring, migrations, queues, and deployment configuration belong in the configured hosted repository.
 - The selfhost worktree is an exact detached package source. Do not develop unique changes there during an upgrade.
 - The upstream worktree is an inspection surface. Do not create fork commits there.
 
@@ -35,7 +35,7 @@ Refreshing remote-tracking refs is not permission to rebase, promote, migrate, o
 
 ## Hosted-instance contract
 
-Treat `apps/host-cloudflare` as a reference composition, not a directory to copy. Compare it with the hosted repository for changes in:
+Treat `apps/host-cloudflare` as a reference composition, not a directory to copy. Compare it with the configured hosted repository for changes in:
 
 - environment and binding contracts;
 - Durable Object and hibernation/session wiring;

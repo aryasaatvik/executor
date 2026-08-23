@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 interface CommandResult {
   readonly ok: boolean;
@@ -192,6 +192,9 @@ const inspectLinks = (hostPath: string, selfhostPath: string) => {
   const expected = expectedExecutorPackages(hostPath);
   const missing: string[] = [];
   const outsideSelfhost: { name: string; target: string }[] = [];
+  const canonicalSelfhostPath = existsSync(selfhostPath)
+    ? realpathSync(selfhostPath)
+    : selfhostPath;
 
   for (const name of expected) {
     const packageName = name.slice("@executor-js/".length);
@@ -202,8 +205,10 @@ const inspectLinks = (hostPath: string, selfhostPath: string) => {
     }
 
     const target = realpathSync(linkPath);
-    const relativeTarget = target.startsWith(`${selfhostPath}/`) || target === selfhostPath;
-    if (!relativeTarget) outsideSelfhost.push({ name, target });
+    const relativeTarget = relative(canonicalSelfhostPath, target);
+    const isInsideSelfhost =
+      relativeTarget === "" || (!relativeTarget.startsWith("..") && !isAbsolute(relativeTarget));
+    if (!isInsideSelfhost) outsideSelfhost.push({ name, target });
   }
 
   return { expected, missing, outsideSelfhost };
@@ -228,7 +233,10 @@ const upstreamPath =
   options.upstream ??
   findWorktree("upstream") ??
   join(dirname(mainPath), "executor-worktrees", "upstream");
-const hostPath = options.host ?? join(dirname(mainPath), "AryaLabsHQ", "executor");
+const configuredHostPath = options.host ?? process.env.EXECUTOR_HOST_CHECKOUT;
+const hostPath = configuredHostPath
+  ? resolve(configuredHostPath)
+  : join(dirname(mainPath), "executor-host");
 
 const main = repoState(mainPath);
 const selfhost = repoState(selfhostPath);

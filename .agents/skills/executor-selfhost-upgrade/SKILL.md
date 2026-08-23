@@ -1,6 +1,6 @@
 ---
 name: executor-selfhost-upgrade
-description: Rebase the Executor dev fork onto current upstream/main, promote the reviewed history safely, update the linked selfhost checkout, reconcile the AryaLabsHQ Cloudflare host, and deploy with explicit production gates. Use for full upstream-to-executor.arya.sh upgrades, not ordinary feature PRs.
+description: Rebase the Executor dev fork onto current upstream/main, promote the reviewed history safely, update the linked selfhost checkout, reconcile its Cloudflare host, and deploy with explicit production gates. Use for full upstream-to-production upgrades, not ordinary feature PRs.
 ---
 
 # Executor selfhost upgrade

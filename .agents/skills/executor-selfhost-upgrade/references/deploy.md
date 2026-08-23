@@ -15,7 +15,7 @@ Do not make a repair commit directly in the detached selfhost checkout. Package 
 
 ## Reconcile the hosted instance
 
-Compare the old and new fork host contract with `/Users/aryasaatvik/Developer/AryaLabsHQ/executor`. Do not copy the upstream app over the hosted repository.
+Compare the old and new fork host contract with the hosted checkout selected by `--host` or `EXECUTOR_HOST_CHECKOUT`. Do not copy the upstream app over the hosted repository.
 
 If no host change is required, record the comparison and continue. If a change is required:
 
