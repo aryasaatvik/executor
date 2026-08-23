@@ -24,6 +24,7 @@ export const ReindexResponse = Schema.Struct({
   namespace: Schema.String,
   total: Schema.Number,
   indexed: Schema.Number,
+  failed: Schema.optional(Schema.Number),
   skipped: Schema.Number,
   removed: Schema.Number,
   offset: Schema.optional(Schema.Number),
