@@ -11,7 +11,7 @@ import {
   type ToolDiscoveryProvider,
   type ToolDiscoveryResult,
 } from "@executor-js/sdk/core";
-import { Effect, Result } from "effect";
+import { Effect, Predicate, Result } from "effect";
 
 import { type AiSearchItemRow, aiSearchItems, type AiSearchItemStatus } from "./collections";
 import {
@@ -168,7 +168,12 @@ interface UploadedDocument {
   readonly uploadedItemId: string;
   readonly key: string;
   readonly row: AiSearchItemRow;
+  readonly deferredDeleteItemIds: readonly string[];
 }
+
+const uniqueItemIds = (ids: readonly (string | undefined)[]): string[] => [
+  ...new Set(ids.filter(Predicate.isNotUndefined)),
+];
 
 const uploadDocument = (
   aiSearch: Pick<AiSearchInstance, "items">,
@@ -191,6 +196,7 @@ const uploadDocument = (
             remote,
             Result.isSuccess(deletion) ? undefined : pendingDeleteItemId,
           ),
+          deferredDeleteItemIds: [],
         };
       }
       return {
@@ -198,11 +204,8 @@ const uploadDocument = (
         uploadedItemId: remote.id,
         key: document.path,
         row: toIndexedItemRow(document, remote, pendingDeleteItemId),
+        deferredDeleteItemIds: [],
       };
-    }
-
-    if (remote !== undefined) {
-      yield* deleteItemBestEffort(aiSearch, remote.id);
     }
 
     const uploaded = yield* Effect.tryPromise({
@@ -213,16 +216,21 @@ const uploadDocument = (
       catch: mapUploadError(document),
     });
 
-    const pendingDeleteItemId =
-      previous !== undefined && previous.key !== itemName
-        ? previous.itemId
-        : previous?.pendingDeleteItemId;
+    const deferredDeleteItemIds = uniqueItemIds(
+      remote !== undefined && !isReusableRemoteStatus(remote.status)
+        ? [remote.id, previous?.pendingDeleteItemId]
+        : remote === undefined && previous !== undefined && previous.key !== itemName
+          ? [previous.itemId, previous.pendingDeleteItemId]
+          : [previous?.pendingDeleteItemId],
+    );
+    const pendingDeleteItemId = deferredDeleteItemIds[0];
 
     return {
       deleteOnStorageFailure: true,
       uploadedItemId: uploaded.id,
       key: document.path,
       row: toIndexedItemRow(document, uploaded, pendingDeleteItemId),
+      deferredDeleteItemIds: toStatus(uploaded.status) === "completed" ? deferredDeleteItemIds : [],
     };
   });
 
@@ -394,29 +402,43 @@ export const reindexAiSearchBatch = (input: {
         );
 
       const replacements = uploaded.filter(
-        (entry) => entry.row.status === "completed" && entry.row.pendingDeleteItemId !== undefined,
+        (entry) =>
+          entry.row.status === "completed" &&
+          (entry.deferredDeleteItemIds.length > 0 || entry.row.pendingDeleteItemId !== undefined),
       );
       if (replacements.length > 0) {
         const cleanupResults = yield* Effect.forEach(
           replacements,
-          (entry) =>
-            deleteItem(aiSearch, entry.row.pendingDeleteItemId!).pipe(
-              Effect.map(() => entry),
-              Effect.result,
-            ),
+          (entry) => {
+            const itemIds =
+              entry.deferredDeleteItemIds.length > 0
+                ? entry.deferredDeleteItemIds
+                : entry.row.pendingDeleteItemId === undefined
+                  ? []
+                  : [entry.row.pendingDeleteItemId];
+            return Effect.forEach(
+              itemIds,
+              (itemId) => deleteItem(aiSearch, itemId).pipe(Effect.result),
+              { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+            ).pipe(Effect.map((results) => ({ entry, itemIds, results })));
+          },
           { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
         );
-        const cleaned = cleanupResults.flatMap((result) =>
-          Result.isSuccess(result) ? [result.success] : [],
+        const cleaned = cleanupResults.flatMap(({ entry, results }) =>
+          results.every((result) => Result.isSuccess(result)) ? [entry] : [],
         );
-        const cleanupFailures = cleanupResults.filter((result) => Result.isFailure(result));
-        for (const failure of cleanupFailures) {
-          console.warn(
-            JSON.stringify({
-              event: "tool_search_index_previous_item_delete_failed",
-              cause: Result.isFailure(failure) ? failure.failure : undefined,
-            }),
-          );
+        for (const { itemIds, results } of cleanupResults) {
+          for (const [index, result] of results.entries()) {
+            if (Result.isFailure(result)) {
+              console.warn(
+                JSON.stringify({
+                  event: "tool_search_index_previous_item_delete_failed",
+                  itemId: itemIds[index],
+                  cause: result.failure,
+                }),
+              );
+            }
+          }
         }
         if (cleaned.length > 0) {
           yield* input.items

@@ -661,6 +661,14 @@ describe("reindexAiSearch", () => {
             ...makeAiSearch(),
             items: {
               ...makeAiSearchItems(),
+              get: () => ({
+                info: async () => ({
+                  id: githubRow.data.itemId,
+                  key: githubRow.data.key,
+                  status: "error" as const,
+                }),
+                download: async () => expect.unreachable("Unexpected AI Search item download"),
+              }),
               upload: async (name) => ({ id: `new:${name}`, key: name, status: "completed" }),
               delete: async (id) => {
                 deleted.push(id);
@@ -976,7 +984,7 @@ describe("reindexAiSearch", () => {
       });
 
       expect(result).toMatchObject({ indexed: 1, skipped: 0 });
-      expect(deleted).toEqual(["stale:item", "previous:item"]);
+      expect(deleted).toEqual(expect.arrayContaining(["stale:item", "previous:item"]));
       expect(stored[0]?.itemId).toBe("replacement:" + itemName);
       expect(stored.at(-1)?.pendingDeleteItemId).toBeUndefined();
     }),
