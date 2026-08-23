@@ -103,6 +103,7 @@ function FacetRow({
   dotClass,
   pulse,
   label,
+  labelClass,
   count,
   monoLabel,
 }: {
@@ -112,6 +113,7 @@ function FacetRow({
   readonly dotClass: string;
   readonly pulse?: boolean;
   readonly label: string;
+  readonly labelClass?: string;
   readonly count: number | undefined;
   readonly monoLabel?: boolean;
 }) {
@@ -153,7 +155,9 @@ function FacetRow({
           className={cn("size-2 shrink-0 rounded-full", dotClass, pulse && "animate-pulse")}
         />
 
-        <span className={cn("flex-1 truncate", monoLabel && "font-mono text-[11px]")}>{label}</span>
+        <span className={cn("flex-1 truncate", monoLabel && "font-mono text-[11px]", labelClass)}>
+          {label}
+        </span>
 
         <span className="font-mono text-[10px] tabular-nums text-muted-foreground/50">
           {count ?? ""}
@@ -310,7 +314,7 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
                   const id = entry.actorId;
                   // null actor (unattributed runs) isn't filterable — skip it.
                   if (id === null) return null;
-                  const tone = actorTone(entry.actorKind);
+                  const tone = actorTone(id);
                   const checked = filters.actor.includes(id);
                   return (
                     <li key={id}>
@@ -319,6 +323,7 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
                         onToggle={() => onChange({ ...filters, actor: toggle(filters.actor, id) })}
                         onOnly={() => onChange({ ...filters, actor: [id] })}
                         dotClass={tone.dot}
+                        labelClass={tone.text}
                         label={resolveActorLabel(entry.actorKind, id) ?? entry.actorLabel ?? id}
                         count={entry.count}
                         monoLabel

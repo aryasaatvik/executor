@@ -95,10 +95,12 @@ export const triggerTone = (kind: string | null | undefined): TriggerTone => {
 };
 
 // ---------------------------------------------------------------------------
-// Actor tones — colour the dot in the Actor facet/column by credential class
-// (`actorKind`: "user", "service-token", …). The label itself is the actor's
-// own display string (machine name, email), not a fixed vocabulary, so there is
-// no ACTOR_ORDER — facet keys come from `meta.actorCounts`.
+// Actor tones — colour the Actor facet/column/drawer by stable identity
+// (`actorId`: token commonName, user subject). Credential class (`actorKind`)
+// is a drawer suffix, not a hue: a host full of service tokens would otherwise
+// paint every row the same violet. The facet is unbounded, so there is no
+// ACTOR_ORDER — keys come from `meta.actorCounts`. Hash collisions are accepted
+// once cardinality exceeds the palette.
 // ---------------------------------------------------------------------------
 
 export interface ActorTone {
@@ -106,15 +108,34 @@ export interface ActorTone {
   readonly text: string;
 }
 
-export const ACTOR_TONES: Record<string, ActorTone> = {
-  user: { dot: "bg-sky-500", text: "text-foreground/80" },
-  "service-token": { dot: "bg-violet-500", text: "text-foreground/80" },
+const MUTED_ACTOR_TONE: ActorTone = {
+  dot: "bg-muted-foreground/40",
+  text: "text-muted-foreground",
 };
 
-export const actorTone = (kind: string | null | undefined): ActorTone => {
-  if (kind != null) {
-    const known = ACTOR_TONES[kind];
-    if (known) return known;
+/** Identity-stable hues. Avoids status (emerald/sky/amber/red) and trigger
+ *  (violet/cyan/slate) so a row's three dots stay independently readable. */
+export const ACTOR_PALETTE: readonly ActorTone[] = [
+  { dot: "bg-fuchsia-500", text: "text-fuchsia-600 dark:text-fuchsia-300" },
+  { dot: "bg-orange-500", text: "text-orange-600 dark:text-orange-300" },
+  { dot: "bg-teal-500", text: "text-teal-600 dark:text-teal-300" },
+  { dot: "bg-rose-500", text: "text-rose-600 dark:text-rose-300" },
+  { dot: "bg-indigo-500", text: "text-indigo-600 dark:text-indigo-300" },
+  { dot: "bg-lime-500", text: "text-lime-600 dark:text-lime-300" },
+  { dot: "bg-pink-500", text: "text-pink-600 dark:text-pink-300" },
+  { dot: "bg-yellow-500", text: "text-yellow-700 dark:text-yellow-300" },
+];
+
+const fnv1a = (value: string): number => {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
   }
-  return { dot: "bg-muted-foreground/40", text: "text-muted-foreground" };
+  return hash >>> 0;
+};
+
+export const actorTone = (actorId: string | null | undefined): ActorTone => {
+  if (actorId == null) return MUTED_ACTOR_TONE;
+  return ACTOR_PALETTE[fnv1a(actorId) % ACTOR_PALETTE.length] ?? MUTED_ACTOR_TONE;
 };
