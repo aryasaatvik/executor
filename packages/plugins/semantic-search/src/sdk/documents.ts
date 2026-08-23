@@ -1,4 +1,4 @@
-import type { Executor, Tool, ToolSchemaManifest } from "@executor-js/sdk/core";
+import type { Executor, Integration, Tool, ToolSchemaManifest } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
 import type { ToolDocumentInput } from "./chunker";
@@ -7,6 +7,7 @@ import { cyrb53 } from "./fingerprint";
 
 const ADDRESS_PREFIX = "tools.";
 const MAX_AI_SEARCH_FILE_BYTES = 3_500_000;
+const TOOL_SEARCH_DOCUMENT_VERSION = "ai-search-tool-document/v2";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
@@ -171,12 +172,25 @@ const truncateToAiSearchLimit = (document: string): string => {
   return textDecoder.decode(bytes.subarray(0, end));
 };
 
-export const toolItemKey = (manifest: ToolSchemaManifest): string =>
+type IntegrationSearchContext = Pick<Integration, "name" | "description" | "displayUrl">;
+type ToolItemKeyManifest = Pick<
+  ToolSchemaManifest,
+  "path" | "fingerprintVersion" | "indexFingerprint" | "sourceRevision"
+>;
+
+export const toolItemKey = (
+  manifest: ToolItemKeyManifest,
+  integration?: IntegrationSearchContext,
+): string =>
   [
+    TOOL_SEARCH_DOCUMENT_VERSION,
     manifest.path,
     manifest.fingerprintVersion,
     manifest.indexFingerprint,
     manifest.sourceRevision ?? "",
+    integration?.name ?? "",
+    integration?.description ?? "",
+    integration?.displayUrl ?? "",
   ].join(":");
 
 export interface ToolSearchDocument {
@@ -299,11 +313,12 @@ export const collectDocForTool = (
 export const collectToolSearchDocument = (
   executor: Executor,
   manifest: ToolSchemaManifest,
+  integration?: IntegrationSearchContext,
 ): Effect.Effect<ToolSearchDocument, SemanticSearchError> => {
   const path = manifest.path;
   const name = manifest.name;
   const description = stripHtml(manifest.description ?? "");
-  const fingerprint = toolItemKey(manifest);
+  const fingerprint = toolItemKey(manifest, integration);
   return executor.tools.schema(`${ADDRESS_PREFIX}${path}` as Tool["address"]).pipe(
     Effect.catch(() => Effect.succeed(null)),
     Effect.map((view) => {
@@ -311,6 +326,11 @@ export const collectToolSearchDocument = (
         `# ${path}`,
         `Name: ${name}`,
         `Integration: ${manifest.integration}`,
+        integration ? `Integration name: ${stripHtml(integration.name)}` : undefined,
+        integration?.description
+          ? `Integration purpose: ${stripHtml(integration.description)}`
+          : undefined,
+        integration?.displayUrl ? `Integration URL: ${integration.displayUrl}` : undefined,
         manifest.connection ? `Connection: ${manifest.connection}` : undefined,
         manifest.pluginId ? `Plugin: ${manifest.pluginId}` : undefined,
         description ? `Description: ${description}` : undefined,
