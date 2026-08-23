@@ -22,7 +22,7 @@ import type { InteractionRow, InteractionStatus, RunRow, ToolCallRow } from "../
 import { runDetailAtom } from "./atoms";
 import { formatDateTime, formatDuration, logLines, prettyJson, statusLabel } from "./format";
 import { HoverCardTimestamp } from "./hover-card-timestamp";
-import { STATUS_TONES, triggerTone } from "./status";
+import { actorTone, STATUS_TONES, triggerTone } from "./status";
 
 // ---------------------------------------------------------------------------
 // Right-side run detail drawer: a 3-tab Sheet (Properties / Tool calls / Logs)
@@ -248,6 +248,7 @@ function DetailContent(props: {
   const { run } = props;
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
+  const actor = actorTone(run.actorId);
   // Prefer the live friendly label (e.g. a service-token machine name) over the
   // run-time snapshot, falling back to the snapshot then the id.
   const resolveActorLabel = useResolveActorLabel();
@@ -333,11 +334,14 @@ function DetailContent(props: {
               </MetaCard>
               <MetaCard label="Actor">
                 {run.actorId !== null ? (
-                  <span className="font-mono text-xs break-all">
-                    {actorLabel}
-                    {run.actorKind !== null ? (
-                      <span className="text-muted-foreground/60"> · {run.actorKind}</span>
-                    ) : null}
+                  <span className="flex items-center gap-2 font-mono text-xs">
+                    <span aria-hidden className={cn("size-2 shrink-0 rounded-full", actor.dot)} />
+                    <span className={cn("min-w-0 break-all", actor.text)}>
+                      {actorLabel}
+                      {run.actorKind !== null ? (
+                        <span className="text-muted-foreground/60"> · {run.actorKind}</span>
+                      ) : null}
+                    </span>
                   </span>
                 ) : (
                   <span className="text-muted-foreground/60">—</span>
