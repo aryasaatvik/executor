@@ -47,6 +47,8 @@ export interface SemanticSearchRefreshResult {
   readonly namespace: string;
   readonly total: number;
   readonly indexed: number;
+  /** Items whose upload failed while the rest of the batch continued. */
+  readonly failed?: number;
   readonly skipped: number;
   readonly removed: number;
 }
