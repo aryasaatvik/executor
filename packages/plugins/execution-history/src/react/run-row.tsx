@@ -27,7 +27,7 @@ export interface RunListRowProps {
 export function RunListRow({ run, selected, isPast, columns, onSelect }: RunListRowProps) {
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
-  const actor = actorTone(run.actorKind);
+  const actor = actorTone(run.actorId);
   // Prefer the live friendly label (e.g. a service-token machine name) over the
   // snapshot captured at run time, falling back to the snapshot then the id.
   const resolveActorLabel = useResolveActorLabel();
