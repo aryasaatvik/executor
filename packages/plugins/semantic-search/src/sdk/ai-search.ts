@@ -11,7 +11,7 @@ import {
   type ToolDiscoveryProvider,
   type ToolDiscoveryResult,
 } from "@executor-js/sdk/core";
-import { Effect } from "effect";
+import { Effect, Predicate, Result } from "effect";
 
 import { type AiSearchItemRow, aiSearchItems, type AiSearchItemStatus } from "./collections";
 import {
@@ -47,6 +47,11 @@ export interface AiSearchToolSearchBackendStorage {
 const DEFAULT_SEARCH_LIMIT = 20;
 const AI_SEARCH_UPLOAD_CONCURRENCY = 2;
 const AI_SEARCH_UPLOAD_BATCH_SIZE = 25;
+// Cloudflare's default reranking threshold (0.4) drops short, valid catalog
+// queries such as "search web" before their hybrid matches reach the caller.
+// Keep AI Search authoritative while lowering only its native retrieval/rerank
+// cutoff for this sparse tool catalog.
+const AI_SEARCH_MATCH_THRESHOLD = 0.1;
 
 const nowIso = (): string => new Date().toISOString();
 
@@ -62,6 +67,13 @@ const toStatus = (status: string | undefined): AiSearchItemStatus =>
 
 const toItemName = (document: ToolSearchDocument): string =>
   `tool-${cyrb53(`${document.path}\u0000${document.fingerprint}`).toString(36)}.md`;
+
+const uniqueItemIds = (ids: readonly (string | undefined)[]): string[] => [
+  ...new Set(ids.filter(Predicate.isNotUndefined)),
+];
+
+const pendingDeleteItemIdsForRow = (row: AiSearchItemRow): string[] =>
+  uniqueItemIds([...(row.pendingDeleteItemIds ?? []), row.pendingDeleteItemId]);
 
 const normalizeBatchInput = (
   input: SemanticSearchReindexBatchInput,
@@ -137,6 +149,7 @@ const getAiSearchItem = (
 const toIndexedItemRow = (
   document: ToolSearchDocument,
   uploaded: AiSearchItemInfo,
+  pendingDeleteItemIds?: readonly string[],
 ): AiSearchItemRow => ({
   path: document.path,
   key: uploaded.key,
@@ -149,14 +162,32 @@ const toIndexedItemRow = (
   fingerprint: document.fingerprint,
   status: toStatus(uploaded.status),
   updatedAt: nowIso(),
+  ...(pendingDeleteItemIds === undefined || pendingDeleteItemIds.length === 0
+    ? {}
+    : { pendingDeleteItemIds: uniqueItemIds(pendingDeleteItemIds) }),
 });
+
+const withPendingDeleteItemIds = (
+  row: AiSearchItemRow,
+  pendingDeleteItemIds: readonly string[],
+): AiSearchItemRow => {
+  const {
+    pendingDeleteItemId: _pendingDeleteItemId,
+    pendingDeleteItemIds: _previousPendingDeleteItemIds,
+    ...base
+  } = row;
+  const uniquePendingDeleteItemIds = uniqueItemIds(pendingDeleteItemIds);
+  return uniquePendingDeleteItemIds.length === 0
+    ? base
+    : { ...base, pendingDeleteItemIds: uniquePendingDeleteItemIds };
+};
 
 interface UploadedDocument {
   readonly deleteOnStorageFailure: boolean;
-  readonly previousItemId?: string;
   readonly uploadedItemId: string;
   readonly key: string;
   readonly row: AiSearchItemRow;
+  readonly deferredDeleteItemIds: readonly string[];
 }
 
 const uploadDocument = (
@@ -167,17 +198,33 @@ const uploadDocument = (
 ): Effect.Effect<UploadedDocument, SemanticSearchError> =>
   Effect.gen(function* () {
     const itemName = toItemName(document);
+    const previousPendingDeleteItemIds =
+      previous === undefined ? [] : pendingDeleteItemIdsForRow(previous);
     if (remote !== undefined && isReusableRemoteStatus(remote.status)) {
+      if (previousPendingDeleteItemIds.length > 0 && remote.status === "completed") {
+        const deletions = yield* Effect.forEach(
+          previousPendingDeleteItemIds,
+          (itemId) => deleteItem(aiSearch, itemId).pipe(Effect.result),
+          { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+        );
+        const failedPendingDeleteItemIds = previousPendingDeleteItemIds.filter((_, index) =>
+          Result.isFailure(deletions[index]),
+        );
+        return {
+          deleteOnStorageFailure: false,
+          uploadedItemId: remote.id,
+          key: document.path,
+          row: toIndexedItemRow(document, remote, failedPendingDeleteItemIds),
+          deferredDeleteItemIds: [],
+        };
+      }
       return {
         deleteOnStorageFailure: false,
         uploadedItemId: remote.id,
         key: document.path,
-        row: toIndexedItemRow(document, remote),
+        row: toIndexedItemRow(document, remote, previousPendingDeleteItemIds),
+        deferredDeleteItemIds: [],
       };
-    }
-
-    if (remote !== undefined) {
-      yield* deleteItemBestEffort(aiSearch, remote.id);
     }
 
     const uploaded = yield* Effect.tryPromise({
@@ -188,14 +235,20 @@ const uploadDocument = (
       catch: mapUploadError(document),
     });
 
+    const deferredDeleteItemIds = uniqueItemIds(
+      remote !== undefined && !isReusableRemoteStatus(remote.status)
+        ? [remote.id, ...previousPendingDeleteItemIds]
+        : remote === undefined && previous !== undefined && previous.key !== itemName
+          ? [previous.itemId, ...previousPendingDeleteItemIds]
+          : previousPendingDeleteItemIds,
+    );
+
     return {
       deleteOnStorageFailure: true,
-      ...(previous !== undefined && previous.key !== itemName
-        ? { previousItemId: previous.itemId }
-        : {}),
       uploadedItemId: uploaded.id,
       key: document.path,
-      row: toIndexedItemRow(document, uploaded),
+      row: toIndexedItemRow(document, uploaded, deferredDeleteItemIds),
+      deferredDeleteItemIds: toStatus(uploaded.status) === "completed" ? deferredDeleteItemIds : [],
     };
   });
 
@@ -213,9 +266,28 @@ export const reindexAiSearchBatch = (input: {
   const aiSearch = input.aiSearch;
   return Effect.gen(function* () {
     const batch = normalizeBatchInput(input);
-    const manifests = yield* listToolManifests(input.executor, {
-      maxTools: batch.maxTools,
-    });
+    const [manifests, integrations] = yield* Effect.all(
+      [
+        listToolManifests(input.executor, { maxTools: batch.maxTools }),
+        input.executor.integrations.list().pipe(
+          Effect.catch((cause) =>
+            Effect.sync(() => {
+              console.warn(
+                JSON.stringify({
+                  event: "tool_search_index_integration_context_failed",
+                  cause,
+                }),
+              );
+              return [];
+            }),
+          ),
+        ),
+      ] as const,
+      { concurrency: 2 },
+    );
+    const integrationBySlug = new Map(
+      integrations.map((integration) => [String(integration.slug), integration] as const),
+    );
     const page = manifests.slice(batch.offset, batch.offset + batch.pageSize);
     const nextOffset =
       batch.offset + page.length < manifests.length ? batch.offset + page.length : null;
@@ -232,53 +304,97 @@ export const reindexAiSearchBatch = (input: {
       );
     const prepared = page.map((manifest) => ({
       manifest,
-      fingerprint: toolItemKey(manifest),
+      integration: integrationBySlug.get(manifest.integration),
+      fingerprint: toolItemKey(manifest, integrationBySlug.get(manifest.integration)),
       previous: existingByPath.get(manifest.path),
     }));
-    const remoteByKey = new Map(
-      yield* Effect.forEach(
-        prepared.flatMap(({ previous, fingerprint }) =>
-          previous?.fingerprint === fingerprint ? [previous] : [],
-        ),
-        (previous) =>
-          getAiSearchItem(aiSearch, previous.itemId).pipe(
-            Effect.map((item) => [previous.key, item] as const),
-          ),
-        { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
-      ),
+    const remoteCandidates = prepared.flatMap(({ previous, fingerprint }) =>
+      previous?.fingerprint === fingerprint ? [previous] : [],
     );
+    const remoteLookupResults = yield* Effect.forEach(
+      remoteCandidates,
+      (previous) =>
+        getAiSearchItem(aiSearch, previous.itemId).pipe(
+          Effect.map((item) => [previous, item] as const),
+          Effect.result,
+        ),
+      { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+    );
+    const remoteByKey = new Map<string, AiSearchItemInfo>();
+    const remoteLookupFailures = new Set<string>();
+    for (const [index, result] of remoteLookupResults.entries()) {
+      const previous = remoteCandidates[index];
+      if (Result.isSuccess(result)) {
+        remoteByKey.set(result.success[0].key, result.success[1]);
+        continue;
+      }
+      if (previous !== undefined) remoteLookupFailures.add(previous.key);
+      console.warn(
+        JSON.stringify({
+          event: "tool_search_index_remote_lookup_failed",
+          key: previous?.key,
+          itemId: previous?.itemId,
+          cause: result.failure,
+        }),
+      );
+    }
     let skipped = 0;
+    const failedPaths: string[] = [];
     const changed: {
       readonly manifest: (typeof manifests)[number];
+      readonly integration?: (typeof integrations)[number];
       readonly previous?: AiSearchItemRow;
     }[] = [];
 
-    for (const { manifest, fingerprint, previous } of prepared) {
+    for (const { manifest, integration, fingerprint, previous } of prepared) {
       const remote = previous === undefined ? undefined : remoteByKey.get(previous.key);
+      if (previous !== undefined && remoteLookupFailures.has(previous.key)) {
+        failedPaths.push(manifest.path);
+        continue;
+      }
       if (
         previous?.fingerprint === fingerprint &&
         remote !== undefined &&
-        isReusableRemoteStatus(remote.status)
+        isReusableRemoteStatus(remote.status) &&
+        pendingDeleteItemIdsForRow(previous).length === 0
       ) {
         skipped += 1;
         continue;
       }
       changed.push({
         manifest,
+        ...(integration === undefined ? {} : { integration }),
         ...(previous === undefined ? {} : { previous }),
       });
     }
 
-    const uploaded = yield* Effect.forEach(
+    const uploadResults = yield* Effect.forEach(
       changed,
-      ({ manifest, previous }) =>
-        collectToolSearchDocument(input.executor, manifest).pipe(
+      ({ manifest, integration, previous }) =>
+        collectToolSearchDocument(input.executor, manifest, integration).pipe(
           Effect.flatMap((document) =>
             uploadDocument(aiSearch, document, previous, remoteByKey.get(toItemName(document))),
           ),
+          Effect.result,
         ),
       { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
     );
+    const uploaded: UploadedDocument[] = [];
+    for (const [index, result] of uploadResults.entries()) {
+      if (Result.isSuccess(result)) {
+        uploaded.push(result.success);
+      } else {
+        const path = changed[index]?.manifest.path;
+        if (path !== undefined) failedPaths.push(path);
+        console.warn(
+          JSON.stringify({
+            event: "tool_search_index_item_failed",
+            path,
+            cause: result.failure,
+          }),
+        );
+      }
+    }
 
     if (uploaded.length > 0) {
       yield* input.items
@@ -303,14 +419,69 @@ export const reindexAiSearchBatch = (input: {
           Effect.mapError(mapStorageError("Failed to record AI Search item rows.")),
         );
 
-      yield* Effect.forEach(
-        uploaded,
+      const replacements = uploaded.filter(
         (entry) =>
-          entry.previousItemId === undefined
-            ? Effect.void
-            : deleteItemBestEffort(aiSearch, entry.previousItemId),
-        { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY, discard: true },
+          entry.row.status === "completed" &&
+          (entry.deferredDeleteItemIds.length > 0 ||
+            pendingDeleteItemIdsForRow(entry.row).length > 0),
       );
+      if (replacements.length > 0) {
+        const cleanupResults = yield* Effect.forEach(
+          replacements,
+          (entry) => {
+            const itemIds =
+              entry.deferredDeleteItemIds.length > 0
+                ? entry.deferredDeleteItemIds
+                : pendingDeleteItemIdsForRow(entry.row);
+            return Effect.forEach(
+              itemIds,
+              (itemId) => deleteItem(aiSearch, itemId).pipe(Effect.result),
+              { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+            ).pipe(Effect.map((results) => ({ entry, itemIds, results })));
+          },
+          { concurrency: AI_SEARCH_UPLOAD_CONCURRENCY },
+        );
+        for (const { itemIds, results } of cleanupResults) {
+          for (const [index, result] of results.entries()) {
+            if (Result.isFailure(result)) {
+              console.warn(
+                JSON.stringify({
+                  event: "tool_search_index_previous_item_delete_failed",
+                  itemId: itemIds[index],
+                  cause: result.failure,
+                }),
+              );
+            }
+          }
+        }
+        if (cleanupResults.length > 0) {
+          yield* input.items
+            .putMany({
+              owner: input.owner,
+              entries: cleanupResults.map(({ entry, itemIds, results }) => ({
+                key: entry.key,
+                data: withPendingDeleteItemIds(
+                  entry.row,
+                  itemIds.filter((_, index) => Result.isFailure(results[index])),
+                ),
+              })),
+            })
+            .pipe(
+              Effect.mapError(mapStorageError("Failed to finalize AI Search item rows.")),
+              Effect.tapError((cause) =>
+                Effect.sync(() => {
+                  console.warn(
+                    JSON.stringify({
+                      event: "tool_search_index_previous_item_cleanup_persist_failed",
+                      cause,
+                    }),
+                  );
+                }),
+              ),
+              Effect.catch(() => Effect.void),
+            );
+        }
+      }
     }
 
     const removedEntries = shouldRemoveStale
@@ -338,6 +509,7 @@ export const reindexAiSearchBatch = (input: {
       namespace: input.namespace,
       total: manifests.length,
       indexed: uploaded.length,
+      ...(failedPaths.length === 0 ? {} : { failed: failedPaths.length }),
       skipped,
       removed: removedEntries.length,
       offset: batch.offset,
@@ -359,6 +531,7 @@ export const reindexAiSearch = (input: {
     let nextOffset: number | null = 0;
     let total = 0;
     let indexed = 0;
+    let failed = 0;
     let skipped = 0;
     let removed = 0;
 
@@ -370,6 +543,7 @@ export const reindexAiSearch = (input: {
       });
       total = result.total;
       indexed += result.indexed;
+      failed += result.failed ?? 0;
       skipped += result.skipped;
       removed += result.removed;
       nextOffset = result.nextOffset;
@@ -379,6 +553,7 @@ export const reindexAiSearch = (input: {
       namespace: input.namespace,
       total,
       indexed,
+      ...(failed === 0 ? {} : { failed }),
       skipped,
       removed,
     };
@@ -448,7 +623,6 @@ const chunkToResult = (
 
 export const makeAiSearchToolDiscoveryProvider = (deps: {
   readonly aiSearch: Pick<AiSearchInstance, "search"> | undefined;
-  readonly items: ItemsCollection | undefined;
 }): ToolDiscoveryProvider | undefined => {
   if (!deps.aiSearch) return undefined;
   const aiSearch = deps.aiSearch;
@@ -467,14 +641,12 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
               ai_search_options: {
                 retrieval: {
                   retrieval_type: "hybrid",
-                  // Retrieve a broad candidate set before deduplication and paging. Asking
-                  // AI Search for only the caller's page size makes plausible tools vanish
-                  // when several chunks belong to one tool or beat the desired integration.
+                  match_threshold: AI_SEARCH_MATCH_THRESHOLD,
                   max_num_results: 50,
                   ...(integration ? { filters: { integration: { $eq: integration } } } : {}),
                   return_on_failure: true,
                 },
-                reranking: { enabled: true },
+                reranking: { enabled: true, match_threshold: AI_SEARCH_MATCH_THRESHOLD },
               },
             }),
           catch: (cause) =>
@@ -484,38 +656,18 @@ export const makeAiSearchToolDiscoveryProvider = (deps: {
             }),
         });
 
-        // AI Search carries the canonical tool metadata on every chunk. Validate its
-        // path against the current catalog, rather than reconciling its opaque item key
-        // with the local upload ledger. That key is provider-owned and may be rewritten
-        // during an upload, while the catalog path is the stable identity clients use.
+        // AI Search carries the canonical tool metadata on every chunk. Its provider-owned
+        // item key may be rewritten during upload, but `path` is the stable identity that
+        // clients use. Do not gate a successful AI Search result through the local upload
+        // ledger: Cloudflare can finish indexing before that status projection advances.
+        // The ledger remains the indexer's recovery/status record, not query authority.
         const chunkResults = (response.chunks ?? []).flatMap((chunk) => {
           const result = chunkToResult(chunk);
           return result === null ? [] : [result];
         });
-        const visiblePaths =
-          deps.items === undefined
-            ? undefined
-            : new Set(
-                (yield* deps.items
-                  .getMany({ keys: chunkResults.map((result) => result.path) })
-                  .pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new ExecutionToolError({
-                          message: "AI Search tool search failed.",
-                          cause,
-                        }),
-                    ),
-                  )).keys(),
-              );
-
         const bestByPath = new Map<string, ToolDiscoveryResult>();
         for (const result of chunkResults) {
-          if (
-            (visiblePaths !== undefined && !visiblePaths.has(result.path)) ||
-            !matchesNamespace(result.path, input.namespace)
-          )
-            continue;
+          if (!matchesNamespace(result.path, input.namespace)) continue;
           const previous = bestByPath.get(result.path);
           if (!previous || result.score > previous.score) bestByPath.set(result.path, result);
         }
@@ -550,7 +702,6 @@ export const makeAiSearchToolSearchBackend = (
     build: ({ storage }) => {
       const provider = makeAiSearchToolDiscoveryProvider({
         aiSearch: options.aiSearch,
-        items: storage.aiSearchItems,
       });
       return {
         namespace,

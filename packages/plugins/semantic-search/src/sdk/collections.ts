@@ -18,6 +18,17 @@ export const AiSearchItemRow = Schema.Struct({
   status: AiSearchItemStatus,
   updatedAt: Schema.String,
   error: Schema.optional(Schema.String),
+  /**
+   * Provider items that stay live until their replacement is completed. This
+   * prevents an eventual-consistency gap while AI Search processes the newly
+   * uploaded document and allows partial cleanup failures to be retried.
+   */
+  pendingDeleteItemIds: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Legacy single-item recovery field. Rows written before the list field was
+   * introduced remain decodable and are normalized by the reindexer.
+   */
+  pendingDeleteItemId: Schema.optional(Schema.String),
 });
 export type AiSearchItemRow = typeof AiSearchItemRow.Type;
 
