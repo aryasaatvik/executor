@@ -25,9 +25,11 @@ import { ServerConnectionMenu } from "./server-connection-menu";
 type AppMetaEnv = {
   readonly VITE_APP_VERSION: string;
   readonly VITE_GITHUB_URL: string;
+  readonly VITE_SOURCE_REVISION?: string;
+  readonly VITE_SOURCE_REVISION_URL?: string;
 };
 
-const { VITE_APP_VERSION, VITE_GITHUB_URL } = (
+const { VITE_APP_VERSION, VITE_GITHUB_URL, VITE_SOURCE_REVISION, VITE_SOURCE_REVISION_URL } = (
   import.meta as ImportMeta & {
     readonly env: AppMetaEnv;
   }
@@ -269,9 +271,20 @@ function SidebarContent(props: {
           >
             Star on GitHub
           </a>
-          <span className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-            v{VITE_APP_VERSION}
-          </span>
+          {VITE_SOURCE_REVISION && VITE_SOURCE_REVISION_URL ? (
+            <a
+              href={VITE_SOURCE_REVISION_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-0.5 font-mono text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground"
+            >
+              {VITE_SOURCE_REVISION}
+            </a>
+          ) : (
+            <span className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+              v{VITE_APP_VERSION}
+            </span>
+          )}
         </div>
       </div>
     </>
