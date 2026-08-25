@@ -71,6 +71,8 @@ export interface OAuthTestServerOptions {
    *  name is approved. Mirrors authorization servers (e.g. Mercury) that
    *  reject third-party client names containing their own brand. */
   readonly approveClientName?: (name: string) => boolean;
+  /** Advertise OAuth Client ID Metadata Document support alongside DCR. */
+  readonly clientIdMetadataDocumentSupported?: boolean;
 }
 
 export interface OAuthTestServerShape {
@@ -505,6 +507,9 @@ export const serveOAuthTestServer = (
             authorization_endpoint: `${currentIssuerUrl}/authorize`,
             token_endpoint: `${currentIssuerUrl}/token`,
             registration_endpoint: `${currentIssuerUrl}/register`,
+            ...(options.clientIdMetadataDocumentSupported === true
+              ? { client_id_metadata_document_supported: true }
+              : {}),
             response_types_supported: ["code"],
             grant_types_supported: ["authorization_code", "refresh_token", "client_credentials"],
             code_challenge_methods_supported: ["S256"],
