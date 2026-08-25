@@ -14,6 +14,7 @@ import {
   type HealthCheckResult,
   type HealthCheckSpec,
   type OAuthClientSummary,
+  type OAuthProbeResult,
   type Owner,
 } from "@executor-js/sdk/shared";
 import type { IntegrationAccountHandoff } from "@executor-js/sdk/client";
@@ -782,18 +783,6 @@ export async function runCimdConnect(
 // popup-start atoms.
 // ---------------------------------------------------------------------------
 
-/** Discovery result from the probe step (subset of the `probeOAuth` response). */
-type OAuthDiscoveryProbeResult = {
-  readonly issuer?: string | null;
-  readonly authorizationUrl: string;
-  readonly tokenUrl: string;
-  readonly resource?: string | null;
-  readonly scopesSupported?: readonly string[];
-  readonly registrationEndpoint?: string | null;
-  readonly tokenEndpointAuthMethodsSupported?: readonly string[];
-  readonly clientIdMetadataDocumentSupported?: boolean;
-};
-
 type DcrRegisterArgs = {
   readonly owner: Owner;
   readonly slug: OAuthClientSlug;
@@ -833,7 +822,7 @@ type AutomaticOAuthOutcome =
         | "no-registration-endpoint"
         | "client-metadata-failed"
         | "registration-failed";
-      readonly probe: OAuthDiscoveryProbeResult;
+      readonly probe: OAuthProbeResult;
       /** A specific, user-facing reason to surface instead of the generic
        *  "register an app" copy (e.g. a server that rejects the DCR redirect
        *  URI). Absent when the fallback carries no actionable detail. */
@@ -843,7 +832,7 @@ type AutomaticOAuthOutcome =
 type RunAutomaticOAuthConnectDeps = {
   /** Probe the discovery URL → resolved endpoints + (maybe) a registration
    *  endpoint. Resolves to null when the probe fails. */
-  readonly probe: (url: string) => Promise<OAuthDiscoveryProbeResult | null>;
+  readonly probe: (url: string) => Promise<OAuthProbeResult | null>;
   /** Create or reuse the local public client used by a CIMD flow. */
   readonly createCimdClient: ResolveCimdClientDeps["createClient"];
   /** Register a DCR client → the minted client slug, `{ error }` with a
@@ -1338,9 +1327,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
   // retains its historical name and flips to the bring-your-own-app recovery.
   const [dcrBusy, setDcrBusy] = useState(false);
   const [dcrFailed, setDcrFailed] = useState(false);
-  const [oauthFallbackProbe, setOAuthFallbackProbe] = useState<OAuthDiscoveryProbeResult | null>(
-    null,
-  );
+  const [oauthFallbackProbe, setOAuthFallbackProbe] = useState<OAuthProbeResult | null>(null);
   // When transparent DCR is rejected with an actionable reason (e.g. the server
   // refuses our redirect URI), surface it as an inline error card on the
   // bring-your-own-app recovery view instead of a transient toast.
@@ -2300,7 +2287,7 @@ function AddAccountModalView(props: AddAccountModalProps) {
       {
         reserve: oauthPopup.reserve,
         release: oauthPopup.releaseReservation,
-        probe: async (url: string): Promise<OAuthDiscoveryProbeResult | null> => {
+        probe: async (url: string): Promise<OAuthProbeResult | null> => {
           const exit = await doProbe({ payload: { url }, reactivityKeys: [] });
           if (Exit.isFailure(exit)) return null;
           return exit.value;

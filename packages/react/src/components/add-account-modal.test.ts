@@ -5,6 +5,7 @@ import {
   OAuthClientSlug,
   ProviderItemId,
   ProviderKey,
+  type OAuthProbeResult,
   type Owner,
 } from "@executor-js/sdk/shared";
 
@@ -33,16 +34,7 @@ const apiKeyMethod = (id: string, source: "spec" | "custom", template = id): Aut
   placements: [{ carrier: "header", name: "Authorization", prefix: "" }],
 });
 
-type ProbeResult = {
-  readonly issuer?: string | null;
-  readonly authorizationUrl: string;
-  readonly tokenUrl: string;
-  readonly resource?: string | null;
-  readonly scopesSupported?: readonly string[];
-  readonly registrationEndpoint?: string | null;
-  readonly tokenEndpointAuthMethodsSupported?: readonly string[];
-  readonly clientIdMetadataDocumentSupported?: boolean;
-};
+type ProbeResult = OAuthProbeResult;
 
 type RegisterArgs = {
   readonly owner: Owner;
@@ -492,10 +484,10 @@ describe("runAutomaticOAuthConnect", () => {
         probe: (): Promise<ProbeResult> => {
           calls.push("probe");
           return Promise.resolve({
-            authorizationUrl: "https://samva.dev/api/v1/auth/oauth2/authorize",
-            tokenUrl: "https://samva.dev/api/v1/auth/oauth2/token",
-            resource: "https://mcp.samva.dev",
-            registrationEndpoint: "https://samva.dev/api/v1/auth/oauth2/register",
+            authorizationUrl: "https://auth.example.com/authorize",
+            tokenUrl: "https://auth.example.com/token",
+            resource: "https://mcp.example.com/mcp",
+            registrationEndpoint: "https://auth.example.com/register",
             clientIdMetadataDocumentSupported: true,
           });
         },
@@ -514,12 +506,12 @@ describe("runAutomaticOAuthConnect", () => {
         },
       },
       {
-        discoveryUrl: "https://mcp.samva.dev",
-        resourceFallback: "https://mcp.samva.dev",
+        discoveryUrl: "https://mcp.example.com/mcp",
+        resourceFallback: "https://mcp.example.com/mcp",
         owner: "user",
         integration: TEST_INTEGRATION,
         cimd: {
-          integrationName: "Samva MCP",
+          integrationName: "Test MCP",
           clientIdMetadataDocumentUrl: "https://executor.example/api/oauth/client-id-metadata.json",
           existingClients: [],
         },
@@ -531,7 +523,7 @@ describe("runAutomaticOAuthConnect", () => {
     expect(createArgs).toMatchObject({
       clientId: "https://executor.example/api/oauth/client-id-metadata.json",
       clientSecret: "",
-      resource: "https://mcp.samva.dev",
+      resource: "https://mcp.example.com/mcp",
     });
     expect(startArgs!.reservation).toBe(RESERVED);
   });
