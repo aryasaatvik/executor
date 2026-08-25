@@ -18,8 +18,8 @@ import {
   DEFAULT_CONNECTION_OWNER,
   mergeCustomMethods,
   oauthIdentityLabelFromHealth,
+  runAutomaticOAuthConnect,
   runCimdConnect,
-  runDcrConnect,
   typedIdentityLabel,
   uniqueConnectionName,
 } from "./add-account-modal";
@@ -41,6 +41,7 @@ type ProbeResult = {
   readonly scopesSupported?: readonly string[];
   readonly registrationEndpoint?: string | null;
   readonly tokenEndpointAuthMethodsSupported?: readonly string[];
+  readonly clientIdMetadataDocumentSupported?: boolean;
 };
 
 type RegisterArgs = {
@@ -87,6 +88,30 @@ const popupSpy = (reservation: OAuthPopupReservation = RESERVED) => {
     },
   };
 };
+
+type AutomaticOAuthDeps = Parameters<typeof runAutomaticOAuthConnect>[0];
+type AutomaticOAuthInput = Parameters<typeof runAutomaticOAuthConnect>[1];
+
+/** DCR-focused tests use defaults for the CIMD branch they intentionally do
+ *  not exercise. Discovery-level tests call the orchestrator directly. */
+const runDcrConnect = (
+  deps: Omit<AutomaticOAuthDeps, "createCimdClient">,
+  input: Omit<AutomaticOAuthInput, "cimd">,
+) =>
+  runAutomaticOAuthConnect(
+    {
+      ...deps,
+      createCimdClient: (): Promise<OAuthClientSlug | null> => Promise.resolve(null),
+    },
+    {
+      ...input,
+      cimd: {
+        integrationName: "Test MCP",
+        clientIdMetadataDocumentUrl: "https://executor.example/api/oauth/client-id-metadata.json",
+        existingClients: [],
+      },
+    },
+  );
 
 type CimdCreateArgs = {
   readonly owner: Owner;
@@ -454,6 +479,64 @@ describe("runCimdConnect", () => {
   });
 });
 
+describe("runAutomaticOAuthConnect", () => {
+  it("prefers advertised CIMD over DCR and keeps the original popup reservation", async () => {
+    const popup = popupSpy();
+    const calls: string[] = [];
+    let createArgs: CimdCreateArgs | null = null;
+    let startArgs: StartArgs | null = null;
+
+    const outcome = await runAutomaticOAuthConnect(
+      {
+        ...popup,
+        probe: (): Promise<ProbeResult> => {
+          calls.push("probe");
+          return Promise.resolve({
+            authorizationUrl: "https://samva.dev/api/v1/auth/oauth2/authorize",
+            tokenUrl: "https://samva.dev/api/v1/auth/oauth2/token",
+            resource: "https://mcp.samva.dev",
+            registrationEndpoint: "https://samva.dev/api/v1/auth/oauth2/register",
+            clientIdMetadataDocumentSupported: true,
+          });
+        },
+        createCimdClient: (args: CimdCreateArgs): Promise<OAuthClientSlug> => {
+          calls.push("create-cimd");
+          createArgs = args;
+          return Promise.resolve(args.slug);
+        },
+        register: (): Promise<OAuthClientSlug> => {
+          calls.push("register-dcr");
+          return Promise.resolve(OAuthClientSlug.make("unexpected-dcr-client"));
+        },
+        start: (args: StartArgs): void => {
+          calls.push("start");
+          startArgs = args;
+        },
+      },
+      {
+        discoveryUrl: "https://mcp.samva.dev",
+        resourceFallback: "https://mcp.samva.dev",
+        owner: "user",
+        integration: TEST_INTEGRATION,
+        cimd: {
+          integrationName: "Samva MCP",
+          clientIdMetadataDocumentUrl: "https://executor.example/api/oauth/client-id-metadata.json",
+          existingClients: [],
+        },
+      },
+    );
+
+    expect(outcome).toEqual({ kind: "started", flow: "cimd" });
+    expect(calls).toEqual(["probe", "create-cimd", "start"]);
+    expect(createArgs).toMatchObject({
+      clientId: "https://executor.example/api/oauth/client-id-metadata.json",
+      clientSecret: "",
+      resource: "https://mcp.samva.dev",
+    });
+    expect(startArgs!.reservation).toBe(RESERVED);
+  });
+});
+
 describe("runDcrConnect popup reservation", () => {
   const probeOk = (): Promise<ProbeResult> =>
     Promise.resolve({
@@ -491,7 +574,7 @@ describe("runDcrConnect popup reservation", () => {
       dcrInput,
     );
 
-    expect(outcome).toEqual({ kind: "started" });
+    expect(outcome).toEqual({ kind: "started", flow: "dcr" });
     expect(popup.calls).toEqual(["reserve", "probe", "register", "start"]);
   });
 
@@ -509,7 +592,7 @@ describe("runDcrConnect popup reservation", () => {
       dcrInput,
     );
 
-    expect(outcome).toEqual({ kind: "started" });
+    expect(outcome).toEqual({ kind: "started", flow: "dcr" });
     expect(startArgs!.reservation).toBe(RESERVED);
   });
 
