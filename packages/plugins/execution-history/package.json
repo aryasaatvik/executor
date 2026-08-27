@@ -1,0 +1,28 @@
+{
+  "name": "@executor-js/plugin-execution-history",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/sdk/index.ts"
+  },
+  "scripts": {
+    "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck:slow": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@executor-js/sdk": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "bun-types": "catalog:",
+    "tsup": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
