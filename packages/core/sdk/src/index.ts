@@ -251,6 +251,7 @@ export {
   emitExecutionEvent,
   withExecutionObserver,
   type ExecutionTrigger,
+  type ExecutionActor,
   type ToolCallStatus,
   type InteractionStatus,
   type ExecutionStatus,

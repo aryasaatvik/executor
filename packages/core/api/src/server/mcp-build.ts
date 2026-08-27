@@ -86,6 +86,14 @@ export const makeMcpBuildServer =
             ? { artifactUrl: artifactUrlFor(webBaseUrl, principal.organizationSlug) }
             : {}),
           ...(options ?? {}),
+          trigger: {
+            kind: "mcp",
+            actor: principal.actor ?? {
+              kind: "user",
+              id: principal.accountId,
+              label: principal.name ?? (principal.email.length > 0 ? principal.email : null),
+            },
+          },
         }).pipe(
           Effect.withSpan("mcp.server.create"),
           Effect.map((mcpServer) => ({ mcpServer, engine })),

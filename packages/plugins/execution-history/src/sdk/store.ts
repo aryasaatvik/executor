@@ -1,49 +1,53 @@
-import { Effect, Option, Predicate, Schedule, Schema } from "effect";
+import { Effect, Option, Predicate, Schema } from "effect";
 
 import {
   type ExecutionEvent,
-  ExecutionInteractionId,
+  type ExecutionInteractionId,
   type ExecutionObserver,
-  ExecutionToolCallId,
+  type ExecutionToolCallId,
   type Owner,
   type OwnerBinding,
   type PluginStorageCollectionFacade,
   type PluginStorageFacade,
-  StorageError,
   type StorageDeps,
   type StorageFailure,
+  StorageError,
 } from "@executor-js/sdk/core";
 
 import {
-  InteractionRow,
+  type InteractionRow,
   type InteractionStatus,
-  RunRow,
-  type RunStatus,
-  ToolCallRow,
+  type RunRow,
+  type ToolCallRow,
   type ToolCallStatus,
-  interactions,
+  RunStatus,
   runs,
-  terminalOutboxes,
-  toolCalls,
 } from "./collections";
+import { type RunDetail, RunDetailFromJsonString } from "./detail-types";
 
 // ---------------------------------------------------------------------------
-// Execution-history store. Translates the engine's ExecutionEvent stream into
-// durable run/tool-call/interaction rows and exposes the read surface.
+// Execution-history store. Translates the engine's ExecutionEvent stream into a
+// slim D1 `runs` index row + an append-only R2 detail object, and exposes the
+// read surface.
+//
+// Storage split:
+// - D1 `runs` row (via pluginStorage): slim, indexed, list-renderable — status,
+//   trigger, actor, timing, counts, plus `codePreview` and `logErrorCount`/
+//   `logWarnCount` so the list never fetches a blob.
+// - R2 detail object (via `deps.blobs`, keyed `run-detail/<executionId>`): the
+//   bulky drawer-only payload — full code, result/error/logs/trigger-metadata,
+//   and the per-tool-call / per-interaction rows. Written once.
 //
 // Write model — buffered batch: tool-call and interaction detail is held in an
-// in-memory buffer keyed by executionId and only flushed when the execution
-// finishes, so a completed run lands as one batch of writes rather than a
-// write-per-event. Before that terminal batch, its complete payload is written
-// to the blob seam as a durable outbox; reads replay an unfinished publication
-// after a restart. Two points are written eagerly even before the flush: the
-// `runs` row on ExecutionStarted (status "running") and again on
-// InteractionStarted (status "waiting_for_interaction"), so its history stays
-// inspectable if the observer/store restarts while the engine waits on a user.
+// in-memory buffer keyed by executionId and flushed into the R2 detail object
+// when the execution finishes. Eager writes for durability: on ExecutionStarted
+// the slim "running" row AND a code-only stub detail blob (so a live/paused run
+// shows its code immediately and survives a restart); on InteractionStarted the
+// "waiting_for_interaction" row.
 //
-// Every `unknown` payload (tool args/results, interaction payload/response,
-// execution result/logs) is serialized to a JSON string via Effect Schema
-// (`Schema.UnknownFromJsonString`) — no raw `JSON.stringify` in domain code.
+// Every `unknown` payload is serialized to a JSON string via Effect Schema
+// (`Schema.UnknownFromJsonString`); the detail object round-trips via
+// `Schema.fromJsonString` — no raw `JSON.stringify`/`JSON.parse` in domain code.
 // ---------------------------------------------------------------------------
 
 /** Serialize an arbitrary value to a JSON string, or null when absent or when
@@ -55,32 +59,43 @@ const toJson = (value: unknown): string | null =>
 
 const ownerOf = (binding: OwnerBinding): Owner => (binding.subject != null ? "user" : "org");
 
-const PendingTerminalPublication = Schema.Struct({
-  owner: Schema.Literals(["org", "user"]),
-  run: RunRow,
-  toolCalls: Schema.Array(ToolCallRow),
-  interactions: Schema.Array(InteractionRow),
-});
-type PendingTerminalPublication = typeof PendingTerminalPublication.Type;
-
-const PendingTerminalPublicationFromJsonString = Schema.fromJsonString(PendingTerminalPublication);
-const encodePendingTerminalPublication = Schema.encodeUnknownEffect(
-  PendingTerminalPublicationFromJsonString,
-);
-const decodePendingTerminalPublication = Schema.decodeUnknownEffect(
-  PendingTerminalPublicationFromJsonString,
-);
-
-const pendingTerminalBlobKey = (executionId: string): string => `pending-terminal/${executionId}`;
-
-const isNonterminalRun = (row: RunRow): boolean =>
-  row.status === "running" || row.status === "waiting_for_interaction";
+/** Hoisted: `Schema.is` compiles a guard, so it must not be rebuilt per row. */
+const isRunStatus = Schema.is(RunStatus);
 
 /** First dot-delimited segment of a tool path (its namespace), or null. */
 const namespaceOf = (path: string): string | null => {
   const index = path.indexOf(".");
   return index > 0 ? path.slice(0, index) : null;
 };
+
+/** Bounded, whitespace-normalized snippet of the code for the list column. The
+ *  full code lives in the R2 detail object. */
+const codePreviewOf = (code: string): string => code.trim().replace(/\s+/g, " ").slice(0, 256);
+
+/** Count `[error]` / `[warn]` log lines (case-insensitive substring, counted
+ *  independently — matches the list's prior logsJson parsing) so the list reads
+ *  precomputed scalars instead of fetching + parsing the full logs from R2. */
+const logCountsOf = (logs: unknown): { errors: number; warns: number } => {
+  if (!Array.isArray(logs)) return { errors: 0, warns: 0 };
+  let errors = 0;
+  let warns = 0;
+  for (const line of logs) {
+    if (typeof line !== "string") continue;
+    const lower = line.toLowerCase();
+    if (lower.includes("[error]")) errors += 1;
+    if (lower.includes("[warn]")) warns += 1;
+  }
+  return { errors, warns };
+};
+
+/** R2 blob key for a run's detail object. */
+const detailBlobKey = (executionId: string): string => `run-detail/${executionId}`;
+
+/** Detail codec helpers (Schema-based; never raw JSON). Encode runs in the
+ *  Effect channel so a (never-in-practice) failure maps to a typed StorageError
+ *  rather than a `die`; decode reads gracefully as an `Option`. */
+const encodeDetail = Schema.encodeUnknownEffect(RunDetailFromJsonString);
+const decodeDetail = Schema.decodeUnknownOption(RunDetailFromJsonString);
 
 interface BufferedToolCall {
   toolCallId: ExecutionToolCallId;
@@ -111,67 +126,209 @@ interface RunBuffer {
   owner: Owner;
   startedAt: number;
   // Retained from ExecutionStarted so every re-write of the run row (waiting,
-  // terminal) keeps the code + trigger — later events don't carry them.
+  // terminal) keeps the code + trigger + actor — later events don't carry them.
   code: string;
   triggerKind: string | null;
   triggerMetaJson: string | null;
+  actorId: string | null;
+  actorLabel: string | null;
+  actorKind: string | null;
   hadInteraction: boolean;
+  hadFormApproval: boolean;
+  hadUrlApproval: boolean;
   toolCalls: Map<string, BufferedToolCall>;
   interactions: Map<string, BufferedInteraction>;
 }
 
 // ---------------------------------------------------------------------------
 // Read-surface option/result types.
+//
+// The list surface is keyset-paginated and carries an aggregate `meta` block
+// (facet counts, a stacked-by-status timeline, and duration percentiles) that
+// the runs UI renders. All of it is pushed down to SQL through the plugin
+// storage `aggregate`/`queryKeyset` facade — no whole-collection scans in JS.
+// `meta` is computed only on the initial page (no cursor, no live `after`),
+// matching how the UI fetches it once per filter set.
 // ---------------------------------------------------------------------------
 
-/** Filters and offset pagination for persisted execution summaries. */
+export type RunsSortField = "startedAt" | "durationMs";
+export type ApprovalTypeFilter = "form" | "url";
+
+/** Opaque-to-the-client keyset cursor: the sort value + storage key of the last
+ *  row on a page. The HTTP layer encodes/decodes it as a string. */
+export interface RunsCursor {
+  readonly sort: number | null;
+  readonly key: string;
+}
+
 export interface ExecutionHistoryListOptions {
   readonly statusFilter?: readonly RunStatus[];
   readonly triggerFilter?: readonly string[];
+  readonly actorFilter?: readonly string[];
   readonly timeRange?: { readonly from?: number; readonly to?: number };
   readonly hadInteraction?: boolean;
-  readonly limit?: number;
-  readonly offset?: number;
-  readonly sort?: "asc" | "desc";
+  readonly approvalType?: ApprovalTypeFilter;
+  /** Live-tail floor: only runs whose `startedAt` is strictly greater. */
+  readonly after?: number;
+  readonly sortField?: RunsSortField;
+  readonly sortDirection?: "asc" | "desc";
+  readonly limit: number;
+  readonly cursor?: RunsCursor;
 }
 
-/** A page of execution summaries and the matching row count. */
+export interface RunStatusCount {
+  readonly status: RunStatus;
+  readonly count: number;
+}
+
+export interface RunTriggerCount {
+  readonly triggerKind: string | null;
+  readonly count: number;
+}
+
+export interface RunActorCount {
+  readonly actorId: string | null;
+  /** A display label for the actor (the most-recent run's snapshot), or null. */
+  readonly actorLabel: string | null;
+  readonly actorKind: string | null;
+  readonly count: number;
+}
+
+export interface RunInteractionCounts {
+  readonly withInteraction: number;
+  readonly withoutInteraction: number;
+  readonly formApproval: number;
+  readonly urlApproval: number;
+}
+
+export interface RunChartBucket {
+  readonly bucketStart: number;
+  /** Status -> run count for the bucket; absent statuses are omitted. */
+  readonly counts: Readonly<Record<string, number>>;
+}
+
+export interface RunDurationStats {
+  readonly count: number;
+  readonly min: number | null;
+  readonly max: number | null;
+  readonly p50: number | null;
+  readonly p75: number | null;
+  readonly p90: number | null;
+  readonly p95: number | null;
+  readonly p99: number | null;
+}
+
+export interface ExecutionListMeta {
+  readonly totalRowCount: number;
+  readonly filterRowCount: number;
+  readonly statusCounts: readonly RunStatusCount[];
+  readonly triggerCounts: readonly RunTriggerCount[];
+  readonly actorCounts: readonly RunActorCount[];
+  readonly interactionCounts: RunInteractionCounts;
+  readonly chartBucketMs: number;
+  readonly chartData: readonly RunChartBucket[];
+  readonly durationStats: RunDurationStats;
+}
+
 export interface ExecutionHistoryListResult {
   readonly runs: readonly RunRow[];
-  readonly total: number;
+  readonly nextCursor: RunsCursor | null;
+  readonly meta: ExecutionListMeta | null;
 }
 
-/** One execution and its persisted tool-call and interaction records. */
 export interface ExecutionHistoryDetail {
   readonly run: RunRow;
+  /** Bulky drawer payload, sourced from the R2 detail object (flat-merged onto
+   *  the slim run row). For in-flight or detail-less runs these are the
+   *  stub/empty values. */
+  readonly code: string;
+  readonly resultJson: string | null;
+  readonly errorText: string | null;
+  readonly logsJson: string | null;
+  readonly triggerMetaJson: string | null;
   readonly toolCalls: readonly ToolCallRow[];
   readonly interactions: readonly InteractionRow[];
 }
 
-/** Persistence and query capability consumed by the history plugin. */
 export interface ExecutionHistoryStore {
   readonly handleEvent: (event: ExecutionEvent) => Effect.Effect<void, StorageFailure>;
   readonly list: (
-    options?: ExecutionHistoryListOptions,
+    options: ExecutionHistoryListOptions,
   ) => Effect.Effect<ExecutionHistoryListResult, StorageFailure>;
   readonly get: (
     executionId: string,
   ) => Effect.Effect<ExecutionHistoryDetail | null, StorageFailure>;
-  readonly listToolCalls: (
-    executionId: string,
-  ) => Effect.Effect<readonly ToolCallRow[], StorageFailure>;
 }
 
-/** Create an execution-history store over Executor's owner-scoped plugin storage. */
+// ---------------------------------------------------------------------------
+// List helpers (pure).
+// ---------------------------------------------------------------------------
+
+type RunsWhere = {
+  status?: { in: readonly RunStatus[] };
+  triggerKind?: { in: readonly string[] };
+  actorId?: { in: readonly string[] };
+  startedAt?: { gte?: number; lte?: number; gt?: number };
+  hadInteraction?: { eq: boolean };
+  hadFormApproval?: { eq: boolean };
+  hadUrlApproval?: { eq: boolean };
+};
+
+/** Build the indexed-field `where` from list options. `omit` drops one facet's
+ *  own field so a facet count reflects the *other* filters (a faceted rail still
+ *  shows every option for the field you're filtering on). */
+const buildRunsWhere = (
+  options: ExecutionHistoryListOptions,
+  omit?: "status" | "triggerKind" | "actorId" | "hadInteraction" | "approvalType",
+): RunsWhere => {
+  const where: RunsWhere = {};
+  if (omit !== "status" && options.statusFilter && options.statusFilter.length > 0) {
+    where.status = { in: options.statusFilter };
+  }
+  if (omit !== "triggerKind" && options.triggerFilter && options.triggerFilter.length > 0) {
+    where.triggerKind = { in: options.triggerFilter };
+  }
+  if (omit !== "actorId" && options.actorFilter && options.actorFilter.length > 0) {
+    where.actorId = { in: options.actorFilter };
+  }
+  const startedAt: { gte?: number; lte?: number; gt?: number } = {};
+  if (options.timeRange?.from != null) startedAt.gte = options.timeRange.from;
+  if (options.timeRange?.to != null) startedAt.lte = options.timeRange.to;
+  if (options.after != null) startedAt.gt = options.after;
+  if (Object.keys(startedAt).length > 0) where.startedAt = startedAt;
+  if (omit !== "hadInteraction" && options.hadInteraction != null) {
+    where.hadInteraction = { eq: options.hadInteraction };
+  }
+  if (omit !== "approvalType") {
+    if (options.approvalType === "form") where.hadFormApproval = { eq: true };
+    if (options.approvalType === "url") where.hadUrlApproval = { eq: true };
+  }
+  return where;
+};
+
+const HOUR_MS = 3_600_000;
+const BUCKET_STEPS_MS = [
+  60_000,
+  5 * 60_000,
+  15 * 60_000,
+  HOUR_MS,
+  6 * HOUR_MS,
+  24 * HOUR_MS,
+  7 * 24 * HOUR_MS,
+] as const;
+
+/** Pick a timeline bucket width (~48 buckets across the requested range). */
+const chooseBucketMs = (timeRange: { from?: number; to?: number } | undefined): number => {
+  if (timeRange?.from == null || timeRange.to == null) return HOUR_MS;
+  const target = Math.max(1, timeRange.to - timeRange.from) / 48;
+  return (
+    BUCKET_STEPS_MS.find((step) => step >= target) ?? BUCKET_STEPS_MS[BUCKET_STEPS_MS.length - 1]!
+  );
+};
+
 export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistoryStore => {
   const pluginStorage: PluginStorageFacade = deps.pluginStorage;
   const runsC: PluginStorageCollectionFacade<typeof runs> = pluginStorage.collection(runs);
-  const toolCallsC: PluginStorageCollectionFacade<typeof toolCalls> =
-    pluginStorage.collection(toolCalls);
-  const interactionsC: PluginStorageCollectionFacade<typeof interactions> =
-    pluginStorage.collection(interactions);
-  const terminalOutboxesC: PluginStorageCollectionFacade<typeof terminalOutboxes> =
-    pluginStorage.collection(terminalOutboxes);
   const blobs = deps.blobs;
 
   const buffers = new Map<string, RunBuffer>();
@@ -179,265 +336,92 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
   const putRun = (owner: Owner, row: RunRow): Effect.Effect<void, StorageFailure> =>
     runsC.put({ owner, key: row.executionId, data: row }).pipe(Effect.asVoid);
 
-  const publicationEntries = (publication: PendingTerminalPublication) => [
-    ...publication.toolCalls.map((entry) => ({
-      collection: toolCalls.name,
-      key: entry.toolCallId,
-      data: entry,
-    })),
-    ...publication.interactions.map((entry) => ({
-      collection: interactions.name,
-      key: entry.interactionId,
-      data: entry,
-    })),
-    {
-      collection: runs.name,
-      key: publication.run.executionId,
-      data: publication.run,
-    },
-    {
-      collection: terminalOutboxes.name,
-      key: publication.run.executionId,
-      data: { executionId: publication.run.executionId },
-    },
-  ];
-
-  const publishTerminal = (
-    publication: PendingTerminalPublication,
+  /** Write the run's R2 detail object. A (never-in-practice) encode failure maps
+   *  to a typed StorageError so it stays in the storage error channel. */
+  const putDetail = (
+    owner: Owner,
+    executionId: string,
+    detail: RunDetail,
   ): Effect.Effect<void, StorageFailure> =>
-    pluginStorage.putMany({
-      owner: publication.owner,
-      entries: publicationEntries(publication),
-    });
-
-  const writePendingTerminal = (
-    publication: PendingTerminalPublication,
-  ): Effect.Effect<void, StorageFailure> =>
-    encodePendingTerminalPublication(publication).pipe(
+    encodeDetail(detail).pipe(
       Effect.mapError(
         (cause) =>
-          new StorageError({
-            message: "execution-history: failed to encode pending terminal publication",
-            cause,
-          }),
+          new StorageError({ message: "execution-history: failed to encode run detail", cause }),
       ),
-      Effect.flatMap((encoded) =>
-        blobs.put(pendingTerminalBlobKey(publication.run.executionId), encoded, {
-          owner: publication.owner,
-        }),
-      ),
+      Effect.flatMap((json) => blobs.put(detailBlobKey(executionId), json, { owner })),
     );
 
-  const removePendingTerminal = (
-    publication: PendingTerminalPublication,
-  ): Effect.Effect<void, StorageFailure> =>
-    blobs
-      .delete(pendingTerminalBlobKey(publication.run.executionId), {
-        owner: publication.owner,
-      })
-      .pipe(
-        Effect.andThen(
-          terminalOutboxesC.remove({
-            owner: publication.owner,
-            key: publication.run.executionId,
-          }),
-        ),
-      );
-
-  const cleanupPublishedTerminal = (
+  /** Read + decode the run's R2 detail object; `None` when absent or malformed. */
+  const readDetail = (
     executionId: string,
-    owner: Owner,
-  ): Effect.Effect<void, StorageFailure> =>
+  ): Effect.Effect<Option.Option<RunDetail>, StorageFailure> =>
     blobs
-      .delete(pendingTerminalBlobKey(executionId), { owner })
-      .pipe(Effect.andThen(terminalOutboxesC.remove({ owner, key: executionId })));
-
-  const cleanupPublishedTerminals = (): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const pendingCleanup = yield* terminalOutboxesC.list();
-      yield* Effect.forEach(
-        pendingCleanup,
-        (entry) =>
-          cleanupPublishedTerminal(entry.data.executionId, entry.owner).pipe(
-            Effect.retry(Schedule.recurs(2)),
-            Effect.ignore,
-          ),
-        { concurrency: 4, discard: true },
-      );
-    }).pipe(Effect.retry(Schedule.recurs(2)), Effect.ignore);
-
-  const cleanupPublishedTerminalIfMarked = (executionId: string): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const marker = yield* terminalOutboxesC.get({ key: executionId });
-      if (marker !== null) {
-        yield* cleanupPublishedTerminal(executionId, marker.owner);
-      }
-    }).pipe(Effect.retry(Schedule.recurs(2)), Effect.ignore);
-
-  const recoverPendingTerminal = (executionId: string): Effect.Effect<boolean, StorageFailure> =>
-    Effect.gen(function* () {
-      const encoded = yield* blobs.get(pendingTerminalBlobKey(executionId));
-      if (encoded === null) return false;
-      const publication = yield* decodePendingTerminalPublication(encoded).pipe(
-        Effect.mapError(
-          (cause) =>
-            new StorageError({
-              message: "execution-history: failed to decode pending terminal publication",
-              cause,
-            }),
-        ),
-      );
-      yield* publishTerminal(publication);
-      // Publication is the recovery success boundary. Cleanup is idempotent
-      // and backed by the marker published above, so an unavailable blob store
-      // must not make a reader return the stale nonterminal row it first read.
-      yield* removePendingTerminal(publication).pipe(
-        Effect.retry(Schedule.recurs(2)),
-        Effect.ignore,
-      );
-      return true;
-    }).pipe(Effect.retry(Schedule.recurs(2)));
-
-  const recoverOutstandingTerminals = (): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const candidates = yield* runsC.query({
-        where: { status: { in: ["running", "waiting_for_interaction"] } },
-      });
-      yield* Effect.forEach(
-        candidates,
-        (entry) => recoverPendingTerminal(entry.data.executionId).pipe(Effect.ignore),
-        { concurrency: 1, discard: true },
-      );
-    }).pipe(Effect.ignore);
-
-  const toolCallRowsFromBuffer = (executionId: string, buffer: RunBuffer): readonly ToolCallRow[] =>
-    Array.from(buffer.toolCalls.values(), (entry) => ({
-      executionId,
-      toolCallId: entry.toolCallId,
-      status: entry.status,
-      path: entry.path,
-      namespace: entry.namespace,
-      argsJson: entry.argsJson,
-      resultJson: entry.resultJson,
-      errorText: entry.errorText,
-      startedAt: entry.startedAt,
-      completedAt: entry.completedAt,
-      durationMs: entry.durationMs,
-    }));
-
-  const interactionRowsFromBuffer = (
-    executionId: string,
-    buffer: RunBuffer,
-  ): readonly InteractionRow[] =>
-    Array.from(buffer.interactions.values(), (entry) => ({
-      executionId,
-      interactionId: entry.interactionId,
-      status: entry.status,
-      kind: entry.kind,
-      purpose: entry.purpose,
-      payloadJson: entry.payloadJson,
-      responseJson: entry.responseJson,
-      errorText: entry.errorText,
-      startedAt: entry.startedAt,
-      completedAt: entry.completedAt,
-    }));
-
-  const getOrLoadBuffer = (executionId: string): Effect.Effect<RunBuffer | null, StorageFailure> =>
-    Effect.gen(function* () {
-      const current = buffers.get(executionId);
-      if (current) return current;
-
-      const run = yield* runsC.get({ key: executionId });
-      if (run === null) return null;
-      const persistedToolCalls = yield* toolCallsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
-      });
-      const persistedInteractions = yield* interactionsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
-      });
-      const buffer: RunBuffer = {
-        owner: run.owner,
-        startedAt: run.data.startedAt,
-        code: run.data.code,
-        triggerKind: run.data.triggerKind,
-        triggerMetaJson: run.data.triggerMetaJson,
-        hadInteraction: run.data.hadInteraction,
-        toolCalls: new Map(
-          persistedToolCalls.map(({ data }) => [
-            data.toolCallId,
-            {
-              toolCallId: ExecutionToolCallId.make(data.toolCallId),
-              status: data.status,
-              path: data.path,
-              namespace: data.namespace,
-              argsJson: data.argsJson,
-              resultJson: data.resultJson,
-              errorText: data.errorText,
-              startedAt: data.startedAt,
-              completedAt: data.completedAt,
-              durationMs: data.durationMs,
-            },
-          ]),
-        ),
-        interactions: new Map(
-          persistedInteractions.map(({ data }) => [
-            data.interactionId,
-            {
-              interactionId: ExecutionInteractionId.make(data.interactionId),
-              status: data.status,
-              kind: data.kind,
-              purpose: data.purpose,
-              payloadJson: data.payloadJson,
-              responseJson: data.responseJson,
-              errorText: data.errorText,
-              startedAt: data.startedAt,
-              completedAt: data.completedAt,
-            },
-          ]),
-        ),
-      };
-      buffers.set(executionId, buffer);
-      return buffer;
-    });
+      .get(detailBlobKey(executionId))
+      .pipe(Effect.map((raw) => (raw === null ? Option.none<RunDetail>() : decodeDetail(raw))));
 
   const onExecutionStarted = (event: Extract<ExecutionEvent, { _tag: "ExecutionStarted" }>) => {
     const owner = ownerOf(event.owner);
     const startedAt = event.startedAt.getTime();
     const triggerKind = event.trigger?.kind ?? null;
     const triggerMetaJson = toJson(event.trigger?.metadata);
+    const actor = event.trigger?.actor;
+    const actorId = actor?.id ?? null;
+    const actorLabel = actor?.label ?? null;
+    const actorKind = actor?.kind ?? null;
     buffers.set(event.executionId, {
       owner,
       startedAt,
       code: event.code,
       triggerKind,
       triggerMetaJson,
+      actorId,
+      actorLabel,
+      actorKind,
       hadInteraction: false,
+      hadFormApproval: false,
+      hadUrlApproval: false,
       toolCalls: new Map(),
       interactions: new Map(),
     });
-    return putRun(owner, {
-      executionId: event.executionId,
-      status: "running",
-      code: event.code,
-      resultJson: null,
-      errorText: null,
-      logsJson: null,
-      triggerKind,
-      triggerMetaJson,
-      startedAt,
-      completedAt: null,
-      durationMs: null,
-      toolCallCount: 0,
-      hadInteraction: false,
-    });
+    return Effect.all(
+      [
+        putRun(owner, {
+          executionId: event.executionId,
+          status: "running",
+          codePreview: codePreviewOf(event.code),
+          triggerKind,
+          logErrorCount: 0,
+          logWarnCount: 0,
+          actorId,
+          actorLabel,
+          actorKind,
+          startedAt,
+          completedAt: null,
+          durationMs: null,
+          toolCallCount: 0,
+          hadInteraction: false,
+          hadFormApproval: false,
+          hadUrlApproval: false,
+        }),
+        // Eager code-only stub: the drawer shows code while the run is live, and
+        // the code survives a restart that loses the in-memory buffer.
+        putDetail(owner, event.executionId, {
+          code: event.code,
+          resultJson: null,
+          errorText: null,
+          logsJson: null,
+          triggerMetaJson,
+          toolCalls: [],
+          interactions: [],
+        }),
+      ],
+      { concurrency: "unbounded", discard: true },
+    );
   };
 
-  const onToolCallStarted = (event: Extract<ExecutionEvent, { _tag: "ToolCallStarted" }>) =>
-    Effect.gen(function* () {
-      const buffer = yield* getOrLoadBuffer(event.executionId);
-      if (buffer === null) return;
+  const onToolCallStarted = (event: Extract<ExecutionEvent, { _tag: "ToolCallStarted" }>) => {
+    const buffer = buffers.get(event.executionId);
+    if (buffer) {
       buffer.toolCalls.set(event.toolCallId, {
         toolCallId: event.toolCallId,
         status: "running",
@@ -450,17 +434,17 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         completedAt: null,
         durationMs: null,
       });
-    });
+    }
+    return Effect.void;
+  };
 
-  const onToolCallFinished = (event: Extract<ExecutionEvent, { _tag: "ToolCallFinished" }>) =>
-    Effect.gen(function* () {
-      const buffer = yield* getOrLoadBuffer(event.executionId);
-      if (buffer === null) return;
+  const onToolCallFinished = (event: Extract<ExecutionEvent, { _tag: "ToolCallFinished" }>) => {
+    const buffer = buffers.get(event.executionId);
+    if (buffer) {
       const completedAt = event.completedAt.getTime();
       const existing = buffer.toolCalls.get(event.toolCallId);
       const startedAt = existing?.startedAt ?? completedAt;
-      const row: ToolCallRow = {
-        executionId: event.executionId,
+      buffer.toolCalls.set(event.toolCallId, {
         toolCallId: event.toolCallId,
         status: event.status,
         path: event.path,
@@ -471,75 +455,61 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         startedAt,
         completedAt,
         durationMs: completedAt - startedAt,
-      };
-      buffer.toolCalls.set(event.toolCallId, { ...row, toolCallId: event.toolCallId });
-      // Once a run has reached a durable waiting point, keep subsequent
-      // progress restart-safe until the terminal publication lands.
-      if (buffer.hadInteraction) {
-        yield* toolCallsC.put({ owner: buffer.owner, key: row.toolCallId, data: row });
-      }
+      });
+    }
+    return Effect.void;
+  };
+
+  const onInteractionStarted = (event: Extract<ExecutionEvent, { _tag: "InteractionStarted" }>) => {
+    const buffer = buffers.get(event.executionId);
+    if (!buffer) return Effect.void;
+    const request = event.context.request;
+    const kind = Predicate.isTagged(request, "UrlElicitation")
+      ? "UrlElicitation"
+      : "FormElicitation";
+    const isUrlApproval = kind === "UrlElicitation";
+    const isFormApproval = kind === "FormElicitation";
+    buffer.interactions.set(event.interactionId, {
+      interactionId: event.interactionId,
+      status: "pending",
+      kind,
+      purpose: request.message,
+      payloadJson: toJson(event.context),
+      responseJson: null,
+      errorText: null,
+      startedAt: event.startedAt.getTime(),
+      completedAt: null,
     });
+    buffer.hadInteraction = true;
+    buffer.hadFormApproval = buffer.hadFormApproval || isFormApproval;
+    buffer.hadUrlApproval = buffer.hadUrlApproval || isUrlApproval;
+    return putRun(buffer.owner, {
+      executionId: event.executionId,
+      status: "waiting_for_interaction",
+      codePreview: codePreviewOf(buffer.code),
+      triggerKind: buffer.triggerKind,
+      logErrorCount: 0,
+      logWarnCount: 0,
+      actorId: buffer.actorId,
+      actorLabel: buffer.actorLabel,
+      actorKind: buffer.actorKind,
+      startedAt: buffer.startedAt,
+      completedAt: null,
+      durationMs: null,
+      toolCallCount: buffer.toolCalls.size,
+      hadInteraction: true,
+      hadFormApproval: buffer.hadFormApproval,
+      hadUrlApproval: buffer.hadUrlApproval,
+    });
+  };
 
-  const onInteractionStarted = (event: Extract<ExecutionEvent, { _tag: "InteractionStarted" }>) =>
-    Effect.gen(function* () {
-      const buffer = yield* getOrLoadBuffer(event.executionId);
-      if (buffer === null) return;
-      const request = event.context.request;
-      const kind = Predicate.isTagged(request, "UrlElicitation")
-        ? "UrlElicitation"
-        : "FormElicitation";
-      buffer.interactions.set(event.interactionId, {
-        interactionId: event.interactionId,
-        status: "pending",
-        kind,
-        purpose: request.message,
-        payloadJson: toJson(event.context),
-        responseJson: null,
-        errorText: null,
-        startedAt: event.startedAt.getTime(),
-        completedAt: null,
-      });
-      buffer.hadInteraction = true;
-      const waitingRun: RunRow = {
-        executionId: event.executionId,
-        status: "waiting_for_interaction",
-        code: buffer.code,
-        resultJson: null,
-        errorText: null,
-        logsJson: null,
-        triggerKind: buffer.triggerKind,
-        triggerMetaJson: buffer.triggerMetaJson,
-        startedAt: buffer.startedAt,
-        completedAt: null,
-        durationMs: null,
-        toolCallCount: buffer.toolCalls.size,
-        hadInteraction: true,
-      };
-      yield* pluginStorage.putMany({
-        owner: buffer.owner,
-        entries: [
-          ...toolCallRowsFromBuffer(event.executionId, buffer).map((row) => ({
-            collection: toolCalls.name,
-            key: row.toolCallId,
-            data: row,
-          })),
-          ...interactionRowsFromBuffer(event.executionId, buffer).map((row) => ({
-            collection: interactions.name,
-            key: row.interactionId,
-            data: row,
-          })),
-          { collection: runs.name, key: event.executionId, data: waitingRun },
-        ],
-      });
-    }).pipe(Effect.retry(Schedule.recurs(2)));
-
-  const onInteractionResolved = (event: Extract<ExecutionEvent, { _tag: "InteractionResolved" }>) =>
-    Effect.gen(function* () {
-      const buffer = yield* getOrLoadBuffer(event.executionId);
-      if (buffer === null) return;
+  const onInteractionResolved = (
+    event: Extract<ExecutionEvent, { _tag: "InteractionResolved" }>,
+  ) => {
+    const buffer = buffers.get(event.executionId);
+    if (buffer) {
       const existing = buffer.interactions.get(event.interactionId);
-      const row: InteractionRow = {
-        executionId: event.executionId,
+      buffer.interactions.set(event.interactionId, {
         interactionId: event.interactionId,
         status: event.status,
         kind: existing?.kind ?? "unknown",
@@ -549,93 +519,119 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         errorText: event.error ?? null,
         startedAt: existing?.startedAt ?? event.completedAt.getTime(),
         completedAt: event.completedAt.getTime(),
-      };
-      buffer.interactions.set(event.interactionId, {
-        ...row,
-        interactionId: event.interactionId,
       });
-      yield* interactionsC.put({ owner: buffer.owner, key: row.interactionId, data: row });
-    });
+    }
+    return Effect.void;
+  };
 
-  const onExecutionFinished = (event: Extract<ExecutionEvent, { _tag: "ExecutionFinished" }>) =>
-    Effect.gen(function* () {
-      const buffer = yield* getOrLoadBuffer(event.executionId);
-      const owner = buffer?.owner ?? ownerOf(event.owner);
-      const completedAt = event.completedAt.getTime();
-      const toolCallEntries = buffer ? toolCallRowsFromBuffer(event.executionId, buffer) : [];
-      const interactionEntries = buffer ? interactionRowsFromBuffer(event.executionId, buffer) : [];
-      // Preserve code/trigger/startedAt from the buffer, or from the persisted
-      // "running" row if the buffer was lost (e.g. a restart mid-run).
-      const existing = yield* runsC.get({ key: event.executionId });
-      const code = buffer?.code ?? existing?.data.code ?? "";
+  const onExecutionFinished = (event: Extract<ExecutionEvent, { _tag: "ExecutionFinished" }>) => {
+    const buffer = buffers.get(event.executionId);
+    const owner = buffer?.owner ?? ownerOf(event.owner);
+    const completedAt = event.completedAt.getTime();
+    const toolCallEntries = buffer ? Array.from(buffer.toolCalls.values()) : [];
+    const interactionEntries = buffer ? Array.from(buffer.interactions.values()) : [];
+    const { errors: logErrorCount, warns: logWarnCount } = logCountsOf(event.logs);
+
+    return Effect.gen(function* () {
+      // Recover slim fields from the persisted "running" row if the buffer was
+      // lost (restart mid-run). Full code/trigger-metadata live only in the
+      // buffer + the start-stub blob.
+      const existing = buffer ? null : yield* runsC.get({ key: event.executionId });
       const triggerKind = buffer?.triggerKind ?? existing?.data.triggerKind ?? null;
-      const triggerMetaJson = buffer?.triggerMetaJson ?? existing?.data.triggerMetaJson ?? null;
+      const actorId = buffer?.actorId ?? existing?.data.actorId ?? null;
+      const actorLabel = buffer?.actorLabel ?? existing?.data.actorLabel ?? null;
+      const actorKind = buffer?.actorKind ?? existing?.data.actorKind ?? null;
       const startedAt = buffer?.startedAt ?? existing?.data.startedAt ?? completedAt;
+      const codePreview = buffer ? codePreviewOf(buffer.code) : (existing?.data.codePreview ?? "");
       const hadInteraction =
         buffer?.hadInteraction ?? (existing?.data.hadInteraction || interactionEntries.length > 0);
+      const hadFormApproval =
+        buffer?.hadFormApproval ??
+        existing?.data.hadFormApproval ??
+        interactionEntries.some((entry) => entry.kind === "FormElicitation");
+      const hadUrlApproval =
+        buffer?.hadUrlApproval ??
+        existing?.data.hadUrlApproval ??
+        interactionEntries.some((entry) => entry.kind === "UrlElicitation");
 
-      const terminalRun: RunRow = {
+      yield* putRun(owner, {
         executionId: event.executionId,
         status: event.status,
-        code,
-        resultJson: toJson(event.result),
-        errorText: event.error ?? null,
-        logsJson: toJson(event.logs),
+        codePreview,
         triggerKind,
-        triggerMetaJson,
+        logErrorCount,
+        logWarnCount,
+        actorId,
+        actorLabel,
+        actorKind,
         startedAt,
         completedAt,
         durationMs: completedAt - startedAt,
         toolCallCount: toolCallEntries.length,
         hadInteraction,
-      };
+        hadFormApproval,
+        hadUrlApproval,
+      });
 
-      const publication: PendingTerminalPublication = {
-        owner,
-        run: terminalRun,
-        toolCalls: toolCallEntries,
-        interactions: interactionEntries,
-      };
+      // Write the full detail object. Normal path: assembled from the buffer.
+      // Buffer-lost path: preserve the start-stub's code + trigger-metadata and
+      // attach the terminal result/error/logs (per-call children are
+      // unrecoverable after a restart).
+      const detail: RunDetail = buffer
+        ? {
+            code: buffer.code,
+            resultJson: toJson(event.result),
+            errorText: event.error ?? null,
+            logsJson: toJson(event.logs),
+            triggerMetaJson: buffer.triggerMetaJson,
+            toolCalls: toolCallEntries.map((entry) => ({
+              executionId: event.executionId,
+              toolCallId: entry.toolCallId,
+              status: entry.status,
+              path: entry.path,
+              namespace: entry.namespace,
+              argsJson: entry.argsJson,
+              resultJson: entry.resultJson,
+              errorText: entry.errorText,
+              startedAt: entry.startedAt,
+              completedAt: entry.completedAt,
+              durationMs: entry.durationMs,
+            })),
+            interactions: interactionEntries.map((entry) => ({
+              executionId: event.executionId,
+              interactionId: entry.interactionId,
+              status: entry.status,
+              kind: entry.kind,
+              purpose: entry.purpose,
+              payloadJson: entry.payloadJson,
+              responseJson: entry.responseJson,
+              errorText: entry.errorText,
+              startedAt: entry.startedAt,
+              completedAt: entry.completedAt,
+            })),
+          }
+        : yield* readDetail(event.executionId).pipe(
+            Effect.map((stubOpt) => {
+              const stub = Option.getOrNull(stubOpt);
+              return {
+                code: stub?.code ?? "",
+                resultJson: toJson(event.result),
+                errorText: event.error ?? null,
+                logsJson: toJson(event.logs),
+                triggerMetaJson: stub?.triggerMetaJson ?? null,
+                toolCalls: [],
+                interactions: [],
+              };
+            }),
+          );
 
-      // Observer failures are isolated from the engine. If the eager started
-      // write failed, establish a nonterminal recovery anchor before creating
-      // the outbox; reads can then discover and replay that blob after restart.
-      if (existing === null) {
-        yield* putRun(owner, {
-          ...terminalRun,
-          status: "running",
-          resultJson: null,
-          errorText: null,
-          logsJson: null,
-          completedAt: null,
-          durationMs: null,
-        });
-      }
-
-      // The blob is a durable outbox. Once it exists, a later read can replay
-      // this idempotent publication after a restart or exhausted retry budget.
-      // If the outbox store is unavailable, continue to the atomic database
-      // publication directly instead of losing the completed execution.
-      yield* writePendingTerminal(publication).pipe(Effect.catch(() => Effect.void));
-      // One bulk upsert is the terminal commit point: the run and all of its
-      // normalized detail rows become visible together, so readers can never
-      // observe a terminal count without the corresponding records.
-      yield* publishTerminal(publication);
-      // The terminal batch above is the commit point. Cleanup is retryable via
-      // its durable marker and must not report a committed history write as a
-      // failure merely because the blob store is temporarily unavailable.
-      yield* removePendingTerminal(publication).pipe(
-        Effect.retry(Schedule.recurs(2)),
-        Effect.ignore,
-      );
+      yield* putDetail(owner, event.executionId, detail);
     }).pipe(
-      // The observer boundary logs and isolates failures, so retry transient
-      // storage faults here. Repeated puts are idempotent by collection key.
-      Effect.retry(Schedule.recurs(2)),
-      // Keep the live buffer until the durable outbox has been published and
-      // removed. Once written, that outbox also survives process restarts.
-      Effect.tap(() => Effect.sync(() => buffers.delete(event.executionId))),
+      // Always release the buffer, even if a write fails or is interrupted —
+      // otherwise a StorageFailure during the flush leaks the RunBuffer forever.
+      Effect.ensuring(Effect.sync(() => buffers.delete(event.executionId))),
     );
+  };
 
   const handleEvent = (event: ExecutionEvent): Effect.Effect<void, StorageFailure> => {
     if (Predicate.isTagged(event, "ExecutionStarted")) return onExecutionStarted(event);
@@ -649,93 +645,242 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     return Effect.void;
   };
 
-  const list = (
-    options?: ExecutionHistoryListOptions,
-  ): Effect.Effect<ExecutionHistoryListResult, StorageFailure> => {
-    const where: {
-      status?: { in: readonly RunStatus[] };
-      triggerKind?: { in: readonly string[] };
-      startedAt?: { gte?: number; lte?: number };
-      hadInteraction?: { eq: boolean };
-    } = {};
-    if (options?.statusFilter && options.statusFilter.length > 0) {
-      where.status = { in: options.statusFilter };
-    }
-    if (options?.triggerFilter && options.triggerFilter.length > 0) {
-      where.triggerKind = { in: options.triggerFilter };
-    }
-    if (options?.timeRange) {
-      where.startedAt = {};
-      if (options.timeRange.from != null) where.startedAt.gte = options.timeRange.from;
-      if (options.timeRange.to != null) where.startedAt.lte = options.timeRange.to;
-    }
-    if (options?.hadInteraction != null) {
-      where.hadInteraction = { eq: options.hadInteraction };
-    }
-
-    return Effect.gen(function* () {
-      // Drain the durable outbox independently of the caller's filters and
-      // page so a completed run cannot remain hidden as nonterminal.
-      yield* cleanupPublishedTerminals();
-      yield* recoverOutstandingTerminals();
-      const rows = yield* runsC.query({
-        where,
-        orderBy: [{ field: "startedAt", direction: options?.sort ?? "desc" }],
-        limit: options?.limit,
-        offset: options?.offset,
-      });
-      const total = yield* runsC.count({ where });
-      return { runs: rows.map((entry) => entry.data), total };
-    });
-  };
-
-  const get = (executionId: string): Effect.Effect<ExecutionHistoryDetail | null, StorageFailure> =>
+  const computeMeta = (
+    options: ExecutionHistoryListOptions,
+  ): Effect.Effect<ExecutionListMeta, StorageFailure> =>
     Effect.gen(function* () {
-      let run = yield* runsC.get({ key: executionId });
-      if (run === null) return null;
-      const recovered = isNonterminalRun(run.data)
-        ? yield* recoverPendingTerminal(executionId).pipe(Effect.orElseSucceed(() => false))
-        : false;
-      if (recovered) {
-        run = yield* runsC.get({ key: executionId });
-        if (run === null) return null;
+      const where = buildRunsWhere(options);
+
+      // Wave 1: all independent aggregates concurrently.
+      const [
+        totalRowCount,
+        filterRowCount,
+        statusGroups,
+        triggerGroups,
+        actorGroups,
+        interactionGroups,
+        formApprovalCount,
+        urlApprovalCount,
+        stats,
+        startedAtStats,
+      ] = yield* Effect.all(
+        [
+          runsC.aggregate.count(),
+          runsC.aggregate.count({ where }),
+          runsC.aggregate.groupCount({
+            field: "status",
+            where: buildRunsWhere(options, "status"),
+          }),
+          runsC.aggregate.groupCount({
+            field: "triggerKind",
+            where: buildRunsWhere(options, "triggerKind"),
+          }),
+          runsC.aggregate.groupCount({
+            field: "actorId",
+            where: buildRunsWhere(options, "actorId"),
+          }),
+          runsC.aggregate.groupCount({
+            field: "hadInteraction",
+            where: buildRunsWhere(options, "hadInteraction"),
+            valueType: "boolean",
+          }),
+          runsC.aggregate.count({
+            where: { ...buildRunsWhere(options, "approvalType"), hadFormApproval: { eq: true } },
+          }),
+          runsC.aggregate.count({
+            where: { ...buildRunsWhere(options, "approvalType"), hadUrlApproval: { eq: true } },
+          }),
+          runsC.aggregate.stats({
+            field: "durationMs",
+            where,
+            percentiles: [0.5, 0.75, 0.9, 0.95, 0.99],
+          }),
+          runsC.aggregate.stats({
+            field: "startedAt",
+            where,
+            percentiles: [],
+          }),
+        ] as const,
+        { concurrency: "unbounded" },
+      );
+
+      const statusCounts: RunStatusCount[] = [];
+      for (const group of statusGroups) {
+        if (isRunStatus(group.value)) {
+          statusCounts.push({ status: group.value, count: group.count });
+        }
       }
-      if (!isNonterminalRun(run.data)) {
-        yield* cleanupPublishedTerminalIfMarked(executionId);
+
+      // Wave 2: stacked-by-status timeline — one bucketed count per present
+      // status, merged by bucket start. Respects every filter except `status`
+      // itself. Per-status queries are independent so run concurrently.
+      //
+      // When no explicit time range is set, derive the bucketing span from the
+      // data's actual startedAt min/max so the bucket count stays ~48 regardless
+      // of dataset age. Falls back to chooseBucketMs default only when the
+      // result set is empty (startedAtStats.min/max are null).
+      const effectiveBucketRange: { from?: number; to?: number } =
+        options.timeRange?.from != null && options.timeRange.to != null
+          ? options.timeRange
+          : {
+              from: startedAtStats.min ?? undefined,
+              to: startedAtStats.max ?? undefined,
+            };
+      const bucketMs = chooseBucketMs(effectiveBucketRange);
+      const chartWhere = buildRunsWhere(options, "status");
+      const perStatusBuckets = yield* Effect.forEach(
+        statusCounts,
+        (entry) =>
+          runsC.aggregate
+            .timeBuckets({
+              field: "startedAt",
+              bucketMs,
+              where: { ...chartWhere, status: { in: [entry.status] } },
+            })
+            .pipe(Effect.map((buckets) => ({ status: entry.status, buckets }))),
+        { concurrency: "unbounded" },
+      );
+      const chartByBucket = new Map<number, Record<string, number>>();
+      for (const { status, buckets } of perStatusBuckets) {
+        for (const bucket of buckets) {
+          const counts = chartByBucket.get(bucket.bucket) ?? {};
+          counts[status] = bucket.count;
+          chartByBucket.set(bucket.bucket, counts);
+        }
       }
-      const toolCallRows = yield* toolCallsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
+      const chartData: RunChartBucket[] = [...chartByBucket.entries()]
+        .sort((left, right) => left[0] - right[0])
+        .map(([bucketStart, counts]) => ({ bucketStart, counts }));
+
+      const triggerCounts: RunTriggerCount[] = triggerGroups.map((group) => ({
+        triggerKind: typeof group.value === "string" ? group.value : null,
+        count: group.count,
+      }));
+
+      // Resolve a display label + kind per actor. The facet keys on the STABLE
+      // `actorId`, but renders the human snapshot (`actorLabel`/`actorKind`) from
+      // that actor's most-recent run WITHIN the current filter window — so the
+      // label stays consistent with the (filtered) count shown beside it, rather
+      // than a globally-newest snapshot that could predate the window. One query
+      // per distinct actor; the null-actor group needs no lookup.
+      const actorFacetWhere = buildRunsWhere(options, "actorId");
+      const actorIds = actorGroups
+        .map((group) => (typeof group.value === "string" ? group.value : null))
+        .filter(Predicate.isNotNull);
+      const actorMeta = yield* Effect.forEach(
+        actorIds,
+        (actorId) =>
+          runsC
+            .query({
+              where: { ...actorFacetWhere, actorId: { in: [actorId] } },
+              orderBy: [{ field: "startedAt", direction: "desc" }],
+              limit: 1,
+            })
+            .pipe(
+              Effect.map((rows) => ({
+                actorId,
+                label: rows[0]?.data.actorLabel ?? null,
+                kind: rows[0]?.data.actorKind ?? null,
+              })),
+            ),
+        // Cap the burst: distinct-actor cardinality is normally small, but a
+        // workspace with many service tokens shouldn't fan out unboundedly.
+        { concurrency: 10 },
+      );
+      const actorMetaById = new Map(actorMeta.map((entry) => [entry.actorId, entry]));
+      const actorCounts: RunActorCount[] = actorGroups.map((group) => {
+        const actorId = typeof group.value === "string" ? group.value : null;
+        const resolved = actorId !== null ? actorMetaById.get(actorId) : undefined;
+        return {
+          actorId,
+          actorLabel: resolved?.label ?? null,
+          actorKind: resolved?.kind ?? null,
+          count: group.count,
+        };
       });
-      const interactionRows = yield* interactionsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
-      });
+      const withInteraction = interactionGroups.find((group) => group.value === true)?.count ?? 0;
+      const withoutInteraction =
+        interactionGroups.find((group) => group.value === false)?.count ?? 0;
+      const percentileAt = (fraction: number): number | null =>
+        stats.percentiles.find((entry) => entry.fraction === fraction)?.value ?? null;
+
       return {
-        run: run.data,
-        toolCalls: toolCallRows.map((entry) => entry.data),
-        interactions: interactionRows.map((entry) => entry.data),
+        totalRowCount,
+        filterRowCount,
+        statusCounts,
+        triggerCounts,
+        actorCounts,
+        interactionCounts: {
+          withInteraction,
+          withoutInteraction,
+          formApproval: formApprovalCount,
+          urlApproval: urlApprovalCount,
+        },
+        chartBucketMs: bucketMs,
+        chartData,
+        durationStats: {
+          count: stats.count,
+          min: stats.min,
+          max: stats.max,
+          p50: percentileAt(0.5),
+          p75: percentileAt(0.75),
+          p90: percentileAt(0.9),
+          p95: percentileAt(0.95),
+          p99: percentileAt(0.99),
+        },
       };
     });
 
-  const listToolCalls = (
-    executionId: string,
-  ): Effect.Effect<readonly ToolCallRow[], StorageFailure> =>
+  const list = (
+    options: ExecutionHistoryListOptions,
+  ): Effect.Effect<ExecutionHistoryListResult, StorageFailure> =>
     Effect.gen(function* () {
-      const run = yield* runsC.get({ key: executionId });
-      if (run !== null && isNonterminalRun(run.data)) {
-        yield* recoverPendingTerminal(executionId).pipe(Effect.ignore);
-      } else if (run !== null) {
-        yield* cleanupPublishedTerminalIfMarked(executionId);
-      }
-      const rows = yield* toolCallsC.query({
-        where: { executionId },
-        orderBy: [{ field: "startedAt" }],
+      const sortField = options.sortField ?? "startedAt";
+      const sortDirection = options.sortDirection ?? "desc";
+      const where = buildRunsWhere(options);
+      const page = yield* runsC.queryKeyset({
+        where,
+        orderBy: [{ field: sortField, direction: sortDirection, valueType: "number" }],
+        limit: options.limit,
+        cursor: options.cursor
+          ? { values: [options.cursor.sort], key: options.cursor.key }
+          : undefined,
       });
-      return rows.map((entry) => entry.data);
+      const nextCursor: RunsCursor | null = page.nextCursor
+        ? {
+            sort: typeof page.nextCursor.values[0] === "number" ? page.nextCursor.values[0] : null,
+            key: page.nextCursor.key,
+          }
+        : null;
+      // Meta is computed once per filter set — only for the first page, and
+      // never during live polling (`after`).
+      const meta =
+        options.cursor === undefined && options.after === undefined
+          ? yield* computeMeta(options)
+          : null;
+      return { runs: page.entries.map((entry) => entry.data), nextCursor, meta };
     });
 
-  return { handleEvent, list, get, listToolCalls };
+  const get = (executionId: string): Effect.Effect<ExecutionHistoryDetail | null, StorageFailure> =>
+    Effect.gen(function* () {
+      const run = yield* runsC.get({ key: executionId });
+      if (run === null) return null;
+      // Detail comes from the R2 object. Absent/malformed (or an in-flight run
+      // whose stub is gone) → empty detail so the drawer still renders the row.
+      const detail = Option.getOrNull(yield* readDetail(executionId));
+      return {
+        run: run.data,
+        code: detail?.code ?? "",
+        resultJson: detail?.resultJson ?? null,
+        errorText: detail?.errorText ?? null,
+        logsJson: detail?.logsJson ?? null,
+        triggerMetaJson: detail?.triggerMetaJson ?? null,
+        toolCalls: detail?.toolCalls ?? [],
+        interactions: detail?.interactions ?? [],
+      };
+    });
+
+  return { handleEvent, list, get };
 };
 
 /** Build an ExecutionObserver over a store instance — every engine event is
