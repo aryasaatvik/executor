@@ -11,6 +11,7 @@ import { mcpHttpPlugin } from "@executor-js/plugin-mcp/api";
 import { graphqlHttpPlugin } from "@executor-js/plugin-graphql/api";
 import { encryptedSecretsPlugin } from "@executor-js/plugin-encrypted-secrets";
 import { toolkitsPlugin } from "@executor-js/plugin-toolkits/server";
+import { serviceTokensPlugin } from "@executor-js/plugin-service-tokens/server";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -36,6 +37,7 @@ export const makeCloudflarePlugins = (
     graphqlHttpPlugin(),
     toolkitsPlugin({ activeToolkitSlug: options.activeToolkitSlug }),
     encryptedSecretsPlugin({ key: secretKey }),
+    serviceTokensPlugin(),
   ] as const;
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;
