@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/sdk/index.ts",
-    "./api": "./src/api/index.ts"
+    "./api": "./src/api/index.ts",
+    "./react": "./src/react/index.ts",
+    "./client": "./src/react/plugin-client.tsx"
   },
   "scripts": {
     "build": "tsup && (tsc --declaration --emitDeclarationOnly --outDir dist --rootDir src || true)",
@@ -19,15 +21,47 @@
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect/atom-react": "catalog:",
     "@effect/vitest": "catalog:",
     "@executor-js/api": "workspace:*",
+    "@executor-js/react": "workspace:*",
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
     "bun-types": "catalog:",
+    "lucide-react": "^1.7.0",
+    "react": "catalog:",
+    "recharts": "3.8.0",
     "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@executor-js/api": "workspace:*"
+    "@effect/atom-react": "catalog:",
+    "@executor-js/api": "workspace:*",
+    "@executor-js/react": "workspace:*",
+    "@tanstack/react-router": "catalog:",
+    "lucide-react": "^1.7.0",
+    "react": "catalog:",
+    "recharts": "3.8.0"
+  },
+  "peerDependenciesMeta": {
+    "@effect/atom-react": {
+      "optional": true
+    },
+    "@executor-js/react": {
+      "optional": true
+    },
+    "@tanstack/react-router": {
+      "optional": true
+    },
+    "lucide-react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "recharts": {
+      "optional": true
+    }
   }
 }
