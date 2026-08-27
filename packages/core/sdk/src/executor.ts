@@ -194,7 +194,6 @@ import {
   TOOL_SCHEMA_VIEW_CACHE_VERSION,
   ToolSchemaViewCacheEntry,
   toolSchemaViewCacheKey,
-  toolSchemaViewManifestCacheKey,
 } from "./tool-schema-view-cache";
 import {
   refreshAccessToken,
