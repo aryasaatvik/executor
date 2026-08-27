@@ -308,9 +308,11 @@ export const resolveConnectTarget = (
 /** The domain a preset represents, read from its integrations.sh logo URL
  *  first (which names the domain outright) and its spec/endpoint URL second. */
 export const presetDomain = (preset: {
+  readonly logoDomain?: string;
   readonly icon?: string;
   readonly url?: string;
 }): string | null => {
+  if (preset.logoDomain) return preset.logoDomain;
   for (const candidate of [preset.icon, preset.url]) {
     if (!candidate) continue;
     const logoMatch = /^https:\/\/integrations\.sh\/logo\/([^/?]+)/.exec(candidate);

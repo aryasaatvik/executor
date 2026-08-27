@@ -84,7 +84,7 @@ describe("preset filtering", () => {
         id: "linear",
         name: "Linear",
         summary: "Issues",
-        icon: "https://integrations.sh/logo/linear.app",
+        logoDomain: "linear.app",
       },
     ]),
     plugin("openapi", [
@@ -93,12 +93,12 @@ describe("preset filtering", () => {
         name: "Stripe",
         summary: "Payments",
         url: "https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json",
-        icon: "https://integrations.sh/logo/stripe.com",
+        logoDomain: "stripe.com",
       },
     ]),
   ];
 
-  it("derives preset domains from logo-proxy icons and preset URLs", () => {
+  it("derives preset domains from canonical logo domains and preset URLs", () => {
     const domains = presetDomains(plugins);
     expect(domains.has("linear.app")).toBe(true);
     expect(domains.has("stripe.com")).toBe(true);
