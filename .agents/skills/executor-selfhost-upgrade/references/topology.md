@@ -4,14 +4,20 @@ Use live Git and filesystem state as the authority. The preflight helper discove
 
 ## Checkouts
 
-| Role              | Discovery or override                      | Ownership                                                                                                       |
-| ----------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
-| Fork history      | Worktree on `dev`, or `--main`             | Git history, ordinary feature PRs, and upstream-rebase promotion                                                |
-| Linked packages   | Worktree named `selfhost`, or `--selfhost` | Detached checkout whose `packages/**/src` files are consumed by the hosted instance through `bun link` symlinks |
-| Upstream snapshot | Worktree named `upstream`, or `--upstream` | Clean detached view of the exact fetched `upstream/main` SHA                                                    |
-| Hosted instance   | `EXECUTOR_HOST_CHECKOUT`, or `--host`      | Cloudflare composition deployed for this fork                                                                   |
+| Role              | Discovery or override                                                                                                             | Ownership                                                                                                       |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Fork history      | Worktree on `dev`, or `--main`                                                                                                    | Git history, ordinary feature PRs, and upstream-rebase promotion                                                |
+| Linked packages   | Worktree named `selfhost`, or `--selfhost`                                                                                        | Detached checkout whose `packages/**/src` files are consumed by the hosted instance through `bun link` symlinks |
+| Upstream snapshot | Worktree named `upstream`, or `--upstream`                                                                                        | Clean detached view of the exact fetched `upstream/main` SHA                                                    |
+| Hosted instance   | `--host`, `EXECUTOR_HOST_CHECKOUT`, repo-local `executor.hostCheckout`, or unique nearby `link:@executor-js/*` consumer discovery | Cloudflare composition deployed for this fork                                                                   |
 
 The hosted repository consumes `@executor-js/*` as TypeScript source through links into the selfhost checkout. A successful build in the fork history checkout does not prove that those links or the hosted composition are correct.
+
+Host resolution is deterministic in the order shown above. Automatic discovery checks Git repositories at most two directories below the Executor workspace parent and accepts a result only when exactly one manifest declares linked Executor packages. If multiple hosts match, pass `--host` or persist the checkout for this worktree family:
+
+```bash
+git config executor.hostCheckout /absolute/path/to/host
+```
 
 ## Source-of-truth rules
 
