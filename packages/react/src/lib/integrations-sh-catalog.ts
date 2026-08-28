@@ -176,9 +176,10 @@ export const presetDomains = (plugins: readonly IntegrationPlugin[]): ReadonlySe
   const domains = new Set<string>();
   for (const plugin of plugins) {
     for (const preset of plugin.presets ?? []) {
-      if (preset.logoDomain) domains.add(preset.logoDomain);
-      if (preset.url) {
-        const domain = getDomain(preset.url);
+      for (const candidate of [preset.icon, preset.url]) {
+        if (!candidate) continue;
+        const logoMatch = /^https:\/\/integrations\.sh\/logo\/([^/?]+)/.exec(candidate);
+        const domain = logoMatch?.[1] ?? getDomain(candidate);
         if (domain) domains.add(domain);
       }
     }
