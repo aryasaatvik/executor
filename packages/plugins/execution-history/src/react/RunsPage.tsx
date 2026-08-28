@@ -16,7 +16,6 @@ import {
   emptyRunsFilters,
   useRunsList,
   type RunsFilters,
-  type RunsListView,
   type RunsSortField,
 } from "./use-runs-list";
 import { DEFAULT_COLUMNS, type RunColumnKey, type RunColumns } from "./view";
@@ -30,11 +29,6 @@ import { ViewOptions } from "./view-options";
 // drawer. All list data + accumulation flows through `useRunsList` (atoms);
 // this component is filter/UI state + composition only.
 // ---------------------------------------------------------------------------
-
-interface ShortcutContext {
-  readonly view: RunsListView;
-  readonly selected: string | null;
-}
 
 const COLUMNS_STORAGE_KEY = "executionHistory.columns";
 
@@ -89,10 +83,6 @@ export function RunsPage() {
     window.localStorage.setItem(COLUMNS_STORAGE_KEY, serializeColumns(columns));
   }, [columns]);
 
-  // Keep the latest view/selected reachable from a stable keydown listener.
-  const shortcutRef = useRef<ShortcutContext>({ view, selected });
-  shortcutRef.current = { view, selected };
-
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -112,19 +102,18 @@ export function RunsPage() {
       }
       if (typing) return;
 
-      const { view: latestView, selected: latestSelected } = shortcutRef.current;
       if (event.key === "j") {
         setLive((value) => !value);
       } else if (event.key === "r") {
-        latestView.refresh();
+        view.refresh();
       } else if (event.key === "?") {
         setHelpOpen((value) => !value);
       } else if (event.key === "b") {
         setRailCollapsed((value) => !value);
-      } else if (latestSelected != null && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+      } else if (selected != null && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
         event.preventDefault();
-        const ids = latestView.rows.map((run) => run.executionId);
-        const index = ids.indexOf(latestSelected);
+        const ids = view.rows.map((run) => run.executionId);
+        const index = ids.indexOf(selected);
         if (index < 0) return;
         const nextId = event.key === "ArrowUp" ? ids[index - 1] : ids[index + 1];
         if (nextId != null) setSelected(nextId);
@@ -132,7 +121,7 @@ export function RunsPage() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [selected, view]);
 
   // The live divider + isPast styling assume newest-first ordering. For
   // ascending sort live rows append at the bottom with no divider, so only
