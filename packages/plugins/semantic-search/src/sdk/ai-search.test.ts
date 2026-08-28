@@ -67,6 +67,13 @@ const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollecti
   ...overrides,
 });
 
+const makeAiSearchItem = <A extends object>(item: A) => ({
+  ...item,
+  sync: async () => expect.unreachable("Unexpected AI Search item sync"),
+  logs: async () => expect.unreachable("Unexpected AI Search item logs"),
+  chunks: async () => expect.unreachable("Unexpected AI Search item chunks"),
+});
+
 const makeAiSearchItems = () =>
   ({
     upload: async (name) => ({
@@ -84,14 +91,15 @@ const makeAiSearchItems = () =>
       key: name,
       status: "queued",
     }),
-    get: (itemId) => ({
-      info: async () => ({
-        id: itemId,
-        key: itemId.replace(/^item:/, ""),
-        status: "queued",
+    get: (itemId) =>
+      makeAiSearchItem({
+        info: async () => ({
+          id: itemId,
+          key: itemId.replace(/^item:/, ""),
+          status: "queued",
+        }),
+        download: async () => expect.unreachable("Unexpected AI Search item download"),
       }),
-      download: async () => expect.unreachable("Unexpected AI Search item download"),
-    }),
   }) satisfies Pick<AiSearchInstance, "items">["items"];
 
 const makeAiSearch = (): Pick<AiSearchInstance, "items" | "search" | "stats"> => ({
@@ -661,14 +669,15 @@ describe("reindexAiSearch", () => {
             ...makeAiSearch(),
             items: {
               ...makeAiSearchItems(),
-              get: () => ({
-                info: async () => ({
-                  id: githubRow.data.itemId,
-                  key: githubRow.data.key,
-                  status: "error" as const,
+              get: () =>
+                makeAiSearchItem({
+                  info: async () => ({
+                    id: githubRow.data.itemId,
+                    key: githubRow.data.key,
+                    status: "error" as const,
+                  }),
+                  download: async () => expect.unreachable("Unexpected AI Search item download"),
                 }),
-                download: async () => expect.unreachable("Unexpected AI Search item download"),
-              }),
               upload: async (name) => ({ id: `new:${name}`, key: name, status: "completed" }),
               delete: async (id) => {
                 deleted.push(id);
@@ -773,14 +782,15 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            get: () => ({
-              info: async () => ({
-                id: existing.data.itemId,
-                key: existing.data.key,
-                status: "completed",
+            get: () =>
+              makeAiSearchItem({
+                info: async () => ({
+                  id: existing.data.itemId,
+                  key: existing.data.key,
+                  status: "completed",
+                }),
+                download: async () => expect.unreachable("Unexpected AI Search item download"),
               }),
-              download: async () => expect.unreachable("Unexpected AI Search item download"),
-            }),
             upload: async () => expect.unreachable("Existing remote item should be reused"),
           },
         },
@@ -886,14 +896,15 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            get: () => ({
-              info: async () => ({
-                id: existing.data.itemId,
-                key: existing.data.key,
-                status: "error",
+            get: () =>
+              makeAiSearchItem({
+                info: async () => ({
+                  id: existing.data.itemId,
+                  key: existing.data.key,
+                  status: "error",
+                }),
+                download: async () => expect.unreachable("Unexpected AI Search item download"),
               }),
-              download: async () => expect.unreachable("Unexpected AI Search item download"),
-            }),
             upload: async (name) => {
               uploadCount += 1;
               return { id: `retry:${name}`, key: name, status: "queued" };
@@ -951,14 +962,15 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            get: () => ({
-              info: async () => ({
-                id: existing.data.itemId,
-                key: existing.data.key,
-                status: "outdated" as never,
+            get: () =>
+              makeAiSearchItem({
+                info: async () => ({
+                  id: existing.data.itemId,
+                  key: existing.data.key,
+                  status: "outdated" as never,
+                }),
+                download: async () => expect.unreachable("Unexpected AI Search item download"),
               }),
-              download: async () => expect.unreachable("Unexpected AI Search item download"),
-            }),
             upload: async (name) => ({
               id: `replacement:${name}`,
               key: name,
@@ -1027,14 +1039,15 @@ describe("reindexAiSearch", () => {
           ...makeAiSearch(),
           items: {
             ...makeAiSearchItems(),
-            get: () => ({
-              info: async () => ({
-                id: existing.data.itemId,
-                key: existing.data.key,
-                status: "outdated" as never,
+            get: () =>
+              makeAiSearchItem({
+                info: async () => ({
+                  id: existing.data.itemId,
+                  key: existing.data.key,
+                  status: "outdated" as never,
+                }),
+                download: async () => expect.unreachable("Unexpected AI Search item download"),
               }),
-              download: async () => expect.unreachable("Unexpected AI Search item download"),
-            }),
             upload: async (name) => ({
               id: `replacement:${name}`,
               key: name,
