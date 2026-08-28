@@ -68,11 +68,11 @@
     "@executor-js/sdk": "workspace:*",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "lucide-react": "^1.7.0",
     "aws4fetch": "1.0.20",
     "fast-xml-parser": "5.10.1",
-    "lucide-react": "^1.7.0",
-    "zod": "4.3.6"
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@effect/atom-react": "catalog:",

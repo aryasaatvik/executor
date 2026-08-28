@@ -43,7 +43,7 @@
         "@executor-js/runtime-quickjs": "workspace:*",
         "@executor-js/sdk": "workspace:*",
         "@jitl/quickjs-wasmfile-release-sync": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@sentry/bun": "^10.57.0",
         "effect": "catalog:",
         "quickjs-emscripten": "catalog:",
@@ -82,7 +82,7 @@
         "@executor-js/sdk": "workspace:*",
         "@executor-js/vite-plugin": "workspace:*",
         "@jitl/quickjs-wasmfile-release-sync": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@opentelemetry/api": "~1.9.0",
         "@opentelemetry/exporter-logs-otlp-http": "^0.214.0",
         "@opentelemetry/exporter-trace-otlp-http": "^0.214.0",
@@ -156,7 +156,7 @@
         "@executor-js/runtime-quickjs": "workspace:*",
         "@executor-js/sdk": "workspace:*",
         "@jitl/quickjs-wasmfile-release-sync": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@types/node": "catalog:",
         "@zip.js/zip.js": "^2.8.26",
         "bun-types": "catalog:",
@@ -194,7 +194,7 @@
         "@executor-js/runtime-quickjs": "workspace:*",
         "@executor-js/sdk": "workspace:*",
         "@jitl/quickjs-wasmfile-release-sync": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@tanstack/react-router": "catalog:",
         "drizzle-orm": "catalog:",
         "effect": "catalog:",
@@ -247,7 +247,7 @@
         "@executor-js/sdk": "workspace:*",
         "@libsql/client": "catalog:",
         "@libsql/kysely-libsql": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@tanstack/react-router": "catalog:",
         "better-auth": "^1.6.11",
         "drizzle-orm": "catalog:",
@@ -304,7 +304,7 @@
         "@executor-js/sdk": "workspace:*",
         "@executor-js/vite-plugin": "workspace:*",
         "@libsql/client": "catalog:",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@tanstack/react-router": "catalog:",
         "drizzle-orm": "catalog:",
         "effect": "catalog:",
@@ -367,7 +367,7 @@
         "@executor-js/plugin-toolkits": "workspace:*",
         "@executor-js/sdk": "workspace:*",
         "@kitlangton/terminal-control": "^0.3.0",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "asciinema-player": "^3.15.1",
         "effect": "catalog:",
         "monaco-editor": "^0.55.1",
@@ -580,7 +580,7 @@
         "kysely": "^0.28.16",
         "kysely-typeorm": "^0.3.0",
         "semver": "^7.7.4",
-        "zod": "4.3.6",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -655,10 +655,10 @@
       "name": "@executor-js/test-servers",
       "version": "1.4.0",
       "dependencies": {
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "effect": "catalog:",
         "graphql-yoga": "^5.17.0",
-        "zod": "4.3.6",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@cloudflare/workers-types": "^4.20250620.0",
@@ -696,7 +696,7 @@
         "@executor-js/execution": "workspace:*",
         "@executor-js/host-mcp": "workspace:*",
         "@executor-js/sdk": "workspace:*",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "agents": "0.17.3",
       },
       "devDependencies": {
@@ -721,8 +721,8 @@
         "@executor-js/execution": "workspace:*",
         "@executor-js/sdk": "workspace:*",
         "@modelcontextprotocol/ext-apps": "^1.7.4",
-        "@modelcontextprotocol/sdk": "^1.29.0",
-        "zod": "4.3.6",
+        "@modelcontextprotocol/sdk": "1.29.0",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -742,7 +742,7 @@
         "@executor-js/react": "workspace:*",
         "@executor-js/runtime-quickjs": "workspace:*",
         "@modelcontextprotocol/ext-apps": "^1.7.4",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "@tanstack/react-query": "^5.99.0",
         "effect": "catalog:",
         "esbuild": "^0.27.7",
@@ -770,7 +770,7 @@
         "vite": "catalog:",
         "vite-plugin-singlefile": "^2.3.2",
         "vitest": "catalog:",
-        "zod": "4.3.6",
+        "zod": "4.4.3",
       },
     },
     "packages/kernel/core": {
@@ -1109,11 +1109,11 @@
         "@executor-js/sdk": "workspace:*",
         "@modelcontextprotocol/client": "2.0.0",
         "@modelcontextprotocol/core": "2.0.0",
-        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@modelcontextprotocol/sdk": "1.29.0",
         "aws4fetch": "1.0.20",
         "fast-xml-parser": "5.10.1",
         "lucide-react": "^1.7.0",
-        "zod": "4.3.6",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@effect/atom-react": "catalog:",
@@ -6085,7 +6085,7 @@
 
     "youch-core": ["youch-core@0.3.3", "", { "dependencies": { "@poppinss/exception": "^1.2.2", "error-stack-parser-es": "^1.0.5" } }, "sha512-ho7XuGjLaJ2hWHoK8yFnsUGy2Y5uDpqSTq1FkHLK4/oqKtyUU1AFbOOxY4IpC9f0fTLjwYbslUz0Po5BpD1wrA=="],
 
-    "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
+    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
 
@@ -6345,13 +6345,7 @@
 
     "@modelcontextprotocol/client/jose": ["jose@6.2.2", "", {}, "sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ=="],
 
-    "@modelcontextprotocol/client/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
-
-    "@modelcontextprotocol/core/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
-
     "@modelcontextprotocol/sdk/jose": ["jose@6.2.2", "", {}, "sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ=="],
-
-    "@modelcontextprotocol/server/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "@octokit/request/content-type": ["content-type@2.0.0", "", {}, "sha512-j/O/d7GcZCyNl7/hwZAb606rzqkyvaDctLmckbxLzHvFBzTJHuGEdodATcP3yIRoDrLHkIATJuvzbFlp/ki2cQ=="],
 
@@ -6591,8 +6585,6 @@
 
     "@tanstack/router-generator/@tanstack/router-utils": ["@tanstack/router-utils@1.162.2", "", { "dependencies": { "@babel/generator": "^7.28.5", "@babel/parser": "^7.28.5", "@babel/types": "^7.28.5", "ansis": "^4.1.0", "babel-dead-code-elimination": "^1.0.12", "diff": "^8.0.2", "pathe": "^2.0.3", "tinyglobby": "^0.2.15" } }, "sha512-hTWqJtqIFFdvuCl8WXNyrodp2L9zo2G37xKRrcVmVRWpAB2h+U1LuRAfS4tsFTiWOIoE/B+WDVFB8JpoEdw6jQ=="],
 
-    "@tanstack/router-generator/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
-
     "@tanstack/router-plugin/@tanstack/router-generator": ["@tanstack/router-generator@1.166.32", "", { "dependencies": { "@babel/types": "^7.28.5", "@tanstack/router-core": "1.168.15", "@tanstack/router-utils": "1.161.6", "@tanstack/virtual-file-routes": "1.161.7", "magic-string": "^0.30.21", "prettier": "^3.5.0", "tsx": "^4.19.2", "zod": "^3.24.2" } }, "sha512-VuusKwEXcgKq+myq1JQfZogY8scTXIIeFls50dJ/UXgCXWp5n14iFreYNlg41wURcak2oA3M+t2TVfD0xUUD6g=="],
 
     "@tanstack/router-plugin/@tanstack/virtual-file-routes": ["@tanstack/virtual-file-routes@1.161.7", "", { "bin": { "intent": "bin/intent.js" } }, "sha512-olW33+Cn+bsCsZKPwEGhlkqS6w3M2slFv11JIobdnCFKMLG97oAI2kWKdx5/zsywTL8flpnoIgaZZPlQTFYhdQ=="],
@@ -6638,8 +6630,6 @@
     "@types/ws/@types/node": ["@types/node@25.6.0", "", { "dependencies": { "undici-types": "~7.19.0" } }, "sha512-+qIYRKdNYJwY3vRCZMdJbPLJAtGjQBudzZzdzwQYkEPQd+PJGixUL5QfvCLDaULoLv+RhT3LDkwEfKaAkgSmNQ=="],
 
     "@types/yauzl/@types/node": ["@types/node@25.6.0", "", { "dependencies": { "undici-types": "~7.19.0" } }, "sha512-+qIYRKdNYJwY3vRCZMdJbPLJAtGjQBudzZzdzwQYkEPQd+PJGixUL5QfvCLDaULoLv+RhT3LDkwEfKaAkgSmNQ=="],
-
-    "@vercel/sdk/zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
 
     "agents/esbuild": ["esbuild@0.28.2", "", { "optionalDependencies": { "@esbuild/aix-ppc64": "0.28.2", "@esbuild/android-arm": "0.28.2", "@esbuild/android-arm64": "0.28.2", "@esbuild/android-x64": "0.28.2", "@esbuild/darwin-arm64": "0.28.2", "@esbuild/darwin-x64": "0.28.2", "@esbuild/freebsd-arm64": "0.28.2", "@esbuild/freebsd-x64": "0.28.2", "@esbuild/linux-arm": "0.28.2", "@esbuild/linux-arm64": "0.28.2", "@esbuild/linux-ia32": "0.28.2", "@esbuild/linux-loong64": "0.28.2", "@esbuild/linux-mips64el": "0.28.2", "@esbuild/linux-ppc64": "0.28.2", "@esbuild/linux-riscv64": "0.28.2", "@esbuild/linux-s390x": "0.28.2", "@esbuild/linux-x64": "0.28.2", "@esbuild/netbsd-arm64": "0.28.2", "@esbuild/netbsd-x64": "0.28.2", "@esbuild/openbsd-arm64": "0.28.2", "@esbuild/openbsd-x64": "0.28.2", "@esbuild/openharmony-arm64": "0.28.2", "@esbuild/sunos-x64": "0.28.2", "@esbuild/win32-arm64": "0.28.2", "@esbuild/win32-ia32": "0.28.2", "@esbuild/win32-x64": "0.28.2" }, "bin": { "esbuild": "bin/esbuild" } }, "sha512-HKVLS8dvII+xoKW9kmqxbRKrnWEXfJJr/FZhhJmiqIB0e053QNYFqOBouTMO/k5sID4MvCiUCvv8b9M4h32wIA=="],
 
