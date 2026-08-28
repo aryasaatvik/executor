@@ -157,6 +157,7 @@ function ToolCallItem(props: {
 }
 
 function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonly ToolCallRow[] }) {
+  const [renderedAt] = useState(Date.now);
   const windowStart = props.run.startedAt;
   if (props.toolCalls.length === 0) {
     return <p className="text-sm text-muted-foreground">No tool calls recorded.</p>;
@@ -173,7 +174,7 @@ function ToolCallsTab(props: { readonly run: RunRow; readonly toolCalls: readonl
       ),
     windowStart,
   );
-  const windowEnd = Math.max(props.run.completedAt ?? Date.now(), callsEnd);
+  const windowEnd = Math.max(props.run.completedAt ?? renderedAt, callsEnd);
   return (
     <div className="space-y-2">
       {props.toolCalls.map((call) => (
