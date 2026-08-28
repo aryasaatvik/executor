@@ -210,7 +210,7 @@ export function RunsFilterRail({ filters, meta, onChange, onReset }: RunsFilterR
       }
     }
     return [...set];
-  }, [meta?.triggerCounts]);
+  }, [meta]);
 
   const currentPresetKey = activePresetKey(filters.from, filters.to);
 
