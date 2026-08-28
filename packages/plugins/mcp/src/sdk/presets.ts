@@ -35,7 +35,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "AWS documentation, APIs, and automation through the managed AWS MCP Server.",
     url: "https://aws-mcp.us-east-1.api.aws/mcp",
     endpoint: "https://aws-mcp.us-east-1.api.aws/mcp",
-    logoDomain: "aws.amazon.com",
+    icon: "https://integrations.sh/logo/aws.amazon.com",
     featured: true,
     authenticationTemplate: [{ kind: "aws_iam" }],
   },
@@ -45,7 +45,7 @@ export const mcpPresets: readonly McpPreset[] = [
     summary: "AWS documentation, APIs, and automation through the Frankfurt AWS MCP Server.",
     url: "https://aws-mcp.eu-central-1.api.aws/mcp",
     endpoint: "https://aws-mcp.eu-central-1.api.aws/mcp",
-    logoDomain: "aws.amazon.com",
+    icon: "https://integrations.sh/logo/aws.amazon.com",
     authenticationTemplate: [{ kind: "aws_iam" }],
   },
   {
