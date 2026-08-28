@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 interface CommandResult {
@@ -180,11 +180,36 @@ const expectedExecutorPackages = (hostPath: string): readonly string[] => {
   const packagePath = join(hostPath, "package.json");
   if (!existsSync(packagePath)) return [];
 
-  // oxlint-disable-next-line executor/no-json-parse -- boundary: package.json is a trusted local tooling manifest
-  const parsed = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+  let parsed: PackageJson;
+  // oxlint-disable-next-line executor/no-try-catch-or-throw -- boundary: nearby discovery candidates may have incomplete manifests
+  try {
+    // oxlint-disable-next-line executor/no-json-parse -- boundary: package.json is a local tooling manifest
+    parsed = JSON.parse(readFileSync(packagePath, "utf8")) as PackageJson;
+  } catch {
+    return [];
+  }
   return Object.entries({ ...parsed.dependencies, ...parsed.devDependencies })
     .filter(([name, value]) => name.startsWith("@executor-js/") && value.startsWith("link:"))
     .map(([name]) => name)
+    .sort();
+};
+
+const childDirectories = (path: string): readonly string[] =>
+  readdirSync(path, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => join(path, entry.name));
+
+const discoverHostPaths = (mainPath: string): readonly string[] => {
+  const workspacePath = dirname(mainPath);
+  const mainRealPath = realpathSync(mainPath);
+  const firstLevel = childDirectories(workspacePath).filter(
+    (path) => realpathSync(path) !== mainRealPath,
+  );
+  const candidates = [...firstLevel, ...firstLevel.flatMap((path) => childDirectories(path))];
+
+  return candidates
+    .filter((path) => expectedExecutorPackages(path).length > 0)
+    .filter((path) => git(path, "rev-parse", "--show-toplevel").ok)
     .sort();
 };
 
@@ -233,10 +258,17 @@ const upstreamPath =
   options.upstream ??
   findWorktree("upstream") ??
   join(dirname(mainPath), "executor-worktrees", "upstream");
-const configuredHostPath = options.host ?? process.env.EXECUTOR_HOST_CHECKOUT;
+const repoHostResult = git(mainPath, "config", "--path", "--get", "executor.hostCheckout");
+const configuredHostPath =
+  options.host ??
+  process.env.EXECUTOR_HOST_CHECKOUT ??
+  (repoHostResult.ok ? repoHostResult.stdout : null);
+const discoveredHostPaths = configuredHostPath ? [] : discoverHostPaths(mainPath);
 const hostPath = configuredHostPath
-  ? resolve(configuredHostPath)
-  : join(dirname(mainPath), "executor-host");
+  ? resolve(mainPath, configuredHostPath)
+  : discoveredHostPaths.length === 1
+    ? discoveredHostPaths[0]
+    : join(dirname(mainPath), "executor-host");
 
 const main = repoState(mainPath);
 const selfhost = repoState(selfhostPath);
@@ -248,6 +280,13 @@ addRepoChecks(checks, "main", main, "dev");
 addRepoChecks(checks, "selfhost", selfhost, null);
 addRepoChecks(checks, "upstream", upstream, null);
 addRepoChecks(checks, "host", host, "main");
+if (!configuredHostPath && discoveredHostPaths.length > 1) {
+  checks.push({
+    severity: "blocker",
+    name: "host.discovery",
+    detail: `multiple linked Executor hosts found: ${discoveredHostPaths.join(", ")}; pass --host or configure executor.hostCheckout`,
+  });
+}
 
 const originDevResult = git(mainPath, "rev-parse", "refs/remotes/origin/dev");
 const upstreamMainResult = git(mainPath, "rev-parse", "refs/remotes/upstream/main");
