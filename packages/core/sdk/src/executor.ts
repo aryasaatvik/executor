@@ -2360,15 +2360,6 @@ const makePluginStorageFacade = (input: {
           PluginStorageEntry<PluginStorageCollectionData<typeof definition>>,
           StorageFailure
         >,
-      putMany: (storageInput) =>
-        putManyImpl(
-          storageInput.owner,
-          storageInput.entries.map((entry) => ({
-            collection: definition.name,
-            key: entry.key,
-            data: entry.data,
-          })),
-        ),
       query: (storageInput) => queryCollection(definition, storageInput),
       count: (storageInput) =>
         queryCollection(definition, storageInput).pipe(Effect.map((rows) => rows.length)),
@@ -2487,11 +2478,6 @@ const makePluginStorageFacade = (input: {
           }),
       },
       remove: (storageInput) => removeImpl(storageInput.owner, definition.name, storageInput.key),
-      removeMany: (storageInput) =>
-        removeManyImpl(
-          storageInput.owner,
-          storageInput.keys.map((key) => ({ collection: definition.name, key })),
-        ),
     }),
     get: (storageInput) => getVisible(storageInput.collection, storageInput.key),
     getMany: (storageInput) => getManyVisible(storageInput.collection, storageInput.keys),

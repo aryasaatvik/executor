@@ -4,6 +4,7 @@ import type {
   Owner,
   PluginStorageCollectionFacade,
   PluginStorageEntry,
+  PluginStorageFacade,
   Tool,
   ToolSchemaManifest,
 } from "@executor-js/sdk/core";
@@ -118,7 +119,10 @@ const makeExecutor = (
 };
 
 type TestCollection<T extends object> = PluginStorageCollectionFacade<any> & {
+  readonly collectionName: string;
   readonly data: Map<string, T>;
+  readonly bulkPut: (key: string, value: unknown) => void;
+  readonly bulkRemove: (key: string) => void;
 };
 
 type TestAggregateValue = string | number | boolean | null;
@@ -152,7 +156,10 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
     });
   };
   const facade = {
+    collectionName: collection,
     data,
+    bulkPut: (key: string, value: unknown) => data.set(key, value as T),
+    bulkRemove: (key: string) => data.delete(key),
     get: ({ key }: { key: string }) =>
       Effect.succeed(data.has(key) ? entry(key, data.get(key)!) : null),
     getMany: ({ keys }: { keys: readonly string[] }) =>
@@ -180,10 +187,6 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
       Effect.sync(() => {
         data.set(key, value);
         return entry(key, value);
-      }),
-    putMany: ({ entries }: { entries: readonly { readonly key: string; readonly data: T }[] }) =>
-      Effect.sync(() => {
-        for (const item of entries) data.set(item.key, item.data);
       }),
     query: (input?: {
       where?: Record<string, unknown>;
@@ -235,13 +238,47 @@ const makeCollection = <T extends object>(collection: string): TestCollection<T>
       stats: () => Effect.succeed({ count: 0, min: null, max: null, percentiles: [] }),
     },
     remove: ({ key }: { key: string }) => Effect.sync(() => data.delete(key)),
-    removeMany: ({ keys }: { keys: readonly string[] }) =>
-      Effect.sync(() => {
-        for (const key of keys) data.delete(key);
-      }),
   };
   // oxlint-disable-next-line executor/no-double-cast -- test fixture implements the storage facade methods exercised by these indexer tests
   return facade as unknown as TestCollection<T>;
+};
+
+const makeBulkStorage = (
+  collections: readonly TestCollection<object>[],
+): Pick<PluginStorageFacade, "putMany" | "removeMany"> => {
+  const byName = new Map(collections.map((collection) => [collection.collectionName, collection]));
+  return {
+    putMany: ({ entries }) =>
+      Effect.sync(() => {
+        for (const entry of entries) {
+          const collection = byName.get(entry.collection);
+          expect(collection).toBeDefined();
+          collection?.bulkPut(entry.key, entry.data);
+        }
+      }),
+    removeMany: ({ entries }) =>
+      Effect.sync(() => {
+        for (const entry of entries) {
+          const collection = byName.get(entry.collection);
+          expect(collection).toBeDefined();
+          collection?.bulkRemove(entry.key);
+        }
+      }),
+  };
+};
+
+const makeIndexCollections = () => {
+  const runs = makeCollection<IndexRun>(indexRuns.name);
+  const jobs = makeCollection<IndexJob>(indexJobs.name);
+  const chunks = makeCollection<IndexChunk>(indexChunks.name);
+  const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+  return {
+    runs,
+    jobs,
+    chunks,
+    fingerprints,
+    pluginStorage: makeBulkStorage([runs, jobs, chunks, fingerprints]),
+  };
 };
 
 describe("ToolSearchIndex", () => {
@@ -249,10 +286,7 @@ describe("ToolSearchIndex", () => {
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters, { description: "Get a repository ".repeat(700) });
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
       const path = "github.repos.get";
       const oldFingerprint = "fingerprint:old";
@@ -292,7 +326,17 @@ describe("ToolSearchIndex", () => {
         embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
       };
 
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      const base = {
+        namespace,
+        executor,
+        pluginStorage,
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+      };
       yield* create({ ...base, runId: "run-1", partitionCount: 1 });
       const scanned = yield* scan({
         ...base,
@@ -375,10 +419,7 @@ describe("ToolSearchIndex", () => {
       const base = {
         namespace,
         executor: executor as Executor,
-        runs: makeCollection<IndexRun>(indexRuns.name),
-        jobs: makeCollection<IndexJob>(indexJobs.name),
-        chunks: makeCollection<IndexChunk>(indexChunks.name),
-        fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+        ...makeIndexCollections(),
         blobs: makeBlobs(),
         owner,
       };
@@ -400,8 +441,7 @@ describe("ToolSearchIndex", () => {
 
       const skippedBase = {
         ...base,
-        jobs: makeCollection<IndexJob>(indexJobs.name),
-        fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+        ...makeIndexCollections(),
       };
       yield* skippedBase.fingerprints.put({
         owner,
@@ -435,10 +475,7 @@ describe("ToolSearchIndex", () => {
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
       const store: VectorStore = {
         maxTopK: 100,
@@ -453,7 +490,17 @@ describe("ToolSearchIndex", () => {
         embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
       };
 
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      const base = {
+        namespace,
+        executor,
+        pluginStorage,
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+      };
       yield* create({ ...base, runId: "run-fail", partitionCount: 1 });
       const scanned = yield* scan({
         ...base,
@@ -493,12 +540,19 @@ describe("ToolSearchIndex", () => {
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      const base = {
+        namespace,
+        executor,
+        pluginStorage,
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+      };
 
       yield* create({ ...base, runId: "run-reconcile", partitionCount: 1 });
       const beforeScan = yield* reconcile({ ...base, runId: "run-reconcile" });
@@ -520,12 +574,19 @@ describe("ToolSearchIndex", () => {
     Effect.gen(function* () {
       const counters = { raw: 0, codegen: 0 };
       const executor = makeExecutor(counters);
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
-      const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+      const base = {
+        namespace,
+        executor,
+        pluginStorage,
+        runs,
+        jobs,
+        chunks,
+        fingerprints,
+        blobs,
+        owner,
+      };
 
       yield* create({ ...base, runId: "run-capped", partitionCount: 1, maxTools: 1 });
       const capped = yield* reconcile({ ...base, runId: "run-capped" });
@@ -543,10 +604,7 @@ describe("ToolSearchIndex", () => {
       Effect.gen(function* () {
         const counters = { raw: 0, codegen: 0 };
         const executor = makeExecutor(counters);
-        const runs = makeCollection<IndexRun>(indexRuns.name);
-        const jobs = makeCollection<IndexJob>(indexJobs.name);
-        const chunks = makeCollection<IndexChunk>(indexChunks.name);
-        const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+        const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
         const blobs = makeBlobs();
         const store: VectorStore = {
           maxTopK: 100,
@@ -560,7 +618,17 @@ describe("ToolSearchIndex", () => {
           embedDocuments: (texts) => Effect.succeed(texts.map(() => [0.1, 0.2, 0.3])),
           embedQuery: () => Effect.succeed([0.1, 0.2, 0.3]),
         };
-        const base = { namespace, executor, runs, jobs, chunks, fingerprints, blobs, owner };
+        const base = {
+          namespace,
+          executor,
+          pluginStorage,
+          runs,
+          jobs,
+          chunks,
+          fingerprints,
+          blobs,
+          owner,
+        };
 
         yield* create({ ...base, runId: "run-chunk-retry", partitionCount: 1 });
         const scanned = yield* scan({
@@ -634,14 +702,12 @@ describe("ToolSearchIndex", () => {
         },
         cache: makeMemoryCache(),
       };
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
       const base = {
         namespace,
         executor: executor as Executor,
+        pluginStorage,
         runs,
         jobs,
         chunks,
@@ -672,10 +738,7 @@ describe("ToolSearchIndex", () => {
 
   it.effect("embeds only the chunks that fit the page budget and commits the job later", () =>
     Effect.gen(function* () {
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
       const mutableEmbeddedGroups: string[][] = [];
       const upserted: VectorInput[] = [];
@@ -753,6 +816,7 @@ describe("ToolSearchIndex", () => {
       const base = {
         namespace,
         executor: makeExecutor({ raw: 0, codegen: 0 }),
+        pluginStorage,
         runs,
         jobs,
         chunks,
@@ -799,10 +863,7 @@ describe("ToolSearchIndex", () => {
     "reconstructs commit messages when an embed message retries after indexing chunks",
     () =>
       Effect.gen(function* () {
-        const runs = makeCollection<IndexRun>(indexRuns.name);
-        const jobs = makeCollection<IndexJob>(indexJobs.name);
-        const chunks = makeCollection<IndexChunk>(indexChunks.name);
-        const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+        const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
         const blobs = makeBlobs();
         let embedCalls = 0;
         const store: VectorStore = {
@@ -872,6 +933,7 @@ describe("ToolSearchIndex", () => {
         const base = {
           namespace,
           executor: makeExecutor({ raw: 0, codegen: 0 }),
+          pluginStorage,
           runs,
           jobs,
           chunks,
@@ -904,10 +966,7 @@ describe("ToolSearchIndex", () => {
 
   it.effect("commits zero-chunk embed jobs so fingerprints can warm future runs", () =>
     Effect.gen(function* () {
-      const runs = makeCollection<IndexRun>(indexRuns.name);
-      const jobs = makeCollection<IndexJob>(indexJobs.name);
-      const chunks = makeCollection<IndexChunk>(indexChunks.name);
-      const fingerprints = makeCollection<FingerprintRow>(toolFingerprints.name);
+      const { runs, jobs, chunks, fingerprints, pluginStorage } = makeIndexCollections();
       const blobs = makeBlobs();
       const store: VectorStore = {
         maxTopK: 100,
@@ -945,6 +1004,7 @@ describe("ToolSearchIndex", () => {
       const result = yield* commit({
         namespace,
         executor: makeExecutor({ raw: 0, codegen: 0 }),
+        pluginStorage,
         runs,
         jobs,
         chunks,
@@ -1002,10 +1062,7 @@ describe("ToolSearchIndex manifest snapshot", () => {
   const makeBase = (executor: Executor) => ({
     namespace,
     executor,
-    runs: makeCollection<IndexRun>(indexRuns.name),
-    jobs: makeCollection<IndexJob>(indexJobs.name),
-    chunks: makeCollection<IndexChunk>(indexChunks.name),
-    fingerprints: makeCollection<FingerprintRow>(toolFingerprints.name),
+    ...makeIndexCollections(),
     blobs: makeBlobs(),
     owner,
   });
