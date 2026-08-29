@@ -3,6 +3,7 @@ import type {
   Owner,
   PluginBlobStore,
   PluginStorageCollectionFacade,
+  PluginStorageFacade,
   ToolSchemaManifest,
 } from "@executor-js/sdk/core";
 import { sha256Hex } from "@executor-js/sdk/core";
@@ -41,6 +42,7 @@ import type { VectorInput, VectorStore } from "./store";
 import type { FtsDocumentInput, FtsLexicalStore } from "./store-fts";
 
 export interface IndexCollections {
+  readonly pluginStorage: Pick<PluginStorageFacade, "putMany" | "removeMany">;
   readonly runs: PluginStorageCollectionFacade<typeof indexRuns>;
   readonly jobs: PluginStorageCollectionFacade<typeof indexJobs>;
   readonly chunks: PluginStorageCollectionFacade<typeof indexChunks>;
@@ -532,10 +534,14 @@ const putJobs = (
   deps: IndexCollections,
   jobs: readonly IndexJob[],
 ): Effect.Effect<void, SemanticSearchError> =>
-  deps.jobs
+  deps.pluginStorage
     .putMany({
       owner: deps.owner,
-      entries: jobs.map((job) => ({ key: jobKey(job.runId, job.path), data: job })),
+      entries: jobs.map((job) => ({
+        collection: indexJobs.name,
+        key: jobKey(job.runId, job.path),
+        data: job,
+      })),
     })
     .pipe(
       Effect.mapError(
@@ -1245,27 +1251,37 @@ export const chunk = (
     );
     const oldChunkKeys = chunkedJobs.flatMap((job) => job.oldChunkKeys);
     if (oldChunkKeys.length > 0) {
-      yield* input.chunks.removeMany({ owner: input.owner, keys: oldChunkKeys }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to remove stale index chunks.",
-              cause,
-            }),
-        ),
-      );
+      yield* input.pluginStorage
+        .removeMany({
+          owner: input.owner,
+          entries: oldChunkKeys.map((key) => ({ collection: indexChunks.name, key })),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({
+                message: "Failed to remove stale index chunks.",
+                cause,
+              }),
+          ),
+        );
     }
     const chunkEntries = chunkedJobs.flatMap((job) => job.chunkEntries);
     if (chunkEntries.length > 0) {
-      yield* input.chunks.putMany({ owner: input.owner, entries: chunkEntries }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to persist index chunks.",
-              cause,
-            }),
-        ),
-      );
+      yield* input.pluginStorage
+        .putMany({
+          owner: input.owner,
+          entries: chunkEntries.map((entry) => ({ collection: indexChunks.name, ...entry })),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({
+                message: "Failed to persist index chunks.",
+                cause,
+              }),
+          ),
+        );
     }
     yield* putJobs(
       input,
@@ -1416,10 +1432,11 @@ export const embed = (
       }
 
       yield* input.store.upsert(records);
-      yield* input.chunks
+      yield* input.pluginStorage
         .putMany({
           owner: input.owner,
           entries: group.map((entry) => ({
+            collection: indexChunks.name,
             key: entry.key,
             data: { ...entry.data, status: "indexed", updatedAt },
           })),
@@ -1546,15 +1563,23 @@ const finalizeCompletedEmbedJobs = (
     }
 
     if (fingerprintRows.length > 0) {
-      yield* input.fingerprints.putMany({ owner: input.owner, entries: fingerprintRows }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new SemanticSearchError({
-              message: "Failed to persist fingerprint rows.",
-              cause,
-            }),
-        ),
-      );
+      yield* input.pluginStorage
+        .putMany({
+          owner: input.owner,
+          entries: fingerprintRows.map((entry) => ({
+            collection: toolFingerprints.name,
+            ...entry,
+          })),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new SemanticSearchError({
+                message: "Failed to persist fingerprint rows.",
+                cause,
+              }),
+          ),
+        );
     }
     if (oldChunkIds.length > 0) {
       yield* input.store.deleteByIds([...new Set(oldChunkIds)]);
