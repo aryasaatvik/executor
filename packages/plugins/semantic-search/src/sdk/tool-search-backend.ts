@@ -3,6 +3,7 @@ import {
   type PluginBlobStore,
   type PluginStorageConfig,
   type PluginStorageCollectionFacade,
+  type PluginStorageFacade,
   type StorageDeps,
   type ToolDiscoveryProvider,
   type ToolDiscoveryResult,
@@ -94,6 +95,7 @@ const DEFAULT_SEARCH_LIMIT = 20;
 const DEFAULT_IN_PROCESS_PARTITIONS = 1;
 
 export interface VectorToolSearchBackendStorage {
+  readonly pluginStorage: Pick<PluginStorageFacade, "putMany" | "removeMany">;
   readonly fingerprints: PluginStorageCollectionFacade<typeof toolFingerprints>;
   readonly indexRuns: PluginStorageCollectionFacade<typeof indexRuns>;
   readonly indexJobs: PluginStorageCollectionFacade<typeof indexJobs>;
@@ -176,6 +178,7 @@ export const makeVectorToolSearchBackend = (
     namespace,
     pluginStorage: { toolFingerprints, indexRuns, indexJobs, indexChunks },
     storage: (deps): VectorToolSearchBackendStorage => ({
+      pluginStorage: deps.pluginStorage,
       fingerprints: deps.pluginStorage.collection(toolFingerprints),
       indexRuns: deps.pluginStorage.collection(indexRuns),
       indexJobs: deps.pluginStorage.collection(indexJobs),
@@ -195,6 +198,7 @@ export const makeVectorToolSearchBackend = (
               embedder,
               store: options.store,
               chunker,
+              pluginStorage: storage.pluginStorage,
               runs: storage.indexRuns,
               jobs: storage.indexJobs,
               chunks: storage.indexChunks,
@@ -217,6 +221,7 @@ export const makeVectorToolSearchBackend = (
                 embedder,
                 store: options.store,
                 chunker,
+                pluginStorage: storage.pluginStorage,
                 runs: storage.indexRuns,
                 jobs: storage.indexJobs,
                 chunks: storage.indexChunks,
