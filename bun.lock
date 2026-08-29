@@ -1765,9 +1765,9 @@
 
     "@effect/vitest": ["@effect/vitest@4.0.0-beta.59", "", { "peerDependencies": { "effect": "^4.0.0-beta.59", "vitest": "^3.0.0 || ^4.0.0" } }, "sha512-jhpJbpDs1ED58SmFzcfmqLXxle84fiexaMEhV8SBl8WC2GM3FT5DW0WJYFjbZIH5/735brp3iGdjY5/uAxS7Bg=="],
 
-    "@electric-sql/pglite": ["@electric-sql/pglite@0.4.6", "", {}, "sha512-qmlmfN8UyKCee35qkV0r/MBp+Znl8FjBz7OpoglNvww3GJpw0/DLP0o1ZymvLNmcD5DTLOQdzKPtF8Hd3mdl1w=="],
+    "@electric-sql/pglite": ["@electric-sql/pglite@0.4.4", "", {}, "sha512-g/6CWAJ4XOkObWCWAQ2IReZD8VvsDy3poRHSKvpRR2F96F8WJ3HVbjpso3gN7l0q6QPPgvxSSpl/qo5k8a7mkQ=="],
 
-    "@electric-sql/pglite-socket": ["@electric-sql/pglite-socket@0.1.6", "", { "peerDependencies": { "@electric-sql/pglite": "0.4.6" }, "bin": { "pglite-server": "dist/scripts/server.js" } }, "sha512-QAPUOwUdFnv3grJoLQbtkN8MywMK92kPfCeQ9QIJlB9DfPlExvU19cI2djxyffRF2WJL89eiZ1GAyfBDVH2xGQ=="],
+    "@electric-sql/pglite-socket": ["@electric-sql/pglite-socket@0.1.4", "", { "peerDependencies": { "@electric-sql/pglite": "0.4.4" }, "bin": { "pglite-server": "dist/scripts/server.js" } }, "sha512-2LuMFxJPE2FbjWDrWpylWwhZ5uT03rQfBLM7g2AdZmiG3JjC8sbYFkFR4ZeoqVcn22wKzpJTXFV22mQ+s4Oueg=="],
 
     "@electron/asar": ["@electron/asar@3.4.1", "", { "dependencies": { "commander": "^5.0.0", "glob": "^7.1.6", "minimatch": "^3.0.4" }, "bin": { "asar": "bin/asar.js" } }, "sha512-i4/rNPRS84t0vSRa2HorerGRXWyF4vThfHesw0dmcWHp+cspK743UanA0suA5Q5y8kzY2y6YKrvbIUn69BCAiA=="],
 
