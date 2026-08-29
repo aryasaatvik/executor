@@ -13,6 +13,7 @@ import {
   type AuthMethodRow,
   type AuthMethodSeed,
 } from "@executor-js/react/components/auth-method-list-editor";
+import { Badge } from "@executor-js/react/components/badge";
 import {
   CardStack,
   CardStackContent,
