@@ -32,10 +32,29 @@ const execute = (
     catch: (cause) => new DataMigrationError({ migration: MIGRATION_NAME, cause }),
   });
 
+const jsonDecoder = new TextDecoder();
+
+const jsonText = (value: unknown): string | undefined => {
+  if (typeof value === "string") return value;
+  if (value instanceof Uint8Array) return jsonDecoder.decode(value);
+  if (value instanceof ArrayBuffer) return jsonDecoder.decode(new Uint8Array(value));
+  if (
+    Array.isArray(value) &&
+    value.every(
+      (item): item is number =>
+        typeof item === "number" && Number.isInteger(item) && item >= 0 && item <= 255,
+    )
+  ) {
+    return jsonDecoder.decode(new Uint8Array(value));
+  }
+  return undefined;
+};
+
 const parseJsonLike = (value: unknown): unknown => {
-  if (typeof value !== "string") return value;
+  const text = jsonText(value);
+  if (text === undefined) return value;
   try {
-    return JSON.parse(value) as unknown;
+    return JSON.parse(text) as unknown;
   } catch {
     return value;
   }

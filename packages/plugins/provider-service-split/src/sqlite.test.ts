@@ -18,6 +18,37 @@ import {
 const now = 1_780_000_000_000;
 const parseJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
+const D1_JSON_COLUMNS = new Set([
+  "config",
+  "health_check",
+  "item_ids",
+  "last_health",
+  "provider_state",
+  "input_schema",
+  "output_schema",
+  "annotations",
+  "data",
+]);
+
+const withBinaryJson = (
+  client: SqliteDataMigrationClient,
+  encode: (text: string) => unknown,
+): SqliteDataMigrationClient => ({
+  execute: async (statement) => {
+    const result = await client.execute(statement);
+    return {
+      rows: result.rows.map((row) =>
+        Object.fromEntries(
+          Object.entries(row).map(([key, value]) => [
+            key,
+            D1_JSON_COLUMNS.has(key) && typeof value === "string" ? encode(value) : value,
+          ]),
+        ),
+      ),
+    };
+  },
+});
+
 const insertIntegration = (
   client: SqliteDataMigrationClient,
   row: {
@@ -273,6 +304,34 @@ describe("providerServiceSplitDataMigration", () => {
       ]);
 
       yield* Effect.promise(() => db.close());
+    }),
+  );
+
+  it.effect("decodes JSON columns returned as binary values", () =>
+    Effect.gen(function* () {
+      const encodings = [
+        (text: string) => new TextEncoder().encode(text),
+        (text: string) => new TextEncoder().encode(text).buffer,
+        (text: string) => Array.from(new TextEncoder().encode(text)),
+      ] as const;
+
+      for (const encode of encodings) {
+        const db = yield* Effect.promise(() => createSqliteTestFumaDb({ tables: collectTables() }));
+        const client = db.client;
+
+        yield* seedCalendarOrg(client);
+
+        expect(yield* runSqliteProviderServiceSplitMigration(withBinaryJson(client, encode))).toBe(
+          1,
+        );
+
+        const integrations = yield* Effect.promise(() =>
+          client.execute("SELECT slug, plugin_id FROM integration ORDER BY slug"),
+        );
+        expect(integrations.rows).toEqual([{ slug: "google_calendar", plugin_id: "openapi" }]);
+
+        yield* Effect.promise(() => db.close());
+      }
     }),
   );
 
