@@ -8,6 +8,7 @@ import {
   type Executor,
   type PagedResult,
   type PluginStorageCollectionFacade,
+  type PluginStorageFacade,
   type ToolDiscoveryProvider,
   type ToolDiscoveryResult,
 } from "@executor-js/sdk/core";
@@ -38,9 +39,11 @@ export interface AiSearchToolSearchBackendOptions {
 }
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
+type BulkStorage = Pick<PluginStorageFacade, "putMany" | "removeMany">;
 
 export interface AiSearchToolSearchBackendStorage {
   readonly aiSearchItems: ItemsCollection;
+  readonly pluginStorage: BulkStorage;
   readonly owner: "org" | "user";
 }
 
@@ -256,6 +259,7 @@ export const reindexAiSearchBatch = (input: {
   readonly executor: Executor;
   readonly aiSearch: Pick<AiSearchInstance, "items"> | undefined;
   readonly items: ItemsCollection;
+  readonly pluginStorage: BulkStorage;
   readonly owner: "user" | "org";
   readonly namespace: string;
   readonly offset: number;
@@ -397,10 +401,11 @@ export const reindexAiSearchBatch = (input: {
     }
 
     if (uploaded.length > 0) {
-      yield* input.items
+      yield* input.pluginStorage
         .putMany({
           owner: input.owner,
           entries: uploaded.map((entry) => ({
+            collection: aiSearchItems.name,
             key: entry.key,
             data: entry.row,
           })),
@@ -455,10 +460,11 @@ export const reindexAiSearchBatch = (input: {
           }
         }
         if (cleanupResults.length > 0) {
-          yield* input.items
+          yield* input.pluginStorage
             .putMany({
               owner: input.owner,
               entries: cleanupResults.map(({ entry, itemIds, results }) => ({
+                collection: aiSearchItems.name,
                 key: entry.key,
                 data: withPendingDeleteItemIds(
                   entry.row,
@@ -492,10 +498,13 @@ export const reindexAiSearchBatch = (input: {
         )
       : [];
     if (removedEntries.length > 0) {
-      yield* input.items
+      yield* input.pluginStorage
         .removeMany({
           owner: input.owner,
-          keys: removedEntries.map((entry) => entry.key),
+          entries: removedEntries.map((entry) => ({
+            collection: aiSearchItems.name,
+            key: entry.key,
+          })),
         })
         .pipe(Effect.mapError(mapStorageError("Failed to remove stale AI Search item rows.")));
       yield* Effect.forEach(
@@ -523,6 +532,7 @@ export const reindexAiSearch = (input: {
   readonly executor: Executor;
   readonly aiSearch: Pick<AiSearchInstance, "items"> | undefined;
   readonly items: ItemsCollection;
+  readonly pluginStorage: BulkStorage;
   readonly owner: "user" | "org";
   readonly namespace: string;
   readonly maxTools?: number;
@@ -697,6 +707,7 @@ export const makeAiSearchToolSearchBackend = (
     pluginStorage: { aiSearchItems },
     storage: (deps): AiSearchToolSearchBackendStorage => ({
       aiSearchItems: deps.pluginStorage.collection(aiSearchItems),
+      pluginStorage: deps.pluginStorage,
       owner: "org" as const,
     }),
     build: ({ storage }) => {
@@ -712,6 +723,7 @@ export const makeAiSearchToolSearchBackend = (
             executor,
             aiSearch: options.aiSearch,
             items: storage.aiSearchItems,
+            pluginStorage: storage.pluginStorage,
             owner: storage.owner,
             namespace,
           }),
@@ -720,6 +732,7 @@ export const makeAiSearchToolSearchBackend = (
             executor,
             aiSearch: options.aiSearch,
             items: storage.aiSearchItems,
+            pluginStorage: storage.pluginStorage,
             owner: storage.owner,
             namespace,
             ...input,

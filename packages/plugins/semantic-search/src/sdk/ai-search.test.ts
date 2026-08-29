@@ -4,6 +4,7 @@ import {
   StorageError,
   type PluginStorageCollectionFacade,
   type PluginStorageEntry,
+  type PluginStorageFacade,
 } from "@executor-js/sdk/core";
 import { Effect } from "effect";
 
@@ -18,6 +19,7 @@ import { toolItemKey } from "./documents";
 import { cyrb53 } from "./fingerprint";
 
 type ItemsCollection = PluginStorageCollectionFacade<typeof aiSearchItems>;
+type BulkStorage = Pick<PluginStorageFacade, "putMany" | "removeMany">;
 
 const fixedDate = new Date("2026-06-25T00:00:00.000Z");
 
@@ -52,7 +54,6 @@ const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollecti
   getManyForOwner: () => Effect.succeed(new Map()),
   list: () => unusedEffect(),
   put: () => unusedEffect(),
-  putMany: () => unusedEffect(),
   query: () => unusedEffect(),
   count: () => unusedEffect(),
   queryKeyset: () => unusedEffect(),
@@ -63,6 +64,11 @@ const makeItemsCollection = (overrides: Partial<ItemsCollection>): ItemsCollecti
     stats: () => unusedEffect(),
   },
   remove: () => unusedEffect(),
+  ...overrides,
+});
+
+const makeBulkStorage = (overrides: Partial<BulkStorage> = {}): BulkStorage => ({
+  putMany: () => unusedEffect(),
   removeMany: () => unusedEffect(),
   ...overrides,
 });
@@ -482,9 +488,11 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
+              stored.push(...entries.map((entry) => entry.data as AiSearchItemRow));
             }),
         }),
         owner: "org",
@@ -539,9 +547,11 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
+              stored.push(...entries.map((entry) => entry.data as AiSearchItemRow));
             }),
         }),
         owner: "org",
@@ -577,9 +587,11 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([githubRow]),
-          removeMany: ({ keys }) =>
+        }),
+        pluginStorage: makeBulkStorage({
+          removeMany: ({ entries }) =>
             Effect.sync(() => {
-              removed.push(...keys);
+              removed.push(...entries.map((entry) => entry.key));
             }),
         }),
         owner: "org",
@@ -626,9 +638,11 @@ describe("reindexAiSearch", () => {
         items: makeItemsCollection({
           getManyForOwner: () => Effect.succeed(new Map([[githubRow.key, githubRow]])),
           list: () => Effect.succeed([githubRow]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
+              stored.push(...entries.map((entry) => entry.data as AiSearchItemRow));
             }),
         }),
         owner: "org",
@@ -686,6 +700,8 @@ describe("reindexAiSearch", () => {
           },
           items: makeItemsCollection({
             getManyForOwner: () => Effect.succeed(new Map([[githubRow.key, githubRow]])),
+          }),
+          pluginStorage: makeBulkStorage({
             putMany: () =>
               Effect.fail(new StorageError({ message: "row persistence failed", cause: "test" })),
           }),
@@ -734,6 +750,8 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
               putManySizes.push(entries.length);
@@ -798,6 +816,7 @@ describe("reindexAiSearch", () => {
           getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
           list: () => Effect.succeed([existing]),
         }),
+        pluginStorage: makeBulkStorage(),
         owner: "org",
         namespace: "org",
         offset: 0,
@@ -841,6 +860,8 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
               stored.push(...entries.map((entry) => entry.key));
@@ -914,8 +935,8 @@ describe("reindexAiSearch", () => {
         items: makeItemsCollection({
           getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
           list: () => Effect.succeed([existing]),
-          putMany: () => Effect.void,
         }),
+        pluginStorage: makeBulkStorage({ putMany: () => Effect.void }),
         owner: "org",
         namespace: "org",
       });
@@ -984,9 +1005,11 @@ describe("reindexAiSearch", () => {
         items: makeItemsCollection({
           getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
           list: () => Effect.succeed([existing]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
+              stored.push(...entries.map((entry) => entry.data as AiSearchItemRow));
             }),
         }),
         owner: "org",
@@ -1065,9 +1088,11 @@ describe("reindexAiSearch", () => {
         items: makeItemsCollection({
           getManyForOwner: () => Effect.succeed(new Map([[manifest.path, existing]])),
           list: () => Effect.succeed([existing]),
+        }),
+        pluginStorage: makeBulkStorage({
           putMany: ({ entries }) =>
             Effect.sync(() => {
-              stored.push(...entries.map((entry) => entry.data));
+              stored.push(...entries.map((entry) => entry.data as AiSearchItemRow));
             }),
         }),
         owner: "org",
@@ -1158,8 +1183,8 @@ describe("reindexAiSearch", () => {
         },
         items: makeItemsCollection({
           list: () => Effect.succeed([]),
-          putMany: () => Effect.void,
         }),
+        pluginStorage: makeBulkStorage({ putMany: () => Effect.void }),
         owner: "org",
         namespace: "org",
       });
