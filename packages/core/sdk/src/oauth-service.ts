@@ -2036,10 +2036,6 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         ...(firstParty?.additionalAuthorizationScopes ?? []),
         ...additionalAuthorizationLifecycleScopes(client),
       ]);
-      const completeRequestedScopes = dedupeScopes([
-        ...completeAuthorizationScopes,
-        ...workspaceOptionalScopes,
-      ]);
       // RFC 9728 `scopes_supported` advertises capabilities; it does not make
       // every discovered value a requirement. Only integration/client policy
       // that explicitly declares scopes can produce a missing-scope verdict.

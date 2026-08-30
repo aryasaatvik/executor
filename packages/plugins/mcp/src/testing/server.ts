@@ -36,9 +36,9 @@ export type McpTestRequest = {
 
 export type McpTestServerOptions = {
   readonly path?: string;
-  /** Hold authenticated requests at the transport boundary until the test
-   * releases them, so callback ordering does not depend on elapsed time. */
-  readonly beforeAuthenticatedRequest?: () => Promise<void>;
+  /** Delay each authenticated MCP request after auth succeeds. Exercises host
+   *  request lifecycles against a real transport whose catalog is slow. */
+  readonly authenticatedRequestDelayMs?: number;
   readonly auth?: {
     readonly validateAuthorization: (authorization: string | undefined) => Effect.Effect<boolean>;
     readonly authorizationServerUrls?: readonly string[];
@@ -176,8 +176,13 @@ export const serveMcpServer = (factory: () => McpServer, options: McpTestServerO
               writeUnauthorized(response, origin);
               return;
             }
-            if (options.beforeAuthenticatedRequest !== undefined) {
-              yield* Effect.promise(options.beforeAuthenticatedRequest);
+            if (options.authenticatedRequestDelayMs !== undefined) {
+              yield* Effect.promise(
+                () =>
+                  new Promise<void>((resolve) =>
+                    setTimeout(resolve, options.authenticatedRequestDelayMs),
+                  ),
+              );
             }
           }
 
@@ -350,7 +355,7 @@ export const serveMcpServerWithOAuth = (
     const oauth = yield* OAuthTestServer;
     return yield* serveMcpServer(factory, {
       path: options.path,
-      beforeAuthenticatedRequest: options.beforeAuthenticatedRequest,
+      authenticatedRequestDelayMs: options.authenticatedRequestDelayMs,
       auth: {
         validateAuthorization: oauth.acceptsAuthorizationHeader,
         authorizationServerUrls: [oauth.issuerUrl],
@@ -540,37 +545,6 @@ export const makeElicitationMcpServer = () => {
 
       return {
         content: [{ type: "text" as const, text: `approved:${value}` }],
-      };
-    },
-  );
-
-  server.registerTool(
-    "remembered_echo",
-    {
-      description: "Asks for approval whose terms offer to remember it",
-      inputSchema: { value: z.string() },
-    },
-    async ({ value }: { value: string }) => {
-      // Shaped like Codex Computer Use's app approval: an empty schema, and
-      // the persistence scopes on offer in `_meta`. The answer's own
-      // `_meta.persist` is what the server would remember.
-      const response = await server.server.elicitInput({
-        mode: "form",
-        message: `Allow the echo of "${value}"?`,
-        requestedSchema: { type: "object", properties: {} },
-        _meta: { persist: ["session", "always"] },
-      });
-      if (response.action !== "accept") {
-        return { content: [{ type: "text" as const, text: `denied:${value}` }] };
-      }
-      const persist = response._meta?.["persist"];
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `approved:${value}:${typeof persist === "string" ? persist : "once"}`,
-          },
-        ],
       };
     },
   );
