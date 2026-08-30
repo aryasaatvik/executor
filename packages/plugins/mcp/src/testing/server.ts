@@ -30,6 +30,9 @@ export type McpTestRequest = {
 
 export type McpTestServerOptions = {
   readonly path?: string;
+  /** Delay each authenticated MCP request after auth succeeds. Exercises host
+   *  request lifecycles against a real transport whose catalog is slow. */
+  readonly authenticatedRequestDelayMs?: number;
   readonly auth?: {
     readonly validateAuthorization: (authorization: string | undefined) => Effect.Effect<boolean>;
     readonly authorizationServerUrls?: readonly string[];
@@ -152,6 +155,14 @@ export const serveMcpServer = (factory: () => McpServer, options: McpTestServerO
                 },
               );
               return;
+            }
+            if (options.authenticatedRequestDelayMs !== undefined) {
+              yield* Effect.promise(
+                () =>
+                  new Promise<void>((resolve) =>
+                    setTimeout(resolve, options.authenticatedRequestDelayMs),
+                  ),
+              );
             }
           }
 
@@ -302,6 +313,7 @@ export const serveMcpServerWithOAuth = (
     const oauth = yield* OAuthTestServer;
     return yield* serveMcpServer(factory, {
       path: options.path,
+      authenticatedRequestDelayMs: options.authenticatedRequestDelayMs,
       auth: {
         validateAuthorization: oauth.acceptsAuthorizationHeader,
         authorizationServerUrls: [oauth.issuerUrl],

@@ -47,6 +47,7 @@ import {
   type OAuthClientOrigin,
   type OAuthClientSummary,
   type OAuthCompleteInput,
+  type OAuthCompleteOptions,
   type OAuthGrant,
   type OAuthProbeInput,
   type OAuthProbeResult,
@@ -124,6 +125,12 @@ export interface MintOAuthConnectionInput {
    *  code was redeemed at a region other than the client's configured token
    *  host (Datadog multi-site). Null means refresh uses the client's token URL. */
   readonly oauthTokenUrl?: string | null;
+  /** Whether connection tool discovery must finish before the mint returns.
+   *  Interactive authorization-code callbacks persist the fresh grant first,
+   *  then synchronize the remote catalog in host-kept background work so a
+   *  slow MCP server cannot strand the browser popup. Non-interactive grants
+   *  keep the explicit behavior because their caller has no callback window. */
+  readonly toolSync?: "explicit" | "background";
 }
 
 /** Project an enterprise-managed mint failure onto the connect boundary,
@@ -1832,6 +1839,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
   // -----------------------------------------------------------------------
   const complete = (
     input: OAuthCompleteInput,
+    options?: OAuthCompleteOptions,
   ): Effect.Effect<Connection, OAuthCompleteError | OAuthSessionNotFoundError | StorageFailure> =>
     Effect.gen(function* () {
       const sessionRow = yield* deps.fuma.use("oauth_session.findFirst", (db) =>
@@ -1970,6 +1978,10 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         // Persist the regional token endpoint ONLY when it differs from the
         // client's configured one, so refresh redeems against the same region.
         tokenUrl === client.tokenUrl ? null : tokenUrl,
+        // The grant and connection row are the callback's durable contract.
+        // Remote catalog discovery can be arbitrarily slow and must not keep
+        // the popup waiting after that contract has committed.
+        options?.toolSync ?? "explicit",
       ).pipe(
         Effect.mapError(
           (cause) =>
@@ -2047,6 +2059,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
     /** Regional token endpoint override to persist when the code was redeemed
      *  off the client's configured host; null to use the client's token URL. */
     oauthTokenUrl: string | null,
+    toolSync: "explicit" | "background" = "explicit",
   ): Effect.Effect<Connection, StorageFailure> =>
     Effect.gen(function* () {
       const provider = deps.defaultWritableProvider();
@@ -2108,6 +2121,7 @@ export const makeOAuthService = (deps: OAuthServiceDeps): OAuthService => {
         oauthScope,
         missingOAuthScopes: missingScopes,
         oauthTokenUrl,
+        toolSync,
       });
     });
 
