@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useAtomRefresh, useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import type { Integration } from "@executor-js/sdk/shared";
@@ -304,13 +304,10 @@ export function Shell() {
   const pathname = location.pathname;
   const refreshIntegrations = useAtomRefresh(integrationsAtom);
   const refreshTools = useAtomRefresh(toolsAllAtom);
-  const lastPathname = useRef(pathname);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileSidebar, setMobileSidebar] = useState({ pathname, open: false });
+  const mobileSidebarOpen = mobileSidebar.pathname === pathname && mobileSidebar.open;
+  const setMobileSidebarOpen = (open: boolean) => setMobileSidebar({ pathname, open });
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  if (lastPathname.current !== pathname) {
-    lastPathname.current = pathname;
-    if (mobileSidebarOpen) setMobileSidebarOpen(false);
-  }
 
   // Lock scroll when mobile sidebar open
   useEffect(() => {

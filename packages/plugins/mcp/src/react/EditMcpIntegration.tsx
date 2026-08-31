@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAtomValue, useAtomSet } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import * as Exit from "effect/Exit";
@@ -86,7 +86,7 @@ function RemoteEdit(props: {
   server: McpServer & { config: McpRemoteConfig };
   onPendingChange?: EditSheetSectionProps["onPendingChange"];
 }) {
-  const { server } = props;
+  const { server, onPendingChange } = props;
   const doConfigureAuth = useAtomSet(configureMcpAuth, { mode: "promiseExit" });
 
   const seeds = useMemo<readonly AuthMethodSeed[]>(
@@ -152,12 +152,10 @@ function RemoteEdit(props: {
     return { ok: true, summary: "Authentication methods updated." };
   }, [doConfigureAuth, editedMethods, server.slug]);
 
-  const onPendingChangeRef = useRef(props.onPendingChange);
-  onPendingChangeRef.current = props.onPendingChange;
   useEffect(() => {
-    onPendingChangeRef.current?.(methodsChanged ? applyStaged : null);
-    return () => onPendingChangeRef.current?.(null);
-  }, [methodsChanged, applyStaged]);
+    onPendingChange?.(methodsChanged ? applyStaged : null);
+    return () => onPendingChange?.(null);
+  }, [onPendingChange, methodsChanged, applyStaged]);
 
   return (
     <div className="space-y-4 border-t border-border/60 pt-5">
@@ -204,7 +202,7 @@ function StdioEdit(props: {
   server: McpServer & { config: McpStdioConfig };
   onPendingChange?: EditSheetSectionProps["onPendingChange"];
 }) {
-  const { server } = props;
+  const { server, onPendingChange } = props;
   const doConfigure = useAtomSet(configureMcpServer, { mode: "promiseExit" });
 
   const [command, setCommand] = useState(server.config.command);
@@ -257,12 +255,10 @@ function StdioEdit(props: {
     return { ok: true, summary: "Server command updated." };
   }, [doConfigure, edited, server.slug]);
 
-  const onPendingChangeRef = useRef(props.onPendingChange);
-  onPendingChangeRef.current = props.onPendingChange;
   useEffect(() => {
-    onPendingChangeRef.current?.(changed ? applyStaged : null);
-    return () => onPendingChangeRef.current?.(null);
-  }, [changed, applyStaged]);
+    onPendingChange?.(changed ? applyStaged : null);
+    return () => onPendingChange?.(null);
+  }, [onPendingChange, changed, applyStaged]);
 
   return (
     <div className="space-y-4 border-t border-border/60 pt-5">
