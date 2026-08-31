@@ -808,12 +808,14 @@ const sortedRecord = (
  *  semantics sets `spawnPerCall: true` in its stdio config. The bridge
  *  ignores that flag: its approvals are session state, so it must pool. */
 export type PoolableConnectorInput =
-  | Extract<ConnectorInput, { readonly transport: "remote" }>
+  | Extract<BuiltConnectorInput, { readonly transport: "remote" }>
   | McpStdioIntegrationConfig;
 
 /** Whether this connection may be retained between calls (see
  *  `PoolableConnectorInput`). */
-export const isPoolableConnectorInput = (input: ConnectorInput): input is PoolableConnectorInput =>
+export const isPoolableConnectorInput = (
+  input: BuiltConnectorInput,
+): input is PoolableConnectorInput =>
   input.transport === "remote" || input.appServer !== undefined || input.spawnPerCall !== true;
 
 export const connectionPoolKey = (
