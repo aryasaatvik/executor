@@ -1,5 +1,5 @@
 import { Link, Outlet, useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import * as AsyncResult from "effect/unstable/reactivity/AsyncResult";
 import { BookOpen, Command, ExternalLink, PlusIcon } from "lucide-react";
@@ -434,8 +434,9 @@ function SidebarContent(
 
 export function Shell(props: ShellProps) {
   const pathname = useScopeRelativePathname();
-  const lastPathname = useRef(pathname);
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [mobileSidebar, setMobileSidebar] = useState({ pathname, open: false });
+  const mobileSidebarOpen = mobileSidebar.pathname === pathname && mobileSidebar.open;
+  const setMobileSidebarOpen = (open: boolean) => setMobileSidebar({ pathname, open });
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const navigate = useNavigate();
   // The connect dialog became the full-page picker; the sidebar affordance
@@ -444,11 +445,6 @@ export function Shell(props: ShellProps) {
     trackEvent("integration_browse_opened", { via: "sidebar" });
     void navigate({ to: "/{-$orgSlug}/integrations/browse" });
   };
-  if (lastPathname.current !== pathname) {
-    lastPathname.current = pathname;
-    if (mobileSidebarOpen) setMobileSidebarOpen(false);
-  }
-
   useEffect(() => {
     if (!mobileSidebarOpen) return;
     const prev = document.body.style.overflow;
