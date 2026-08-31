@@ -848,7 +848,9 @@ export type PoolableConnectorInput =
 
 /** Whether this connection may be retained between calls (see
  *  `PoolableConnectorInput`). */
-export const isPoolableConnectorInput = (input: BuiltConnectorInput): input is PoolableConnectorInput =>
+export const isPoolableConnectorInput = (
+  input: BuiltConnectorInput,
+): input is PoolableConnectorInput =>
   input.transport === "remote" || input.appServer !== undefined || input.spawnPerCall !== true;
 
 export const connectionPoolKey = (
