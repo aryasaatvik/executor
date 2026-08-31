@@ -397,12 +397,12 @@ function OnePasswordItemSelect(props: {
   // and one background refresh per mount picks up vault changes (refreshing
   // keeps the previous value, so nothing flashes). A cold mount is already
   // fetching — refreshing it would only restart the request. The ref carries
-  // the latest cached-ness into the effect without re-running it.
-  const isCachedRef = useRef(false);
-  isCachedRef.current = AsyncResult.isSuccess(itemsResult);
+  // whether this mount began with a retained value stays fixed while the
+  // background refresh updates the live result.
+  const [wasCachedAtMount] = useState(() => AsyncResult.isSuccess(itemsResult));
   useEffect(() => {
-    if (isCachedRef.current) refreshItems();
-  }, [refreshItems]);
+    if (wasCachedAtMount) refreshItems();
+  }, [refreshItems, wasCachedAtMount]);
   const state = AsyncResult.matchWithError(
     itemsResult as AsyncResult.AsyncResult<readonly OnePasswordItem[], Error>,
     {

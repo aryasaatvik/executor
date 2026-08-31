@@ -305,11 +305,6 @@ export default function AddMcpIntegration(props: {
     dispatch({ type: "probe-ok", probe: exit.value });
   }, [state.url, headers, doProbe]);
 
-  // Keep the latest handleProbe in a ref so the debounced effect can call it
-  // without depending on its identity (which changes every render).
-  const handleProbeRef = useRef(handleProbe);
-  handleProbeRef.current = handleProbe;
-
   // Auto-probe whenever the URL changes (debounced) while we're on the
   // remote transport and not already probing/probed. The shape gate keeps a
   // half-typed URL from being dialled: without it every keystroke that is a
@@ -320,10 +315,10 @@ export default function AddMcpIntegration(props: {
     if (state.step !== "url") return;
     if (!isProbableMcpEndpoint(state.url)) return;
     const handle = setTimeout(() => {
-      handleProbeRef.current();
+      void handleProbe();
     }, 400);
     return () => clearTimeout(handle);
-  }, [transport, state.step, state.url]);
+  }, [transport, state.step, state.url, handleProbe]);
 
   // Register the integration with the declared auth methods, returning the
   // assigned slug (or null on failure — an error is dispatched in that case).

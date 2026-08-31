@@ -627,28 +627,24 @@ const guidanceCache = new Map<string, readonly CredentialGuidance[]>();
 /** Guidance for a domain, or an empty list when the registry has none. Never
  *  fails loudly: this is help text, and a connection form must work without it. */
 export function useCredentialGuidance(domain: string | null): readonly CredentialGuidance[] {
-  const [state, setState] = useState<readonly CredentialGuidance[]>([]);
+  const [loaded, setLoaded] = useState<{
+    readonly domain: string;
+    readonly value: readonly CredentialGuidance[];
+  } | null>(null);
 
   useEffect(() => {
-    if (!domain) {
-      setState([]);
-      return;
-    }
-    const cached = guidanceCache.get(domain);
-    if (cached) {
-      setState(cached);
-      return;
-    }
+    if (!domain || guidanceCache.has(domain)) return;
     let live = true;
     void Effect.runPromiseExit(fetchCredentialGuidance(domain)).then((exit) => {
       const value = Exit.isSuccess(exit) ? exit.value : [];
       guidanceCache.set(domain, value);
-      if (live) setState(value);
+      if (live) setLoaded({ domain, value });
     });
     return () => {
       live = false;
     };
   }, [domain]);
 
-  return state;
+  if (!domain) return [];
+  return guidanceCache.get(domain) ?? (loaded?.domain === domain ? loaded.value : []);
 }
