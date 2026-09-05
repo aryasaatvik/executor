@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option } from "effect";
+import { Effect, Option, Schema } from "effect";
 
 import {
   Subject,
@@ -13,11 +13,14 @@ import {
 import { makeDefaultOpenapiStore } from "./store";
 import { OperationBinding } from "./types";
 
+const encodeBinding = Schema.encodeSync(OperationBinding);
+
 describe("OpenAPI operation store", () => {
   it.effect("bounds operation storage keys while preserving tool-name lookup", () =>
     Effect.gen(function* () {
       const rows = new Map<string, PluginStorageEntry>();
       const capturedKeys: string[] = [];
+      const listedPrefixes: (string | undefined)[] = [];
       const storageKey = (collection: string, key: string) => `${collection}\0${key}`;
       const unexpectedCollectionCall = () => Effect.die("Unexpected collection storage call");
       const now = new Date();
@@ -105,14 +108,19 @@ describe("OpenAPI operation store", () => {
               }),
             ),
           ),
-        list: <T = unknown>(input: { readonly collection: string; readonly keyPrefix?: string }) =>
-          Effect.succeed(
+        list: <T = unknown>(input: {
+          readonly collection: string;
+          readonly keyPrefix?: string;
+        }) => {
+          listedPrefixes.push(input.keyPrefix);
+          return Effect.succeed(
             [...rows.values()].filter(
               (row) =>
                 row.collection === input.collection &&
                 (input.keyPrefix === undefined || row.key.startsWith(input.keyPrefix)),
             ) as PluginStorageEntry<T>[],
-          ),
+          );
+        },
         put: <T = unknown>(input: {
           readonly owner: "org" | "user";
           readonly collection: string;
@@ -177,6 +185,40 @@ describe("OpenAPI operation store", () => {
         },
       ]);
 
+      const binding = OperationBinding.make({
+        method: "get",
+        servers: [],
+        pathTemplate: "/legacy",
+        parameters: [],
+        requestBody: Option.none(),
+        responseBody: Option.none(),
+      });
+      yield* pluginStorage.put({
+        owner: "org",
+        collection: "operation",
+        key: "microsoft_graph.legacy",
+        data: {
+          integration: "microsoft_graph",
+          toolName: "legacy",
+          binding: encodeBinding(binding),
+        },
+      });
+      yield* pluginStorage.put({
+        owner: "org",
+        collection: "operation",
+        key: "microsoft_graph.other.legacy",
+        data: {
+          integration: "microsoft_graph.other",
+          toolName: "legacy",
+          binding: encodeBinding(binding),
+        },
+      });
+      yield* pluginStorage.put({
+        owner: "org",
+        collection: "operation",
+        key: "unrelated.invalid",
+        data: { integration: "unrelated", toolName: "invalid", binding: "invalid" },
+      });
       expect(capturedKeys).toHaveLength(1);
       expect(capturedKeys[0]!.length).toBeLessThanOrEqual(255);
       expect(capturedKeys[0]).not.toContain(toolName);
@@ -184,6 +226,22 @@ describe("OpenAPI operation store", () => {
       const operation = yield* store.getOperation("microsoft_graph", toolName);
       expect(operation?.toolName).toBe(toolName);
       expect(operation?.binding.pathTemplate).toBe("/users/{userId}/messages");
+      expect((yield* store.listOperations("microsoft_graph")).map((op) => op.toolName)).toEqual([
+        toolName,
+        "legacy",
+      ]);
+      yield* store.removeOperations("microsoft_graph");
+      expect(yield* store.listOperations("microsoft_graph")).toEqual([]);
+      expect((yield* store.getOperation("microsoft_graph.other", "legacy"))?.toolName).toBe(
+        "legacy",
+      );
+      expect(rows.has(storageKey("operation", "unrelated.invalid"))).toBe(true);
+      expect(listedPrefixes).toEqual(
+        Array.from({ length: 4 }, () => [
+          capturedKeys[0]!.slice(0, capturedKeys[0]!.lastIndexOf(".") + 1),
+          "microsoft_graph.",
+        ]).flat(),
+      );
     }),
   );
 });

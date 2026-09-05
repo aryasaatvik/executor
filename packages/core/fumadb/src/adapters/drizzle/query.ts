@@ -28,6 +28,12 @@ type P_DBType = PostgreSQL.PgDatabase<
 >;
 
 const CREATE_MANY_BATCH_SIZE = 500;
+// A D1 native batch is one Workers RPC. Large schemas can make a few hundred
+// prepared statements exceed the platform's 32 MiB serialized-argument cap,
+// even though every individual statement fits its bound-parameter limit.
+// Bound statement construction and RPC group size. Each group commits
+// independently; this count does not bound the size of an individual row.
+const D1_NATIVE_BATCH_STATEMENT_LIMIT = 50;
 
 // A multi-row write binds (rows * columns) parameters in one statement, and
 // engines cap bound parameters per statement (older SQLite: 999, Cloudflare
@@ -603,8 +609,7 @@ export function fromDrizzle(
         ]),
       );
 
-      const buildStatements = (handle: typeof db): unknown[] => {
-        const statements: unknown[] = [];
+      const buildStatements = function* (handle: typeof db): Generator<unknown> {
         for (let i = 0; i < values.length; i += batchSize) {
           const batch = values.slice(i, i + batchSize);
           const insert = handle.insert(drizzleTable).values(batch) as unknown as {
@@ -614,15 +619,12 @@ export function fromDrizzle(
               readonly where?: typeof where;
             }) => unknown;
           };
-          statements.push(
-            insert.onConflictDoUpdate({
-              target,
-              set,
-              ...(where === undefined ? {} : { where }),
-            }),
-          );
+          yield insert.onConflictDoUpdate({
+            target,
+            set,
+            ...(where === undefined ? {} : { where }),
+          });
         }
-        return statements;
       };
       const executeStatements = async (handle: typeof db) => {
         for (const statement of buildStatements(handle)) {
@@ -632,14 +634,22 @@ export function fromDrizzle(
       const statementCount = Math.ceil(values.length / batchSize);
 
       // D1 rejects interactive transactions but its native batch API executes
-      // prepared statements as one transaction. Drizzle exposes that API on
-      // the database handle, so keep parameter-bounded upserts atomic instead
-      // of auto-committing each statement independently.
+      // each prepared-statement group as one transaction. Drizzle exposes that
+      // API on the database handle, so keep bounded groups atomic instead of
+      // auto-committing each statement independently.
       const nativeBatch = db as unknown as {
         readonly batch?: (statements: readonly unknown[]) => Promise<unknown>;
       };
       if (!interactiveTransactions && statementCount > 1 && nativeBatch.batch) {
-        await nativeBatch.batch(buildStatements(db));
+        let statements: unknown[] = [];
+        for (const statement of buildStatements(db)) {
+          statements.push(statement);
+          if (statements.length >= D1_NATIVE_BATCH_STATEMENT_LIMIT) {
+            await nativeBatch.batch(statements);
+            statements = [];
+          }
+        }
+        if (statements.length > 0) await nativeBatch.batch(statements);
         return;
       }
 
