@@ -785,6 +785,11 @@ export const openApiPlugin = definePlugin<
           // `BEGIN` across a network fetch is the Hyperdrive deadlock path.
           const resolved = yield* resolveSpecForInput(config, httpClientLayer);
           const document = resolved.keepPathItem ? undefined : yield* parse(resolved.specText);
+          if (document && !document.paths) {
+            return yield* new OpenApiExtractionError({
+              message: "OpenAPI document has no paths defined",
+            });
+          }
           const adapter = yield* resolveSpecFormatAdapter(
             options?.specFormats ?? [],
             config.specFormat,
@@ -1005,6 +1010,11 @@ export const openApiPlugin = definePlugin<
               httpClientLayer,
             );
             const document = resolved.keepPathItem ? undefined : yield* parse(resolved.specText);
+            if (document && !document.paths) {
+              return yield* new OpenApiExtractionError({
+                message: "OpenAPI document has no paths defined",
+              });
+            }
 
             const previousNames = new Set(
               (yield* ctx.storage.listOperations(rawSlug)).map((op) => op.toolName),

@@ -94,6 +94,29 @@ scenario(
         })
         .pipe(Effect.result);
       expect(failed._tag).toBe("Failure");
+      const missingPaths = yield* http.openapi
+        .updateSpec({
+          params: { slug },
+          payload: {
+            spec: {
+              kind: "blob",
+              value: JSON.stringify({
+                openapi: "3.1.0",
+                info: { title: "No paths", version: "1" },
+              }),
+            },
+          },
+        })
+        .pipe(Effect.result);
+      expect(missingPaths._tag).toBe("Failure");
+      yield* http.connections.refresh({
+        params: {
+          owner: "org",
+          integration: slug,
+          name: ConnectionName.make("main"),
+        },
+      });
+      expect(yield* http.tools.list({ query: { integration: slug } })).toHaveLength(1002);
       const intact = yield* http.openapi.updateSpec({
         params: { slug: neighbor },
         payload: {
