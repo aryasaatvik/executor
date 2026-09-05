@@ -152,18 +152,21 @@ export const makeDefaultOpenapiStore = ({ pluginStorage, blobs }: StorageDeps): 
 
   const listRows = (integration: string) =>
     Effect.gen(function* () {
+      const currentPrefix = operationKeyPrefix(integration);
       const current = yield* pluginStorage.list({
         collection: OPERATION_COLLECTION,
-        keyPrefix: operationKeyPrefix(integration),
+        keyPrefix: currentPrefix,
       });
       const legacy = yield* pluginStorage.list({
         collection: OPERATION_COLLECTION,
         keyPrefix: `${integration}.`,
       });
-      return [...current, ...legacy].filter((row) => {
-        const decoded = decodeOperationStorage(row.data);
-        return Option.isSome(decoded) && decoded.value.integration === integration;
-      });
+      return [...current, ...legacy.filter((row) => !row.key.startsWith(currentPrefix))].filter(
+        (row) => {
+          const decoded = decodeOperationStorage(row.data);
+          return Option.isSome(decoded) && decoded.value.integration === integration;
+        },
+      );
     });
 
   const removeOperations = (integration: string) =>

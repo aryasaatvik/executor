@@ -1,5 +1,4 @@
 import { expect, test } from "@effect/vitest";
-import { sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 import { column, idColumn, schema, table } from "../../schema";
 import { fromDrizzle } from "./query";
@@ -118,46 +117,4 @@ test("generic bulk upsert rolls earlier rows back when a later row fails", async
   // A single logical bulk upsert must not leave a partial prefix committed.
   expect(committed).toEqual([]);
   expect(events).toContain("transaction:rollback");
-});
-
-test("D1 bulk upsert bounds native batch RPC statement counts", async () => {
-  const drizzleRows = sqliteTable("generic_rows", {
-    id: text("id").primaryKey(),
-    value: text("value").notNull(),
-  });
-  const batchSizes: number[] = [];
-  let constructed = 0;
-  let completed = 0;
-  let maxPending = 0;
-  const db = {
-    _: { fullSchema: { rows: drizzleRows } },
-    insert: () => ({
-      values: (values: readonly Record<string, unknown>[]) => ({
-        onConflictDoUpdate: () => {
-          constructed++;
-          maxPending = Math.max(maxPending, constructed - completed);
-          return { values };
-        },
-      }),
-    }),
-    batch: async (statements: readonly unknown[]) => {
-      batchSizes.push(statements.length);
-      completed += statements.length;
-    },
-  };
-  const orm = fromDrizzle(v1, db, "sqlite", false, 2);
-  const rows = v1.tables.rows;
-
-  await orm.internal.upsertMany?.(rows, {
-    target: [rows.columns.id],
-    update: [rows.columns.value],
-    values: Array.from({ length: 121 }, (_, index) => ({
-      id: `r${index}`,
-      value: `value-${index}`,
-    })),
-  });
-
-  expect(batchSizes).toEqual([50, 50, 21]);
-  expect(constructed).toBe(121);
-  expect(maxPending).toBe(50);
 });

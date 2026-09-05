@@ -242,6 +242,22 @@ describe("OpenAPI operation store", () => {
           "microsoft_graph.",
         ]).flat(),
       );
+      yield* store.appendOperations("op", [{ integration: "op", toolName: "current", binding }]);
+      yield* pluginStorage.put({
+        owner: "org",
+        collection: "operation",
+        key: "op.legacy",
+        data: { integration: "op", toolName: "legacy", binding: encodeBinding(binding) },
+      });
+      expect((yield* store.listOperations("op")).map((op) => op.toolName)).toEqual([
+        "current",
+        "legacy",
+      ]);
+      yield* store.removeOperations("op");
+      expect(yield* store.listOperations("op")).toEqual([]);
+      expect((yield* store.getOperation("microsoft_graph.other", "legacy"))?.toolName).toBe(
+        "legacy",
+      );
     }),
   );
 });
