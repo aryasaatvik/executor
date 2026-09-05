@@ -59,10 +59,10 @@ import {
 import {
   checkHealthOpenApi,
   compileAndPersistOpenApiSpecStreaming,
-  compileOpenApiSpec,
+  buildDefsJson,
+  compileAndPersistOpenApiOperations,
   invokeOpenApiBackedTool,
   listHealthCheckCandidatesOpenApi,
-  openApiStoredOperationsFromCompiled,
   resolveOpenApiBackedAnnotations,
   resolveOpenApiBackedTools,
   validateOpenApiBackedToolArgs,
@@ -811,9 +811,12 @@ export const openApiPlugin = definePlugin<
           // Resolve URL → text and parse BEFORE opening a transaction. Holding
           // `BEGIN` across a network fetch is the Hyperdrive deadlock path.
           const resolved = yield* resolveSpecForInput(config, httpClientLayer);
-          const compiled = resolved.keepPathItem
-            ? undefined
-            : yield* compileOpenApiSpec(resolved.specText);
+          const document = resolved.keepPathItem ? undefined : yield* parse(resolved.specText);
+          if (document && !document.paths) {
+            return yield* new OpenApiExtractionError({
+              message: "OpenAPI document has no paths defined",
+            });
+          }
           const adapter = yield* resolveSpecFormatAdapter(
             options?.specFormats ?? [],
             config.specFormat,
@@ -934,21 +937,24 @@ export const openApiPlugin = definePlugin<
           // The content-addressed defs blob lets the serve path resolve the
           // shared `definitions` without re-parsing the spec. Same idempotent,
           // outside-the-transaction rationale as the spec blob.
-          if (compiled) {
-            yield* ctx.storage.putDefs(specHash, JSON.stringify(compiled.hoistedDefs));
+          if (document) {
+            yield* ctx.storage.putDefs(specHash, buildDefsJson(document));
           }
 
-          yield* ctx.transaction(
+          const persisted = yield* ctx.transaction(
             Effect.gen(function* () {
               yield* ctx.core.integrations.register({
                 slug,
                 name:
-                  config.name?.trim() || derivedIdentity?.name || compiled?.title || resolvedSlug,
+                  config.name?.trim() ||
+                  derivedIdentity?.name ||
+                  document?.info.title ||
+                  resolvedSlug,
                 description:
                   config.description ??
                   derivedIdentity?.description ??
-                  compiled?.description ??
-                  compiled?.title ??
+                  document?.info.description ??
+                  document?.info.title ??
                   resolvedSlug,
                 config: integrationConfig satisfies OpenApiIntegrationConfig as IntegrationConfig,
                 canRemove: true,
@@ -957,30 +963,24 @@ export const openApiPlugin = definePlugin<
               if (config.healthCheck) {
                 yield* ctx.core.integrations.setHealthCheck(slug, config.healthCheck);
               }
-              if (compiled) {
-                yield* ctx.storage.putOperations(
-                  resolvedSlug,
-                  openApiStoredOperationsFromCompiled(resolvedSlug, compiled),
-                );
-                return compiled.definitions.length;
+              if (document) {
+                return yield* compileAndPersistOpenApiOperations({
+                  doc: document,
+                  integration: resolvedSlug,
+                  storage: ctx.storage,
+                });
               }
-              const persisted = yield* compileAndPersistOpenApiSpecStreaming({
+              return yield* compileAndPersistOpenApiSpecStreaming({
                 specText: resolved.specText,
                 integration: resolvedSlug,
                 storage: ctx.storage,
                 specHash,
                 keepPathItem: resolved.keepPathItem,
               });
-              return persisted.toolCount;
             }),
           );
 
-          const toolCount = compiled
-            ? compiled.definitions.length
-            : yield* ctx.storage
-                .listOperations(resolvedSlug)
-                .pipe(Effect.map((operations) => operations.length));
-          return { slug, toolCount };
+          return { slug, toolCount: persisted.toolCount };
         });
 
       // Update the spec IN PLACE: re-resolve (stored source URL / bundle, or a
@@ -1023,83 +1023,87 @@ export const openApiPlugin = definePlugin<
             });
           }
 
-          // Resolve + compile BEFORE the transaction (same Hyperdrive-deadlock
-          // rule as addSpec: never hold BEGIN across a network fetch).
-          const resolved = yield* resolveSpecForInput(
-            {
-              spec: specInput,
-              specFormat: current.specFormat,
-              specOverrides: nextOverrides,
-              headers: current.headers,
-              queryParams: current.queryParams,
-              baseUrl: current.baseUrl,
-              authenticationTemplate: current.authenticationTemplate,
-            },
-            httpClientLayer,
-          );
-          const compiled = resolved.keepPathItem
-            ? undefined
-            : yield* compileOpenApiSpec(resolved.specText);
-
-          const previousOperations = yield* ctx.storage.listOperations(rawSlug);
-          const previousNames = new Set(previousOperations.map((op) => op.toolName));
-
-          // The resolved spec text lives in the plugin blob store keyed by its
-          // content hash (`spec/<hash>`); the config carries only the hash. Put
-          // the blob outside the transaction - re-puts are idempotent and an
-          // aborted config update just leaves an unreferenced blob.
-          const specHash = yield* sha256Hex(resolved.specText);
-          const sourceSpecHash =
-            nextOverrides.length > 0 ? yield* sha256Hex(resolved.sourceSpecText) : undefined;
-          yield* ctx.core.integrations.authorizeWrite();
-          yield* ctx.storage.putSpec(specHash, resolved.specText);
-          if (sourceSpecHash) {
-            yield* ctx.storage.putSpec(sourceSpecHash, resolved.sourceSpecText);
-          }
-          if (compiled) {
-            yield* ctx.storage.putDefs(specHash, JSON.stringify(compiled.hoistedDefs));
-          }
-
-          const {
-            sourceSpecHash: _currentSourceSpecHash,
-            specOverrides: _currentSpecOverrides,
-            ...currentWithoutOverrides
-          } = current;
-          const nextConfig: OpenApiIntegrationConfig = {
-            ...currentWithoutOverrides,
-            specHash,
-            ...((resolved.specUrl ?? specInputToSpecUrl(specInput)) !== undefined
-              ? { specUrl: resolved.specUrl ?? specInputToSpecUrl(specInput) }
-              : {}),
-            ...(nextOverrides.length > 0 ? { specOverrides: nextOverrides, sourceSpecHash } : {}),
-          };
-
-          yield* ctx.transaction(
-            Effect.gen(function* () {
-              yield* ctx.core.integrations.update(slug, {
-                config: nextConfig satisfies OpenApiIntegrationConfig as IntegrationConfig,
+          const { nextNames, previousNames } = yield* Effect.gen(function* () {
+            // Resolve + parse BEFORE the transaction (same Hyperdrive-deadlock
+            // rule as addSpec: never hold BEGIN across a network fetch).
+            const resolved = yield* resolveSpecForInput(
+              {
+                spec: specInput,
+                specFormat: current.specFormat,
+                specOverrides: nextOverrides,
+                headers: current.headers,
+                queryParams: current.queryParams,
+                baseUrl: current.baseUrl,
+                authenticationTemplate: current.authenticationTemplate,
+              },
+              httpClientLayer,
+            );
+            const document = resolved.keepPathItem ? undefined : yield* parse(resolved.specText);
+            if (document && !document.paths) {
+              return yield* new OpenApiExtractionError({
+                message: "OpenAPI document has no paths defined",
               });
-              if (compiled) {
-                yield* ctx.storage.putOperations(
-                  rawSlug,
-                  openApiStoredOperationsFromCompiled(rawSlug, compiled),
-                );
-              } else {
-                yield* compileAndPersistOpenApiSpecStreaming({
-                  specText: resolved.specText,
-                  integration: rawSlug,
-                  storage: ctx.storage,
-                  specHash,
-                  keepPathItem: resolved.keepPathItem,
-                });
-              }
-            }),
-          );
+            }
 
-          const nextOperations = compiled
-            ? openApiStoredOperationsFromCompiled(rawSlug, compiled)
-            : yield* ctx.storage.listOperations(rawSlug);
-          const nextNames = new Set(nextOperations.map((op) => op.toolName));
+            const previousNames = new Set(
+              (yield* ctx.storage.listOperations(rawSlug)).map((op) => op.toolName),
+            );
+
+            // The resolved spec text lives in the plugin blob store keyed by its
+            // content hash (`spec/<hash>`); the config carries only the hash. Put
+            // the blob outside the transaction - re-puts are idempotent and an
+            // aborted config update just leaves an unreferenced blob.
+            const specHash = yield* sha256Hex(resolved.specText);
+            const sourceSpecHash =
+              nextOverrides.length > 0 ? yield* sha256Hex(resolved.sourceSpecText) : undefined;
+            yield* ctx.core.integrations.authorizeWrite();
+            yield* ctx.storage.putSpec(specHash, resolved.specText);
+            if (sourceSpecHash) {
+              yield* ctx.storage.putSpec(sourceSpecHash, resolved.sourceSpecText);
+            }
+            if (document) {
+              yield* ctx.storage.putDefs(specHash, buildDefsJson(document));
+            }
+
+            const {
+              sourceSpecHash: _currentSourceSpecHash,
+              specOverrides: _currentSpecOverrides,
+              ...currentWithoutOverrides
+            } = current;
+            const nextConfig: OpenApiIntegrationConfig = {
+              ...currentWithoutOverrides,
+              specHash,
+              ...((resolved.specUrl ?? specInputToSpecUrl(specInput)) !== undefined
+                ? { specUrl: resolved.specUrl ?? specInputToSpecUrl(specInput) }
+                : {}),
+              ...(nextOverrides.length > 0 ? { specOverrides: nextOverrides, sourceSpecHash } : {}),
+            };
+
+            const persisted = yield* ctx.transaction(
+              Effect.gen(function* () {
+                yield* ctx.core.integrations.update(slug, {
+                  config: nextConfig satisfies OpenApiIntegrationConfig as IntegrationConfig,
+                });
+                if (document) {
+                  return yield* compileAndPersistOpenApiOperations({
+                    doc: document,
+                    integration: rawSlug,
+                    storage: ctx.storage,
+                  });
+                } else {
+                  return yield* compileAndPersistOpenApiSpecStreaming({
+                    specText: resolved.specText,
+                    integration: rawSlug,
+                    storage: ctx.storage,
+                    specHash,
+                    keepPathItem: resolved.keepPathItem,
+                  });
+                }
+              }),
+            );
+
+            return { nextNames: new Set(persisted.toolNames), previousNames };
+          });
 
           // Rebuild each connection's tool rows from the new spec. Outside the
           // transaction: refresh opens its own, and a half-refreshed catalog

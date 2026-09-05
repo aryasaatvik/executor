@@ -50,6 +50,7 @@ export default defineConfig({
           "scenarios/browser-approval.test.ts",
           "scenarios/mcp-approval-persistence.test.ts",
           "scenarios/microsoft-graph-full.test.ts",
+          "scenarios/openapi-large-catalog.test.ts",
           "scenarios/toolkits-mcp.test.ts",
           "cloudflare/**/*.test.ts",
         ],

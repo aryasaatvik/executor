@@ -39,6 +39,7 @@ import {
 } from "@executor-js/sdk/testing";
 
 import { openApiPlugin } from "./plugin";
+import { makeDefaultOpenapiStore } from "./store";
 import { type AuthenticationInput } from "./types";
 import {
   addOpenApiTestConnection,
@@ -1191,7 +1192,26 @@ paths:
     "addSpec accepts Microsoft Graph-scale operation catalogs from one spec",
     () =>
       Effect.gen(function* () {
-        const executor = yield* createExecutor(makeTestConfig({ plugins: testPlugins() }));
+        const batchSizes: number[] = [];
+        const executor = yield* createExecutor(
+          makeTestConfig({
+            plugins: [
+              openApiPlugin({
+                storage: (deps) =>
+                  makeDefaultOpenapiStore({
+                    ...deps,
+                    pluginStorage: {
+                      ...deps.pluginStorage,
+                      putMany: (input) => {
+                        batchSizes.push(input.entries.length);
+                        return deps.pluginStorage.putMany(input);
+                      },
+                    },
+                  }),
+              }),
+            ] as const,
+          }),
+        );
 
         const added = yield* executor.openapi.addSpec({
           spec: { kind: "blob", value: microsoftGraphScaleSpecText() },
@@ -1200,6 +1220,21 @@ paths:
         });
 
         expect(added.toolCount).toBe(MICROSOFT_GRAPH_V1_OPERATION_COUNT);
+        expect(batchSizes.length).toBeGreaterThan(1);
+        expect(Math.max(...batchSizes)).toBeLessThanOrEqual(500);
+        expect(batchSizes.reduce((sum, count) => sum + count, 0)).toBe(
+          MICROSOFT_GRAPH_V1_OPERATION_COUNT,
+        );
+        batchSizes.length = 0;
+        const updated = yield* executor.openapi.updateSpec("microsoft_graph_scale", {
+          spec: { kind: "blob", value: microsoftGraphScaleSpecText() },
+        });
+        expect(updated.toolCount).toBe(MICROSOFT_GRAPH_V1_OPERATION_COUNT);
+        expect(batchSizes.length).toBeGreaterThan(1);
+        expect(Math.max(...batchSizes)).toBeLessThanOrEqual(500);
+        expect(batchSizes.reduce((sum, count) => sum + count, 0)).toBe(
+          MICROSOFT_GRAPH_V1_OPERATION_COUNT,
+        );
       }),
     30_000,
   );

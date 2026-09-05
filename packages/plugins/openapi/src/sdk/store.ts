@@ -84,8 +84,11 @@ const stableKeyHash = (value: string): string => {
   return hash.toString(36).padStart(13, "0");
 };
 
+const operationKeyPrefix = (integration: string): string =>
+  `${OPERATION_KEY_VERSION}.${stableKeyHash(integration)}.`;
+
 const operationKey = (integration: string, toolName: string): string =>
-  `${OPERATION_KEY_VERSION}.${stableKeyHash(integration)}.${stableKeyHash(toolName)}`;
+  `${operationKeyPrefix(integration)}${stableKeyHash(toolName)}`;
 
 const legacyOperationKey = (integration: string, toolName: string): string =>
   `${integration}.${toolName}`;
@@ -148,13 +151,23 @@ export const makeDefaultOpenapiStore = ({ pluginStorage, blobs }: StorageDeps): 
   });
 
   const listRows = (integration: string) =>
-    pluginStorage
-      .list({ collection: OPERATION_COLLECTION })
-      .pipe(
-        Effect.map((rows: readonly PluginStorageEntry[]) =>
-          rows.filter((row) => rowToOperation(row)?.integration === integration),
-        ),
+    Effect.gen(function* () {
+      const currentPrefix = operationKeyPrefix(integration);
+      const current = yield* pluginStorage.list({
+        collection: OPERATION_COLLECTION,
+        keyPrefix: currentPrefix,
+      });
+      const legacy = yield* pluginStorage.list({
+        collection: OPERATION_COLLECTION,
+        keyPrefix: `${integration}.`,
+      });
+      return [...current, ...legacy.filter((row) => !row.key.startsWith(currentPrefix))].filter(
+        (row) => {
+          const decoded = decodeOperationStorage(row.data);
+          return Option.isSome(decoded) && decoded.value.integration === integration;
+        },
       );
+    });
 
   const removeOperations = (integration: string) =>
     Effect.gen(function* () {
