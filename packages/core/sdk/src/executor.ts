@@ -2389,7 +2389,7 @@ const makePluginStorageFacade = (input: {
     list: (storageInput) =>
       Effect.gen(function* () {
         const rows = yield* input.core.findMany("plugin_storage", {
-          where: whereFor(storageInput.collection),
+          where: whereForPrefix(storageInput.collection, storageInput.keyPrefix),
         });
         return sortByOwnerPrecedence(rows)
           .filter((row) =>

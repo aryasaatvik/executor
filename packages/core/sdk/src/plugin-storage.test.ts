@@ -76,6 +76,8 @@ const executionHistoryPlugin = definePlugin(() => ({
         owner,
         entries: keys.map((key) => ({ collection: toolCalls.name, key })),
       }),
+    list: (keyPrefix?: string) =>
+      ctx.storage.pluginStorage.list({ collection: toolCalls.name, keyPrefix }),
     get: (key: string) => ctx.storage.toolCalls.get({ key }),
     getMany: (keys: readonly string[]) => ctx.storage.toolCalls.getMany({ keys }),
     getForOwner: (owner: Owner, key: string) => ctx.storage.toolCalls.getForOwner({ owner, key }),
@@ -164,6 +166,66 @@ const failPluginStorageBulkWriteAfterFirstRow = (db: FumaDb): FumaDb => {
 };
 
 describe("plugin storage collections", () => {
+  it.effect("filters list prefixes in the database before materializing unrelated rows", () =>
+    Effect.gen(function* () {
+      const config = makeTestConfig({
+        backend: "sqlite",
+        plugins: [executionHistoryPlugin] as const,
+      });
+      const reads: number[] = [];
+      const wrap = (db: FumaDb): FumaDb =>
+        new Proxy(db, {
+          get(target, property, receiver) {
+            if (property === "withContext") {
+              const withContext = target.withContext;
+              return withContext === undefined
+                ? undefined
+                : (context: unknown) => wrap(withContext(context));
+            }
+            if (property === "findMany") {
+              const findMany: FumaDb["findMany"] = async (table, options) => {
+                const rows = await target.findMany(table, options);
+                if (table === "plugin_storage") reads.push(rows.length);
+                return rows;
+              };
+              return findMany;
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+      const executor = yield* Effect.acquireRelease(
+        createExecutor({ ...config, db: wrap(config.db) }),
+        (instance) =>
+          instance
+            .close()
+            .pipe(Effect.orDie, Effect.ensuring(Effect.promise(() => config.testDb.close()))),
+      );
+      const data = call({
+        runId: "run",
+        toolId: "tool",
+        status: "ok",
+        startedAt: "2026-01-01T00:00:00Z",
+      });
+      yield* executor.executionHistory.recordMany("org", [
+        { key: "selected.one", data },
+        ...Array.from({ length: 100 }, (_, i) => ({ key: `unrelated.${i}`, data })),
+      ]);
+      reads.length = 0;
+      expect((yield* executor.executionHistory.list("selected.")).map((row) => row.key)).toEqual([
+        "selected.one",
+      ]);
+      expect(reads).toEqual([1]);
+      yield* executor.executionHistory.recordMany("org", [
+        { key: "literal_%.one", data },
+        { key: "literalXX.one", data },
+        { key: "LITERAL_%.one", data },
+      ]);
+      expect((yield* executor.executionHistory.list("literal_%.")).map((row) => row.key)).toEqual([
+        "literal_%.one",
+      ]);
+    }),
+  );
+
   it.effect("queries declared indexes through the executor's SQLite FumaDB target", () =>
     Effect.gen(function* () {
       const executor = yield* makeTestExecutor({
