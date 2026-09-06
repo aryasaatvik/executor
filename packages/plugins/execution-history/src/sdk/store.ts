@@ -1,4 +1,4 @@
-import { Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Predicate, Schema, Semaphore } from "effect";
 
 import {
   type ExecutionEvent,
@@ -45,6 +45,18 @@ import { type RunDetail, RunDetailFromJsonString } from "./detail-types";
 // shows its code immediately and survives a restart); on InteractionStarted the
 // "waiting_for_interaction" row.
 //
+// Stale-run sweep: a run whose finish event never arrived (the host evicted
+// the isolate, or the observer was torn down with it) would otherwise sit at
+// "running" forever. Each ExecutionStarted closes a bounded batch of `running`
+// rows older than the configured cutoff as `interrupted`, so the list heals
+// itself the next time the host runs anything. Three guards keep it from
+// touching a live run: a row whose buffer is still in this process is alive
+// by definition and skipped; the cutoff is far above the sandbox bound and
+// host-configurable for longer sandboxes; and every status transition (sweep
+// and finish alike) takes the same in-process lock and re-reads the row, so a
+// finish that lands while the sweep is deciding always wins. Waiting runs are
+// never swept: an approval can legitimately stay open for a long time.
+//
 // Every `unknown` payload is serialized to a JSON string via Effect Schema
 // (`Schema.UnknownFromJsonString`); the detail object round-trips via
 // `Schema.fromJsonString` — no raw `JSON.stringify`/`JSON.parse` in domain code.
@@ -87,6 +99,26 @@ const logCountsOf = (logs: unknown): { errors: number; warns: number } => {
   }
   return { errors, warns };
 };
+
+/** Default age after which a `running` row is treated as abandoned by the
+ *  sweep. Six times the sandbox's default 5-minute execution bound; a host
+ *  that raises `EXECUTOR_SANDBOX_TIMEOUT_MS` should raise
+ *  `staleRunningAfterMs` with it. */
+export const DEFAULT_STALE_RUNNING_AFTER_MS = 30 * 60_000;
+
+export interface ExecutionHistoryStoreOptions {
+  /** Age in ms after which a `running` row with no live buffer in this process
+   *  is closed as `interrupted`. Defaults to
+   *  {@link DEFAULT_STALE_RUNNING_AFTER_MS}. */
+  readonly staleRunningAfterMs?: number;
+}
+
+/** Rows closed per sweep. Bounded so one ExecutionStarted never pays for an
+ *  unbounded backlog; a large backlog drains across successive runs. */
+const STALE_SWEEP_BATCH = 25;
+
+const staleRunErrorText = (ageMs: number): string =>
+  `Run never reported completion; marked interrupted after ${Math.round(ageMs / 60_000)} min.`;
 
 /** R2 blob key for a run's detail object. */
 const detailBlobKey = (executionId: string): string => `run-detail/${executionId}`;
@@ -243,6 +275,7 @@ export interface ExecutionHistoryDetail {
    *  stub/empty values. */
   readonly code: string;
   readonly resultJson: string | null;
+  readonly outputJson: string | null;
   readonly errorText: string | null;
   readonly logsJson: string | null;
   readonly triggerMetaJson: string | null;
@@ -326,12 +359,19 @@ const chooseBucketMs = (timeRange: { from?: number; to?: number } | undefined): 
   );
 };
 
-export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistoryStore => {
+export const makeExecutionHistoryStore = (
+  deps: StorageDeps,
+  options?: ExecutionHistoryStoreOptions,
+): ExecutionHistoryStore => {
   const pluginStorage: PluginStorageFacade = deps.pluginStorage;
   const runsC: PluginStorageCollectionFacade<typeof runs> = pluginStorage.collection(runs);
   const blobs = deps.blobs;
+  const staleRunningAfterMs = options?.staleRunningAfterMs ?? DEFAULT_STALE_RUNNING_AFTER_MS;
 
   const buffers = new Map<string, RunBuffer>();
+  // Serializes terminal status transitions (finish writes and sweep closes) so
+  // the sweep's read-check-write cannot interleave with a concurrent finish.
+  const terminalWrites = Semaphore.makeUnsafe(1);
 
   const putRun = (owner: Owner, row: RunRow): Effect.Effect<void, StorageFailure> =>
     runsC.put({ owner, key: row.executionId, data: row }).pipe(Effect.asVoid);
@@ -359,6 +399,63 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       .get(detailBlobKey(executionId))
       .pipe(Effect.map((raw) => (raw === null ? Option.none<RunDetail>() : decodeDetail(raw))));
 
+  /** Close abandoned `running` rows for this owner as `interrupted`. Best
+   *  effort and bounded; the caller ignores its failure so a broken sweep can
+   *  never block recording the run that triggered it. */
+  const sweepStaleRuns = (owner: Owner, now: number): Effect.Effect<void, StorageFailure> =>
+    Effect.gen(function* () {
+      const cutoff = now - staleRunningAfterMs;
+      const candidates = yield* runsC.query({
+        where: { status: "running", startedAt: { lt: cutoff } },
+        orderBy: [{ field: "startedAt", direction: "asc" }],
+        limit: STALE_SWEEP_BATCH,
+      });
+      yield* Effect.forEach(
+        candidates,
+        (entry) =>
+          // Only the owner's own rows are visible through the scoped facade, but
+          // the write path still names the owner explicitly.
+          entry.owner !== owner || buffers.has(entry.data.executionId)
+            ? Effect.void
+            : closeStaleRun(owner, entry.data.executionId, now),
+        { discard: true },
+      );
+    });
+
+  /** Close one candidate under the terminal-write lock, re-reading the row
+   *  first: if a finish landed since the query (or a buffer appeared), the
+   *  row is no longer `running` and is left alone. */
+  const closeStaleRun = (
+    owner: Owner,
+    executionId: string,
+    now: number,
+  ): Effect.Effect<void, StorageFailure> =>
+    terminalWrites.withPermits(1)(
+      Effect.gen(function* () {
+        if (buffers.has(executionId)) return;
+        const current = yield* runsC.get({ key: executionId });
+        if (current === null || current.data.status !== "running") return;
+        const row = current.data;
+        const errorText = staleRunErrorText(now - row.startedAt);
+        const stub = Option.getOrElse(yield* readDetail(executionId), () => ({
+          code: "",
+          resultJson: null,
+          outputJson: null,
+          logsJson: null,
+          triggerMetaJson: null,
+          toolCalls: [],
+          interactions: [],
+        }));
+        yield* putRun(owner, {
+          ...row,
+          status: "interrupted",
+          completedAt: now,
+          durationMs: now - row.startedAt,
+        });
+        yield* putDetail(owner, executionId, { ...stub, errorText });
+      }),
+    );
+
   const onExecutionStarted = (event: Extract<ExecutionEvent, { _tag: "ExecutionStarted" }>) => {
     const owner = ownerOf(event.owner);
     const startedAt = event.startedAt.getTime();
@@ -385,6 +482,11 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     });
     return Effect.all(
       [
+        // Isolated: a sweep failure must never cost this run its start record.
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => sweepStaleRuns(owner, now)),
+          Effect.ignore,
+        ),
         putRun(owner, {
           executionId: event.executionId,
           status: "running",
@@ -408,6 +510,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         putDetail(owner, event.executionId, {
           code: event.code,
           resultJson: null,
+          outputJson: null,
           errorText: null,
           logsJson: null,
           triggerMetaJson,
@@ -581,6 +684,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         ? {
             code: buffer.code,
             resultJson: toJson(event.result),
+            outputJson: toJson(event.output),
             errorText: event.error ?? null,
             logsJson: toJson(event.logs),
             triggerMetaJson: buffer.triggerMetaJson,
@@ -616,6 +720,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
               return {
                 code: stub?.code ?? "",
                 resultJson: toJson(event.result),
+                outputJson: toJson(event.output),
                 errorText: event.error ?? null,
                 logsJson: toJson(event.logs),
                 triggerMetaJson: stub?.triggerMetaJson ?? null,
@@ -627,6 +732,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
 
       yield* putDetail(owner, event.executionId, detail);
     }).pipe(
+      // Under the same lock as the sweep, so the two row writes never
+      // interleave: whichever is decided second sees the other's status.
+      terminalWrites.withPermits(1),
       // Always release the buffer, even if a write fails or is interrupted —
       // otherwise a StorageFailure during the flush leaks the RunBuffer forever.
       Effect.ensuring(Effect.sync(() => buffers.delete(event.executionId))),
@@ -872,6 +980,7 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
         run: run.data,
         code: detail?.code ?? "",
         resultJson: detail?.resultJson ?? null,
+        outputJson: detail?.outputJson ?? null,
         errorText: detail?.errorText ?? null,
         logsJson: detail?.logsJson ?? null,
         triggerMetaJson: detail?.triggerMetaJson ?? null,
