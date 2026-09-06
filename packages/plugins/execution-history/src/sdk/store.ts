@@ -380,8 +380,8 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
       .pipe(Effect.map((raw) => (raw === null ? Option.none<RunDetail>() : decodeDetail(raw))));
 
   /** Close abandoned `running` rows for this owner as `interrupted`. Best
-   *  effort and bounded; errors surface as StorageFailure like any other write
-   *  and are swallowed by the observer wrapper upstream. */
+   *  effort and bounded; the caller ignores its failure so a broken sweep can
+   *  never block recording the run that triggered it. */
   const sweepStaleRuns = (owner: Owner, now: number): Effect.Effect<void, StorageFailure> =>
     Effect.gen(function* () {
       const cutoff = now - STALE_RUNNING_AFTER_MS;
@@ -457,7 +457,11 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
     });
     return Effect.all(
       [
-        Clock.currentTimeMillis.pipe(Effect.flatMap((now) => sweepStaleRuns(owner, now))),
+        // Isolated: a sweep failure must never cost this run its start record.
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((now) => sweepStaleRuns(owner, now)),
+          Effect.ignore,
+        ),
         putRun(owner, {
           executionId: event.executionId,
           status: "running",
