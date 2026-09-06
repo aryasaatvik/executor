@@ -256,6 +256,7 @@ export {
   type ToolCallStatus,
   type InteractionStatus,
   type ExecutionStatus,
+  type ExecutionOutputItem,
   type ExecutionEvent,
   type ExecutionObserver,
 } from "./execution-observer";
