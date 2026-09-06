@@ -1,3 +1,7 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 
@@ -14,11 +18,12 @@ import {
   ToolAddress,
   ToolCallFinished,
   ToolCallStarted,
+  createExecutor,
 } from "@executor-js/sdk";
-import { makeTestExecutor } from "@executor-js/sdk/testing";
+import { makeTestConfig, makeTestExecutor } from "@executor-js/sdk/testing";
 
 import { executionHistoryPlugin } from "./plugin";
-import { STALE_RUNNING_AFTER_MS } from "./store";
+import { DEFAULT_STALE_RUNNING_AFTER_MS } from "./store";
 
 const owner = { tenant: Tenant.make("tenant_test"), subject: Subject.make("subject_test") };
 
@@ -207,21 +212,46 @@ describe("execution-history store", () => {
   // `it.live`: the sweep reads the Effect Clock, which `it.effect` pins to 0.
   it.live("sweeps abandoned running rows as interrupted when a new run starts", () =>
     Effect.gen(function* () {
-      const executor = yield* makeTestExecutor({
-        backend: "sqlite",
-        plugins: [executionHistoryPlugin()] as const,
-      });
+      const dataDir = mkdtempSync(join(tmpdir(), "execution-history-sweep-"));
+      const executor = yield* createExecutor(
+        makeTestConfig({
+          backend: "sqlite",
+          dataDir,
+          plugins: [executionHistoryPlugin()] as const,
+        }),
+      );
       const now = Date.now();
-      const staleStart = new Date(now - STALE_RUNNING_AFTER_MS - 60_000);
+      const staleStart = new Date(now - DEFAULT_STALE_RUNNING_AFTER_MS - 60_000);
       const freshStart = new Date(now - 1_000);
 
-      // One abandoned run (never finishes), one live run started recently, and
-      // one waiting run older than the cutoff that must be left alone.
-      yield* executor.executionHistory.handleEvent(
+      // One abandoned run (its buffer is gone, as after a host restart), one
+      // old-but-live run whose buffer is still in this process, one live run
+      // started recently, and one waiting run older than the cutoff. Only the
+      // first may be swept.
+      // A second executor over the SAME on-disk database plays the previous
+      // process: it recorded the run's start and then died, so the store under
+      // test holds no buffer for it.
+      const previousProcess = yield* createExecutor(
+        makeTestConfig({
+          backend: "sqlite",
+          dataDir,
+          plugins: [executionHistoryPlugin()] as const,
+        }),
+      );
+      yield* previousProcess.executionHistory.handleEvent(
         new ExecutionStarted({
           executionId: ExecutionId.make("exec_stale"),
           owner,
           code: "sleep forever",
+          startedAt: staleStart,
+        }),
+      );
+      expect((yield* executor.executionHistory.get("exec_stale"))?.run.status).toBe("running");
+      yield* executor.executionHistory.handleEvent(
+        new ExecutionStarted({
+          executionId: ExecutionId.make("exec_old_live"),
+          owner,
+          code: "long but alive",
           startedAt: staleStart,
         }),
       );
