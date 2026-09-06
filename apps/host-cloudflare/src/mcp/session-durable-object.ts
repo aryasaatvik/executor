@@ -151,7 +151,9 @@ export class McpSessionDO extends McpAgentSessionDOBase<CloudflareEnv, CfSession
         sessionMeta.organizationId,
         sessionMeta.organizationName,
         { mcpResource: sessionMeta.resource, orgWrites: "request" },
-      ).pipe(Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle)));
+      ).pipe(
+        Effect.provide(makeCloudflareExecutionStackLayer(config, dbHandle, self.cfEnv.ANALYTICS)),
+      );
       // Browser elicitation mode (the base owns the approval store + the HTTP
       // approval RPCs): a gated execution pauses and returns an approvalUrl into
       // the console resume page. The URL origin is the create request's origin
