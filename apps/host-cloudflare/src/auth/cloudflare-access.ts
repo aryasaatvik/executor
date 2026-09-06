@@ -77,7 +77,7 @@ export const principalFromAccessClaims = (
         avatarUrl: null,
         roles: ["admin", ...groups],
         orgRoleModel: "organization",
-        orgRole: isAdmin ? "admin" : "member",
+        orgRole: "admin",
         actor,
       };
     }
@@ -92,7 +92,7 @@ export const principalFromAccessClaims = (
       avatarUrl: null,
       roles: groups.length > 0 ? groups : ["member"],
       orgRoleModel: "organization",
-      orgRole: isAdmin ? "admin" : "member",
+      orgRole: "member",
       actor,
     };
   }
