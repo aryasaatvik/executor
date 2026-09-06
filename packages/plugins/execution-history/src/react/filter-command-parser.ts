@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Pure parser for the runs filter command palette. Splits a free-text query
 // into `key:value` tokens and produces a partial filter set. Adapted to the
-// plugin's contract: only the 4 statuses, no tool/code/duration facets. The
+// plugin's contract: only the 5 statuses, no tool/code/duration facets. The
 // keys are status, trigger, interaction, approval, after, and before.
 //
 // Parsing is forgiving by design: unknown keys, empty values, and unparsable
@@ -25,7 +25,7 @@ export interface FilterKey {
 }
 
 export const FILTER_KEYS: readonly FilterKey[] = [
-  { key: "status", hint: "completed,failed,running,waiting" },
+  { key: "status", hint: "completed,failed,interrupted,running,waiting" },
   { key: "trigger", hint: "mcp, http, cli, manual" },
   { key: "interaction", hint: "true | false" },
   { key: "approval", hint: "form | url" },

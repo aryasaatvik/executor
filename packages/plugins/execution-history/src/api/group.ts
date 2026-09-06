@@ -94,6 +94,7 @@ export const RunDetailResponse = Schema.Struct({
   run: RunRow,
   code: Schema.String,
   resultJson: Schema.NullOr(Schema.String),
+  outputJson: Schema.NullOr(Schema.String),
   errorText: Schema.NullOr(Schema.String),
   logsJson: Schema.NullOr(Schema.String),
   triggerMetaJson: Schema.NullOr(Schema.String),

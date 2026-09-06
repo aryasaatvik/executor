@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { InteractionRow, ToolCallRow } from "./collections";
 
@@ -18,6 +18,13 @@ import { InteractionRow, ToolCallRow } from "./collections";
 export const RunDetail = Schema.Struct({
   code: Schema.String,
   resultJson: Schema.NullOr(Schema.String),
+  // Everything the code sent to the user through `emit()`, serialized as a
+  // JSON array of `{ type: "content" | "file", ... }` items. Optional-key with
+  // a decoding default so detail objects written before the field existed
+  // still decode (see the `actor*` note on `RunRow`).
+  outputJson: Schema.optional(Schema.NullOr(Schema.String)).pipe(
+    Schema.withDecodingDefaultType(Effect.succeed(null)),
+  ),
   errorText: Schema.NullOr(Schema.String),
   logsJson: Schema.NullOr(Schema.String),
   triggerMetaJson: Schema.NullOr(Schema.String),
