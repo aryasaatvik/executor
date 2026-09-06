@@ -3589,6 +3589,27 @@ describe("health probe gate lifecycle", () => {
     }),
   );
 
+  it.live("a detached probe remains interruptible and releases its gate after timeout", () =>
+    Effect.gen(function* () {
+      let firstProbe = true;
+      const { executor, counters } = yield* makeHealthHarness({
+        probe: Effect.suspend(() => {
+          if (firstProbe) {
+            firstProbe = false;
+            return Effect.never.pipe(Effect.timeout("10 millis"));
+          }
+          return Effect.succeed({ status: "healthy" as const, checkedAt: Date.now() });
+        }),
+      });
+      const ref = { owner: "org", integration: INTEG, name: ConnectionName.make("main") } as const;
+      const first = yield* executor.connections.checkHealth(ref).pipe(Effect.exit);
+      expect(Exit.isFailure(first)).toBe(true);
+      const next = yield* executor.connections.checkHealth(ref);
+      expect(next.status).toBe("healthy");
+      expect(counters.probes).toBe(2);
+    }),
+  );
+
   it.effect("a failed probe clears its gate entry for the next check", () =>
     Effect.gen(function* () {
       let firstProbe = true;
