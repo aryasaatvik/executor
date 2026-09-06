@@ -86,6 +86,7 @@ const makeStubExtension = (captured: {
             run: runRow({}),
             code: "noop",
             resultJson: null,
+            outputJson: null,
             errorText: null,
             logsJson: null,
             triggerMetaJson: null,

@@ -2,9 +2,9 @@ import type { RunStatus } from "../sdk/collections";
 
 // ---------------------------------------------------------------------------
 // Status + trigger presentation constants (no JSX) shared across the runs UI.
-// The plugin's RunStatus is the 4-value lifecycle (running /
-// waiting_for_interaction / completed / failed) — the inline prototype's
-// pending/cancelled states don't exist in this data model.
+// The plugin's RunStatus is the 5-value lifecycle (running /
+// waiting_for_interaction / completed / failed / interrupted) — the inline
+// prototype's pending/cancelled states don't exist in this data model.
 // ---------------------------------------------------------------------------
 
 /** Canonical render order (most "settled" first) for facets + chart stacking. */
@@ -13,6 +13,7 @@ export const STATUS_ORDER: readonly RunStatus[] = [
   "running",
   "waiting_for_interaction",
   "failed",
+  "interrupted",
 ];
 
 export const STATUS_LABELS: Record<RunStatus, string> = {
@@ -20,6 +21,7 @@ export const STATUS_LABELS: Record<RunStatus, string> = {
   waiting_for_interaction: "waiting",
   completed: "completed",
   failed: "failed",
+  interrupted: "interrupted",
 };
 
 export interface StatusTone {
@@ -58,6 +60,14 @@ export const STATUS_TONES: Record<RunStatus, StatusTone> = {
     badge: "border-destructive/30 bg-destructive/10 text-destructive",
     pulse: false,
   },
+  // Terminal but not a code failure: torn down from outside, or closed by the
+  // stale-run sweep. Neutral zinc so it reads as "ended", not "broke".
+  interrupted: {
+    dot: "bg-zinc-500",
+    text: "text-zinc-600 dark:text-zinc-300",
+    badge: "border-zinc-500/30 bg-zinc-500/10 text-zinc-700 dark:text-zinc-300",
+    pulse: false,
+  },
 };
 
 export const statusTone = (status: RunStatus): StatusTone => STATUS_TONES[status];
@@ -68,6 +78,7 @@ export const STATUS_CHART_HEX: Record<RunStatus, string> = {
   running: "#0ea5e9",
   waiting_for_interaction: "#f59e0b",
   failed: "#ef4444",
+  interrupted: "#71717a",
 };
 
 export interface TriggerTone {

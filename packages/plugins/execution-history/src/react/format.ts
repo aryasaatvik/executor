@@ -1,7 +1,7 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { RunStatus, ToolCallStatus } from "../sdk/collections";
+import type { RunStatus, ToolCallRow, ToolCallStatus } from "../sdk/collections";
 import { STATUS_LABELS } from "./status";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +23,61 @@ export const prettyJson = (raw: string | null): string | null => {
     onSome: (value) => JSON.stringify(value, null, 2),
   });
 };
+
+/** The engine's `ToolResult` failure envelope: `{ ok: false, error }`. Only
+ *  the fields the drawer needs; extra keys are ignored. */
+const decodeFailedEnvelope = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      ok: Schema.Literal(false),
+      error: Schema.Struct({ code: Schema.String, message: Schema.String }),
+    }),
+  ),
+);
+
+/** Effective outcome of a tool call. Rows recorded before the engine mapped
+ *  `ToolResult.fail` envelopes to failed calls carry `status: "completed"` with
+ *  the failure sitting in `resultJson`; derive the failure here so history
+ *  reads the same for old and new rows. */
+export const toolCallOutcome = (
+  call: Pick<ToolCallRow, "status" | "resultJson" | "errorText">,
+): { readonly status: ToolCallStatus; readonly errorText: string | null } => {
+  if (call.status !== "completed" || call.resultJson === null) {
+    return { status: call.status, errorText: call.errorText };
+  }
+  return Option.match(decodeFailedEnvelope(call.resultJson), {
+    onNone: () => ({ status: call.status, errorText: call.errorText }),
+    onSome: (envelope) => ({
+      status: "failed",
+      errorText: `${envelope.error.code}: ${envelope.error.message}`,
+    }),
+  });
+};
+
+/** Items the code sent through `emit()`, decoded from the stored JSON array.
+ *  `content` items carry their value; `file` items carry the file reference. */
+export type OutputItem =
+  | { readonly type: "content"; readonly content: unknown }
+  | { readonly type: "file"; readonly file: unknown };
+
+const decodeOutputItems = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Union([
+        Schema.Struct({ type: Schema.Literal("content"), content: Schema.Unknown }),
+        Schema.Struct({ type: Schema.Literal("file"), file: Schema.Unknown }),
+      ]),
+    ),
+  ),
+);
+
+export const outputItems = (raw: string | null): readonly OutputItem[] =>
+  !raw
+    ? []
+    : Option.match(decodeOutputItems(raw), {
+        onNone: () => [],
+        onSome: (value) => value,
+      });
 
 export const logLines = (raw: string | null): readonly string[] =>
   !raw
