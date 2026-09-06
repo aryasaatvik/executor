@@ -95,6 +95,36 @@ const instrumentTransactions = (
   return wrap(db);
 };
 
+const instrumentBulkWrites = (
+  db: FumaDb,
+  onUpsertMany: (table: string, rowCount: number) => void,
+): FumaDb => {
+  const wrap = (inner: FumaDb): FumaDb =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === "withContext") {
+          return (context: unknown) =>
+            wrap((target.withContext as (c: unknown) => FumaDb)(context));
+        }
+        if (prop === "transaction") {
+          return (run: Parameters<FumaDb["transaction"]>[0]) =>
+            target.transaction((tx) => run(wrap(tx)));
+        }
+        if (prop === "upsertMany") {
+          return async (
+            table: string,
+            options: { readonly values: readonly Record<string, unknown>[] },
+          ) => {
+            onUpsertMany(table, options.values.length);
+            return target.upsertMany(table, options as never);
+          };
+        }
+        return Reflect.get(target, prop);
+      },
+    });
+  return wrap(db);
+};
+
 const ConnectionListHealthOutput = Schema.Struct({
   connections: Schema.Array(Schema.Struct({ lastHealth: Schema.NullOr(HealthCheckResult) })),
 });
@@ -1839,6 +1869,162 @@ describe("connections.refresh", () => {
         name: ConnectionName.make("main"),
       });
       expect(tools.map((t) => String(t.name)).sort()).toEqual(["deploy", "list"]);
+    }),
+  );
+
+  it.effect("does not rewrite an unchanged catalog", () =>
+    Effect.gen(function* () {
+      const writes: Array<{ readonly table: string; readonly rowCount: number }> = [];
+      const base = makeTestConfig({ plugins: [demoPlugin] as const });
+      const executor = yield* createExecutor({
+        ...base,
+        db: instrumentBulkWrites(base.db, (table, rowCount) => {
+          writes.push({ table, rowCount });
+        }),
+      });
+      yield* executor.demo.seed();
+      yield* executor.connections.create({
+        owner: "org",
+        name: ConnectionName.make("main"),
+        integration: INTEG,
+        template: TEMPLATE,
+        value: "v",
+      });
+
+      writes.length = 0;
+      const tools = yield* executor.connections.refresh({
+        owner: "org",
+        integration: INTEG,
+        name: ConnectionName.make("main"),
+      });
+
+      expect(tools).toHaveLength(2);
+      expect(writes).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "bulk-replaces a catalog with more than 3,000 tools",
+    () =>
+      Effect.gen(function* () {
+        const toolCount = 3_001;
+        const tools = Array.from({ length: toolCount }, (_, index) => ({
+          name: ToolName.make(`tool${String(index).padStart(4, "0")}`),
+          description: `Tool ${index}`,
+          inputSchema: { $ref: `#/$defs/Def${index}` },
+        }));
+        const definitions = Object.fromEntries(
+          Array.from({ length: toolCount }, (_, index) => [
+            `Def${index}`,
+            { type: "object", properties: { value: { type: "string" } } },
+          ]),
+        );
+        const largePlugin = definePlugin(() => ({
+          id: "large-catalog" as const,
+          credentialProviders: [memoryProvider()],
+          storage: () => ({}),
+          resolveTools: () => Effect.succeed({ tools, definitions }),
+          invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+          extension: (ctx) => ({
+            seed: () =>
+              ctx.core.integrations.register({
+                slug: INTEG,
+                description: "Large catalog",
+                config: {},
+              }),
+          }),
+        }))();
+        const writes: Array<{ readonly table: string; readonly rowCount: number }> = [];
+        const base = makeTestConfig({ plugins: [largePlugin] as const });
+        const executor = yield* createExecutor({
+          ...base,
+          db: instrumentBulkWrites(base.db, (table, rowCount) => {
+            writes.push({ table, rowCount });
+          }),
+        });
+        yield* executor["large-catalog"].seed();
+        yield* executor.connections.create({
+          owner: "org",
+          name: ConnectionName.make("main"),
+          integration: INTEG,
+          template: TEMPLATE,
+          value: "v",
+        });
+
+        const listed = yield* executor.tools.list({ integration: INTEG });
+        const manifests = yield* executor.tools.manifest({ integration: INTEG });
+
+        expect(listed).toHaveLength(toolCount);
+        expect(manifests).toHaveLength(toolCount);
+        expect(writes).toEqual(
+          expect.arrayContaining([
+            { table: "definition", rowCount: toolCount },
+            { table: "tool", rowCount: toolCount },
+            { table: "tool_schema_manifest", rowCount: toolCount },
+          ]),
+        );
+      }),
+    30_000,
+  );
+
+  it.effect("keeps the previous catalog when a replacement write is interrupted", () =>
+    Effect.gen(function* () {
+      let toolName = ToolName.make("before");
+      let failToolWrite = false;
+      const changingPlugin = definePlugin(() => ({
+        id: "changing-catalog" as const,
+        credentialProviders: [memoryProvider()],
+        storage: () => ({}),
+        resolveTools: () =>
+          Effect.succeed({
+            tools: [{ name: toolName, description: String(toolName) }],
+            definitions: { Shared: { type: "object" } },
+          }),
+        invokeTool: ({ toolRow }) => Effect.succeed({ ran: toolRow.name }),
+        extension: (ctx) => ({
+          seed: () =>
+            ctx.core.integrations.register({
+              slug: INTEG,
+              description: "Changing catalog",
+              config: {},
+            }),
+        }),
+      }))();
+      const base = makeTestConfig({ plugins: [changingPlugin] as const });
+      const executor = yield* createExecutor({
+        ...base,
+        db: instrumentBulkWrites(base.db, (table) => {
+          if (failToolWrite && table === "tool") {
+            // oxlint-disable-next-line executor/no-try-catch-or-throw, executor/no-error-constructor -- boundary: inject an adapter interruption after definitions are staged
+            throw new Error("interrupted catalog write");
+          }
+        }),
+      });
+      yield* executor["changing-catalog"].seed();
+      const ref = {
+        owner: "org" as const,
+        integration: INTEG,
+        name: ConnectionName.make("main"),
+      };
+      yield* executor.connections.create({
+        ...ref,
+        template: TEMPLATE,
+        value: "v",
+      });
+
+      toolName = ToolName.make("after");
+      failToolWrite = true;
+      const interrupted = yield* Effect.exit(executor.connections.refresh(ref));
+      expect(Exit.isFailure(interrupted)).toBe(true);
+      expect((yield* executor.tools.list({ integration: INTEG })).map((tool) => tool.name)).toEqual(
+        [ToolName.make("before")],
+      );
+
+      failToolWrite = false;
+      yield* executor.connections.refresh(ref);
+      expect((yield* executor.tools.list({ integration: INTEG })).map((tool) => tool.name)).toEqual(
+        [ToolName.make("after")],
+      );
     }),
   );
 });
