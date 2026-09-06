@@ -11,6 +11,12 @@ import { mcpHttpPlugin } from "@executor-js/plugin-mcp/api";
 import { graphqlHttpPlugin } from "@executor-js/plugin-graphql/api";
 import { encryptedSecretsPlugin } from "@executor-js/plugin-encrypted-secrets";
 import { toolkitsPlugin } from "@executor-js/plugin-toolkits/server";
+import { executionMetricsPlugin } from "@executor-js/plugin-execution-metrics";
+import {
+  createWaeMetricsObserver,
+  type AnalyticsEngineDataset,
+} from "@executor-js/plugin-execution-metrics/cloudflare";
+import { noopExecutionObserver } from "@executor-js/sdk";
 
 // ---------------------------------------------------------------------------
 // The Cloudflare host's plugin list — the same protocol/provider plugins as
@@ -21,11 +27,23 @@ import { toolkitsPlugin } from "@executor-js/plugin-toolkits/server";
 //
 // `dangerouslyAllowStdioMCP` is false: a multi-user instance must not let a user
 // spawn arbitrary stdio MCP processes.
+//
+// Execution metrics ship to Workers Analytics Engine — opt-in via the wrangler
+// `ANALYTICS` binding. The plugin is always in the tuple (it has no tables/API,
+// so the shape is stable), but its observer is a no-op until `env.ANALYTICS` is
+// bound. Effect's Metric registry is per-isolate (meaningless on a Worker
+// fleet), so the local Prometheus scrape is deliberately NOT mounted here; WAE
+// is the durable sink. To enable: uncomment `analytics_engine_datasets` in
+// wrangler.jsonc.
 // ---------------------------------------------------------------------------
 
 export const makeCloudflarePlugins = (
   secretKey: string,
-  options: { readonly activeToolkitSlug?: string; readonly allowLocalNetwork?: boolean } = {},
+  options: {
+    readonly activeToolkitSlug?: string;
+    readonly allowLocalNetwork?: boolean;
+    readonly analytics?: AnalyticsEngineDataset;
+  } = {},
 ) =>
   [
     openApiHttpPlugin({
@@ -36,6 +54,10 @@ export const makeCloudflarePlugins = (
     graphqlHttpPlugin(),
     toolkitsPlugin({ activeToolkitSlug: options.activeToolkitSlug }),
     encryptedSecretsPlugin({ key: secretKey }),
+    executionMetricsPlugin({
+      observer: () =>
+        options.analytics ? createWaeMetricsObserver(options.analytics) : noopExecutionObserver,
+    }),
   ] as const;
 
 export type CloudflarePlugins = ReturnType<typeof makeCloudflarePlugins>;

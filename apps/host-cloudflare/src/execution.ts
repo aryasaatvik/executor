@@ -13,6 +13,7 @@ import {
 import { makeDynamicWorkerExecutor } from "@executor-js/runtime-dynamic-worker";
 import { makeQuickJsExecutor } from "@executor-js/runtime-quickjs";
 import { env } from "cloudflare:workers";
+import type { AnalyticsEngineDataset } from "@executor-js/plugin-execution-metrics/cloudflare";
 
 import type { CloudflareConfig } from "./config";
 import { makeCloudflarePlugins } from "./plugins";
@@ -41,6 +42,7 @@ export const CloudflareCodeExecutorProvider: Layer.Layer<CodeExecutorProvider> =
 
 export const makeCloudflarePluginsProvider = (
   config: CloudflareConfig,
+  analytics?: AnalyticsEngineDataset,
 ): Layer.Layer<PluginsProvider> =>
   Layer.succeed(PluginsProvider)({
     plugins: (context) =>
@@ -48,6 +50,7 @@ export const makeCloudflarePluginsProvider = (
         activeToolkitSlug:
           context?.mcpResource?.kind === "toolkit" ? context.mcpResource.slug : undefined,
         allowLocalNetwork: config.allowLocalNetwork,
+        analytics,
       }),
   });
 
@@ -68,12 +71,13 @@ export const makeCloudflareHostConfig = (config: CloudflareConfig): Layer.Layer<
 export const makeCloudflareExecutionStackLayer = (
   config: CloudflareConfig,
   dbHandle: ExecutorDbHandle,
+  analytics?: AnalyticsEngineDataset,
 ): Layer.Layer<
   DbProvider | PluginsProvider | HostConfig | CodeExecutorProvider | EngineDecorator
 > =>
   Layer.mergeAll(
     dbProviderLayer(Effect.succeed(dbHandle)),
-    makeCloudflarePluginsProvider(config),
+    makeCloudflarePluginsProvider(config, analytics),
     makeCloudflareHostConfig(config),
     CloudflareCodeExecutorProvider,
     EngineDecoratorNoop,

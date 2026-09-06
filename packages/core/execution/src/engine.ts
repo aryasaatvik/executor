@@ -56,6 +56,9 @@ export type ExecutionRunOptions = {
   /** What kicked off this run (e.g. `mcp.tool`, `api.http`); recorded on the
    *  `ExecutionStarted` event for downstream attribution. */
   readonly trigger?: ExecutionTrigger;
+};
+
+export type PausableExecutionOptions = ExecutionRunOptions & {
   /** Treat the caller as the human approver and resolve every elicitation
    * inline. `block` policies still fail before any elicitation is requested. */
   readonly autoApprove?: boolean;
@@ -526,7 +529,7 @@ export type ExecutionEngine<E extends Cause.YieldableError = CodeExecutionError>
    */
   readonly executeWithPause: (
     code: string,
-    options?: ExecutionRunOptions,
+    options?: PausableExecutionOptions,
   ) => Effect.Effect<ExecutionResult, E>;
 
   /**
@@ -803,7 +806,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
    */
   const startPausableExecution = Effect.fn("mcp.execute")(function* (
     code: string,
-    options?: ExecutionRunOptions,
+    options?: PausableExecutionOptions,
   ) {
     yield* Effect.annotateCurrentSpan({
       "mcp.execute.mode": "pausable",
