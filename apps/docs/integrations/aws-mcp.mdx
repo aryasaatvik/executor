@@ -1,0 +1,114 @@
+---
+title: AWS MCP
+description: "Connect Executor to the managed AWS MCP Server with an IAM role and short-lived OAuth tokens."
+---
+
+Executor connects directly to the managed AWS MCP Server over Streamable HTTP. An Executor
+connection stores bootstrap AWS credentials and a target role ARN. At runtime Executor:
+
+1. assumes the target role with AWS STS;
+2. verifies the resulting account and role identity;
+3. exchanges the temporary role credentials for a short-lived AWS MCP bearer token; and
+4. uses that bearer through Executor's normal MCP discovery and execution path.
+
+Temporary role credentials and bearer tokens are cached in memory until shortly before expiry.
+They are never written to the connection store.
+
+## Create the bootstrap identity
+
+Create an IAM user dedicated to Executor and generate an access key. Its only permission should be
+assuming the target role:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::123456789012:role/ExecutorAwsMcp"
+    }
+  ]
+}
+```
+
+For two AWS accounts, add one target role ARN per account to `Resource`, or use a separate
+bootstrap identity for each account.
+
+## Create the target role
+
+Create `ExecutorAwsMcp` in the account Executor should access. Its trust policy must name the
+bootstrap identity. Add an external ID condition if you use one in the Executor account form.
+Remove the `Condition` block from this example when you do not use an external ID.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:user/executor-aws-mcp"
+      },
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "sts:ExternalId": "replace-with-a-random-value"
+        }
+      }
+    }
+  ]
+}
+```
+
+The target role needs the AWS permissions its MCP tools may use, plus permission to mint the AWS
+MCP bearer:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "signin:CreateOAuth2Token",
+      "Resource": "arn:aws:signin:us-east-1:123456789012:service-principal/aws-mcp.amazonaws.com",
+      "Condition": {
+        "StringEquals": {
+          "signin:OAuthClientId": "arn:aws:signin:::client-credentials/sigv4",
+          "signin:OAuthGrantType": "client_credentials",
+          "aws:RequestedRegion": "us-east-1"
+        }
+      }
+    }
+  ]
+}
+```
+
+Attach your AWS service permissions separately. The OAuth token does not grant permissions the
+role does not already have. A broad managed policy can be useful for an initial private proof, but
+the target role is the security boundary for generic AWS MCP tools such as `call_aws` and
+`run_script`.
+
+## Add AWS MCP in Executor
+
+1. Select **Add Integration**, choose **AWS MCP**, and add the managed server.
+2. On the AWS MCP integration page, select **Add Account**.
+3. Choose the normal Executor owner and account name.
+4. Enter the bootstrap access key ID and secret, target role ARN, and optional session token and
+   external ID. Executor derives the authentication region from the managed endpoint.
+5. Run the account check. A healthy result includes the AWS account ID and assumed-role ARN.
+
+Repeat **Add Account** for another AWS role or account. Each connection gets its own native tool
+address, search entries, health status, credential provider, and policies.
+
+Executor includes managed presets for the AWS MCP endpoints in `us-east-1` and `eu-central-1`.
+Choose the endpoint whose region should handle the MCP connection; its region must also match the
+`signin:CreateOAuth2Token` resource and `aws:RequestedRegion` condition in the target-role policy.
+
+<Note>
+  AWS IAM authentication is accepted only for the managed AWS MCP endpoints. Executor will not
+  forward an IAM-derived bearer to a custom MCP URL.
+</Note>
+
+For the AWS-side behavior and available regions, see the
+[AWS MCP authentication guide](https://docs.aws.amazon.com/signin/latest/userguide/aws-mcp-server.html).

@@ -134,6 +134,31 @@ describe("describeMcpAuthMethods", () => {
     ]);
   });
 
+  it("projects AWS IAM as named strategy inputs rather than HTTP placements", () => {
+    const methods = describeMcpAuthMethods(
+      recordWith({
+        transport: "remote",
+        endpoint: "https://aws-mcp.us-east-1.api.aws/mcp",
+        authenticationTemplate: [{ slug: "aws_iam", kind: "aws_iam" }],
+      }),
+    );
+
+    expect(methods[0]).toMatchObject({
+      id: "aws_iam",
+      label: "AWS IAM role",
+      kind: "apikey",
+      template: "aws_iam",
+      credentialInputs: [
+        { variable: "access_key_id", secret: false },
+        { variable: "secret_access_key" },
+        { variable: "session_token", optional: true },
+        { variable: "role_arn", secret: false },
+        { variable: "external_id", optional: true },
+      ],
+    });
+    expect(methods[0]?.placements).toBeUndefined();
+  });
+
   it("projects an apikey query method (the ui.sh '?token=' shape)", () => {
     const methods = describeMcpAuthMethods(
       recordWith({

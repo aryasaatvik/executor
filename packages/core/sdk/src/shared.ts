@@ -32,6 +32,7 @@ export { connectionIdentifier, isConnectionIdentifier } from "./connection-name-
 // Domain projections (types only — no runtime cost).
 export type {
   AuthMethodDescriptor,
+  AuthMethodCredentialInputDescriptor,
   AuthMethodOAuthDescriptor,
   AuthPlacementDescriptor,
   Integration,

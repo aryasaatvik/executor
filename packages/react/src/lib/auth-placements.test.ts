@@ -81,6 +81,26 @@ describe("authMethodsFromDescriptors", () => {
     ]);
   });
 
+  it("preserves strategy credential inputs without inventing HTTP placements", () => {
+    const methods = authMethodsFromDescriptors([
+      {
+        id: "aws_iam",
+        label: "AWS IAM role",
+        kind: "apikey",
+        template: "aws_iam",
+        credentialInputs: [
+          { variable: "access_key_id", label: "Access key ID", secret: false },
+          { variable: "session_token", label: "Session token", optional: true },
+        ],
+      },
+    ]);
+    expect(methods[0]?.placements).toEqual([]);
+    expect(methods[0]?.credentialInputs).toEqual([
+      { variable: "access_key_id", label: "Access key ID", secret: false },
+      { variable: "session_token", label: "Session token", optional: true },
+    ]);
+  });
+
   it("keeps `none` methods as no-input connection methods", () => {
     const methods = authMethodsFromDescriptors([
       { id: "none", label: "No auth", kind: "none", template: "none" },
