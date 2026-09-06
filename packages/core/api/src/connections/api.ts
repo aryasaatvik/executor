@@ -65,16 +65,6 @@ const ConnectionResponse = Schema.Struct({
   lastHealth: Schema.NullOr(HealthCheckResult),
 });
 
-const ToolResponse = Schema.Struct({
-  address: Schema.String,
-  owner: Owner,
-  integration: IntegrationSlug,
-  connection: ConnectionName,
-  name: Schema.String,
-  pluginId: Schema.String,
-  description: Schema.String,
-});
-
 // ---------------------------------------------------------------------------
 // Payload schemas
 // ---------------------------------------------------------------------------
@@ -228,7 +218,7 @@ export const ConnectionsApi = HttpApiGroup.make("connections")
   .add(
     HttpApiEndpoint.post("refresh", "/connections/:owner/:integration/:name/refresh", {
       params: ConnectionParams,
-      success: Schema.Array(ToolResponse),
+      success: Schema.Struct({ toolCount: Schema.Number }),
       error: [InternalError, ConnectionNotFound, IntegrationNotFound],
     }),
   )

@@ -275,6 +275,7 @@ type RefreshGate = Map<
 >;
 
 const refreshGateByRootDb = new WeakMap<object, RefreshGate>();
+const catalogWriteTimestampByRootDb = new WeakMap<object, number>();
 
 const refreshGateFor = (rootDb: object): RefreshGate => {
   const existing = refreshGateByRootDb.get(rootDb);
@@ -282,6 +283,19 @@ const refreshGateFor = (rootDb: object): RefreshGate => {
   const created: RefreshGate = new Map();
   refreshGateByRootDb.set(rootDb, created);
   return created;
+};
+
+const nextCatalogWriteTimestamp = (rootDb: object): Date => {
+  // The persisted date column has one-second precision on SQLite/D1. Advance
+  // by a full storage tick so a rapid second refresh cannot share the marker
+  // used to prune rows omitted from the replacement catalog.
+  const currentStorageTick = Math.floor(Date.now() / 1_000) * 1_000;
+  const timestamp = Math.max(
+    currentStorageTick,
+    (catalogWriteTimestampByRootDb.get(rootDb) ?? 0) + 1_000,
+  );
+  catalogWriteTimestampByRootDb.set(rootDb, timestamp);
+  return new Date(timestamp);
 };
 
 // ---------------------------------------------------------------------------
@@ -4169,7 +4183,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           }
         }
 
-        const now = new Date();
+        const discoveredAt = new Date();
         const toolRows = result.tools.map((tool: ToolDef) => ({
           tenant: keys.tenant,
           owner: keys.owner,
@@ -4182,8 +4196,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           input_schema: tool.inputSchema ?? null,
           output_schema: tool.outputSchema ?? null,
           annotations: tool.annotations ?? null,
-          created_at: now,
-          updated_at: now,
+          created_at: discoveredAt,
+          updated_at: discoveredAt,
         }));
 
         const definitionRows = Object.entries(result.definitions ?? {}).map(([name, schema]) => ({
@@ -4195,7 +4209,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           plugin_id: integrationRow.plugin_id,
           name,
           schema,
-          created_at: now,
+          created_at: discoveredAt,
         }));
         const definitionMap = new Map(Object.entries(result.definitions ?? {}));
         const sourceRevision = yield* connectionToolSourceRevision(integrationRow, existingRow);
@@ -4231,21 +4245,124 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 index_fingerprint: manifest.indexFingerprint,
                 fingerprint_version: manifest.fingerprintVersion,
                 source_revision: manifest.sourceRevision ?? null,
-                created_at: now,
-                updated_at: now,
+                created_at: discoveredAt,
+                updated_at: discoveredAt,
               })),
             ),
           { concurrency: 16 },
         );
 
+        const existingManifestRows = yield* core.findMany("tool_schema_manifest", { where });
+        const existingToolCount = yield* core.count("tool", { where });
+        const existingDefinitionCount = yield* core.count("definition", { where });
+        const existingManifestsByName = new Map(
+          existingManifestRows.map((row) => [String(row.name), row]),
+        );
+        const catalogIsUnchanged =
+          existingToolCount === toolRows.length &&
+          existingDefinitionCount === definitionRows.length &&
+          existingManifestRows.length === manifestRows.length &&
+          manifestRows.every((manifest) => {
+            const existing = existingManifestsByName.get(manifest.name);
+            return (
+              existing !== undefined &&
+              existing.path === manifest.path &&
+              existing.index_fingerprint === manifest.index_fingerprint &&
+              existing.fingerprint_version === manifest.fingerprint_version &&
+              existing.source_revision === manifest.source_revision
+            );
+          });
+
+        if (catalogIsUnchanged) {
+          yield* stampSynced(existingRow);
+          return result.tools.map((tool: ToolDef) =>
+            rowToTool(
+              {
+                tenant: keys.tenant,
+                owner: keys.owner,
+                subject: keys.subject,
+                integration: String(ref.integration),
+                connection: String(ref.name),
+                plugin_id: integrationRow.plugin_id,
+                name: String(tool.name),
+                description: tool.description ?? "",
+                input_schema: tool.inputSchema ?? null,
+                output_schema: tool.outputSchema ?? null,
+                annotations: tool.annotations ?? null,
+                created_at: discoveredAt,
+                updated_at: discoveredAt,
+              } as ConnectionToolRow,
+              tool.annotations,
+            ),
+          );
+        }
+
+        const writeAt = nextCatalogWriteTimestamp(rootDbUntyped);
+        const persistedToolRows = toolRows.map((row) => ({
+          ...row,
+          created_at: writeAt,
+          updated_at: writeAt,
+        }));
+        const persistedDefinitionRows = definitionRows.map((row) => ({
+          ...row,
+          created_at: writeAt,
+        }));
+        const persistedManifestRows = manifestRows.map((row) => ({
+          ...row,
+          created_at: writeAt,
+          updated_at: writeAt,
+        }));
+
         yield* persistCatalog(
           Effect.gen(function* () {
-            yield* core.deleteMany("tool", { where });
-            yield* core.deleteMany("definition", { where });
-            yield* core.deleteMany("tool_schema_manifest", { where });
-            yield* core.createMany("tool", toolRows);
-            yield* core.createMany("definition", definitionRows);
-            yield* core.createMany("tool_schema_manifest", manifestRows);
+            // Write the complete replacement before pruning the previous
+            // generation. D1 cannot hold an interactive transaction across
+            // these tables, but its native batch keeps each bulk upsert
+            // atomic. If the worker is interrupted before cleanup, readers see
+            // the old catalog plus any fully-written additions instead of a
+            // truncated prefix.
+            yield* core.upsertMany("definition", {
+              target: ["tenant", "owner", "subject", "integration", "connection", "name"],
+              update: ["plugin_id", "schema", "created_at"],
+              values: persistedDefinitionRows,
+            });
+            yield* core.upsertMany("tool", {
+              target: ["tenant", "owner", "subject", "integration", "connection", "name"],
+              update: [
+                "plugin_id",
+                "description",
+                "input_schema",
+                "output_schema",
+                "annotations",
+                "updated_at",
+              ],
+              values: persistedToolRows,
+            });
+            yield* core.upsertMany("tool_schema_manifest", {
+              target: ["tenant", "owner", "subject", "integration", "connection", "name"],
+              update: [
+                "plugin_id",
+                "path",
+                "description",
+                "descriptor_hash",
+                "input_schema_hash",
+                "output_schema_hash",
+                "definition_set_hash",
+                "index_fingerprint",
+                "fingerprint_version",
+                "source_revision",
+                "updated_at",
+              ],
+              values: persistedManifestRows,
+            });
+
+            const staleToolWhere = (b: AnyCb) => b.and(where(b), b("updated_at", "<", writeAt));
+            const staleDefinitionWhere = (b: AnyCb) =>
+              b.and(where(b), b("created_at", "<", writeAt));
+            const staleManifestWhere = (b: AnyCb) => b.and(where(b), b("updated_at", "<", writeAt));
+            yield* core.deleteMany("tool", { where: staleToolWhere });
+            yield* core.deleteMany("tool_schema_manifest", { where: staleManifestWhere });
+            yield* core.deleteMany("definition", { where: staleDefinitionWhere });
             yield* stampSynced(existingRow);
           }),
         );
@@ -4264,8 +4381,8 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               input_schema: tool.inputSchema ?? null,
               output_schema: tool.outputSchema ?? null,
               annotations: tool.annotations ?? null,
-              created_at: now,
-              updated_at: now,
+              created_at: writeAt,
+              updated_at: writeAt,
             } as ConnectionToolRow,
             tool.annotations,
           ),
@@ -5125,6 +5242,15 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         if (!integrationRow) {
           return yield* new IntegrationNotFoundError({ slug: ref.integration });
         }
+        yield* core.updateMany("connection", {
+          where: (b: AnyCb) =>
+            b.and(
+              byOwner(ref.owner)(b),
+              b("integration", "=", String(ref.integration)),
+              b("name", "=", String(ref.name)),
+            ),
+          set: { tools_synced_at: null },
+        });
         return yield* produceConnectionTools(integrationRow, ref);
       });
 
