@@ -20,7 +20,16 @@ import { cn } from "@executor-js/react/lib/utils";
 
 import type { InteractionRow, InteractionStatus, RunRow, ToolCallRow } from "../sdk/collections";
 import { runDetailAtom } from "./atoms";
-import { formatDateTime, formatDuration, logLines, prettyJson, statusLabel } from "./format";
+import {
+  emittedRendering,
+  formatDateTime,
+  formatDuration,
+  logLines,
+  outputItems,
+  prettyJson,
+  statusLabel,
+  toolCallOutcome,
+} from "./format";
 import { HoverCardTimestamp } from "./hover-card-timestamp";
 import { actorTone, STATUS_TONES, triggerTone } from "./status";
 
@@ -82,6 +91,31 @@ function LogsBlock(props: { readonly logsJson: string | null }) {
   );
 }
 
+/** Everything the code sent to the user through `emit()`, in order. Content
+ *  items render as JSON; file items render their reference (never bytes). */
+function OutputBlock(props: { readonly outputJson: string | null }) {
+  const items = outputItems(props.outputJson);
+  if (items.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-medium uppercase text-muted-foreground">
+        Output · {items.length} emitted
+      </p>
+      {items.map((item, index) => {
+        const rendering = emittedRendering(item);
+        return (
+          <CodeBlock
+            key={index}
+            code={rendering.text}
+            lang={rendering.lang}
+            title={item.type === "content" ? `emit #${index + 1}` : `file #${index + 1}`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tool calls — timing waterfall
 // ---------------------------------------------------------------------------
@@ -102,7 +136,7 @@ function ToolCallWaterfall(props: {
   );
   const rawMs = props.call.durationMs ?? Math.max(0, props.windowEnd - props.call.startedAt);
   const widthPct = Math.max(1, Math.min(100 - offsetPct, (rawMs / span) * 100));
-  const tone = STATUS_TONES[props.call.status];
+  const tone = STATUS_TONES[toolCallOutcome(props.call).status];
   return (
     <span className="relative h-4 w-40 shrink-0 overflow-hidden rounded-sm border border-border/40 bg-muted/30">
       <span
@@ -119,6 +153,7 @@ function ToolCallItem(props: {
   readonly windowEnd: number;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const outcome = toolCallOutcome(props.call);
   return (
     <div className="overflow-hidden rounded-md border border-border bg-muted/20">
       <Button
@@ -132,7 +167,10 @@ function ToolCallItem(props: {
           windowStart={props.windowStart}
           windowEnd={props.windowEnd}
         />
-        <span className="min-w-0 truncate font-mono text-xs">{props.call.path}</span>
+        <span className="min-w-0 truncate font-mono text-xs">
+          {props.call.path}
+          {outcome.status === "failed" ? <span className="text-destructive"> · failed</span> : null}
+        </span>
         <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {props.call.durationMs != null ? `${props.call.durationMs}ms` : "—"}
         </span>
@@ -140,16 +178,23 @@ function ToolCallItem(props: {
       {expanded && (
         <div className="grid gap-3 border-t border-border p-3 xl:grid-cols-2">
           <JsonBlock title="Args" value={props.call.argsJson} />
-          {props.call.status === "failed" && props.call.errorText ? (
-            <div className="space-y-1">
-              <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
-              <pre className="max-h-72 overflow-auto rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
-                {props.call.errorText}
-              </pre>
-            </div>
-          ) : (
-            <JsonBlock title="Result" value={props.call.resultJson} />
-          )}
+          <div className="space-y-3">
+            {outcome.status === "failed" && outcome.errorText ? (
+              <div className="space-y-1">
+                <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
+                <pre className="max-h-72 overflow-auto rounded-md border border-destructive/30 bg-destructive/10 p-3 font-mono text-xs whitespace-pre-wrap">
+                  {outcome.errorText}
+                </pre>
+              </div>
+            ) : null}
+            {/* A failed envelope still carries the upstream payload (status,
+                details) — keep it inspectable beneath the error. */}
+            {props.call.resultJson !== null ? (
+              <JsonBlock title="Result" value={props.call.resultJson} />
+            ) : outcome.status !== "failed" ? (
+              <JsonBlock title="Result" value={null} />
+            ) : null}
+          </div>
         </div>
       )}
     </div>
@@ -238,6 +283,7 @@ function DetailContent(props: {
   readonly run: RunRow;
   readonly code: string;
   readonly resultJson: string | null;
+  readonly outputJson: string | null;
   readonly errorText: string | null;
   readonly logsJson: string | null;
   readonly toolCalls: readonly ToolCallRow[];
@@ -246,6 +292,7 @@ function DetailContent(props: {
   readonly onNext?: () => void;
 }) {
   const { run } = props;
+  const emittedCount = outputItems(props.outputJson).length;
   const tone = STATUS_TONES[run.status];
   const trigger = triggerTone(run.triggerKind);
   const actor = actorTone(run.actorId);
@@ -368,7 +415,17 @@ function DetailContent(props: {
             </div>
 
             <CodeBlock code={props.code} lang="typescript" title="Code" />
-            <JsonBlock title="Result" value={props.resultJson} />
+            <OutputBlock outputJson={props.outputJson} />
+            {/* An emit-only run has no return value by design; say so instead
+                of "No result recorded" so it does not read as data loss. */}
+            {props.resultJson === null && emittedCount > 0 ? (
+              <div className="rounded-md border border-border bg-muted/25 px-4 py-3 text-center font-mono text-xs text-muted-foreground">
+                No return value · {emittedCount} item{emittedCount === 1 ? "" : "s"} emitted to the
+                user.
+              </div>
+            ) : (
+              <JsonBlock title="Result" value={props.resultJson} />
+            )}
             {props.errorText && (
               <div className="space-y-1">
                 <p className="text-[10px] font-medium uppercase text-muted-foreground">Error</p>
@@ -418,6 +475,7 @@ function DetailLoader(props: {
           run={value.run}
           code={value.code}
           resultJson={value.resultJson}
+          outputJson={value.outputJson}
           errorText={value.errorText}
           logsJson={value.logsJson}
           toolCalls={value.toolCalls}

@@ -1,7 +1,7 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { RunStatus, ToolCallStatus } from "../sdk/collections";
+import type { RunStatus, ToolCallRow, ToolCallStatus } from "../sdk/collections";
 import { STATUS_LABELS } from "./status";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +23,92 @@ export const prettyJson = (raw: string | null): string | null => {
     onSome: (value) => JSON.stringify(value, null, 2),
   });
 };
+
+/** The engine's `ToolResult` failure envelope: `{ ok: false, error }`. Only
+ *  the fields the drawer needs; extra keys are ignored. */
+const decodeFailedEnvelope = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Struct({
+      ok: Schema.Literal(false),
+      error: Schema.Struct({ code: Schema.String, message: Schema.String }),
+    }),
+  ),
+);
+
+/** Effective outcome of a tool call. Rows recorded before the engine mapped
+ *  `ToolResult.fail` envelopes to failed calls carry `status: "completed"` with
+ *  the failure sitting in `resultJson`; derive the failure here so history
+ *  reads the same for old and new rows. */
+export const toolCallOutcome = (
+  call: Pick<ToolCallRow, "status" | "resultJson" | "errorText">,
+): { readonly status: ToolCallStatus; readonly errorText: string | null } => {
+  if (call.status !== "completed" || call.resultJson === null) {
+    return { status: call.status, errorText: call.errorText };
+  }
+  return Option.match(decodeFailedEnvelope(call.resultJson), {
+    onNone: () => ({ status: call.status, errorText: call.errorText }),
+    onSome: (envelope) => ({
+      status: "failed",
+      errorText: `${envelope.error.code}: ${envelope.error.message}`,
+    }),
+  });
+};
+
+/** Items the code sent through `emit()`, decoded from the stored JSON array.
+ *  `content` items carry their value; `file` items carry the file reference. */
+export type OutputItem =
+  | { readonly type: "content"; readonly content: unknown }
+  | { readonly type: "file"; readonly file: unknown };
+
+const decodeOutputItems = Schema.decodeUnknownOption(
+  Schema.fromJsonString(
+    Schema.Array(
+      Schema.Union([
+        Schema.Struct({ type: Schema.Literal("content"), content: Schema.Unknown }),
+        Schema.Struct({ type: Schema.Literal("file"), file: Schema.Unknown }),
+      ]),
+    ),
+  ),
+);
+
+/** The sandbox wraps each `emit()` value in an MCP text content block: a
+ *  string is carried verbatim, anything else JSON-encoded. The two are not
+ *  distinguishable afterwards (`emit("123")` and `emit(123)` both arrive as
+ *  the text `123`), so the drawer never retypes a text block: it shows the
+ *  text as-is and only pretty-prints it when it is a JSON object or array,
+ *  which is what an emitted structure looks like on the wire. Other content
+ *  shapes and file references render as JSON. */
+const decodeTextBlock = Schema.decodeUnknownOption(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+
+export interface EmittedRendering {
+  readonly text: string;
+  readonly lang: "json" | "text";
+}
+
+export const emittedRendering = (item: OutputItem): EmittedRendering => {
+  if (item.type !== "content") return { text: JSON.stringify(item.file, null, 2), lang: "json" };
+  return Option.match(decodeTextBlock(item.content), {
+    onNone: () => ({ text: JSON.stringify(item.content, null, 2), lang: "json" }),
+    onSome: (block) =>
+      Option.match(decodeJson(block.text), {
+        onNone: () => ({ text: block.text, lang: "text" }),
+        onSome: (value) =>
+          value !== null && typeof value === "object"
+            ? { text: JSON.stringify(value, null, 2), lang: "json" }
+            : { text: block.text, lang: "text" },
+      }),
+  });
+};
+
+export const outputItems = (raw: string | null): readonly OutputItem[] =>
+  !raw
+    ? []
+    : Option.match(decodeOutputItems(raw), {
+        onNone: () => [],
+        onSome: (value) => value,
+      });
 
 export const logLines = (raw: string | null): readonly string[] =>
   !raw
