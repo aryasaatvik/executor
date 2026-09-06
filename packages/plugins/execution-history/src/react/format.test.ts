@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { emittedValue, outputItems, toolCallOutcome } from "./format";
+import { emittedRendering, outputItems, toolCallOutcome } from "./format";
 
 describe("toolCallOutcome", () => {
   it("passes through a recorded failure", () => {
@@ -51,19 +51,31 @@ describe("outputItems", () => {
   });
 });
 
-describe("emittedValue", () => {
-  it("unwraps an MCP text block carrying JSON", () => {
-    const item = { type: "content", content: { type: "text", text: '{"probe":"A"}' } } as const;
-    expect(emittedValue(item)).toEqual({ probe: "A" });
+describe("emittedRendering", () => {
+  const text = (value: string) =>
+    ({ type: "content", content: { type: "text", text: value } }) as const;
+
+  it("pretty-prints a text block that carries a JSON object or array", () => {
+    expect(emittedRendering(text('{"probe":"A","values":[1,2]}'))).toEqual({
+      text: '{\n  "probe": "A",\n  "values": [\n    1,\n    2\n  ]\n}',
+      lang: "json",
+    });
+    expect(emittedRendering(text("[1,2]")).lang).toBe("json");
   });
 
-  it("unwraps an MCP text block carrying a plain string", () => {
-    const item = { type: "content", content: { type: "text", text: "hello" } } as const;
-    expect(emittedValue(item)).toBe("hello");
+  it("shows other text verbatim, including JSON-shaped primitives", () => {
+    expect(emittedRendering(text("hello"))).toEqual({ text: "hello", lang: "text" });
+    // emit("123") and emit(123) are indistinguishable on the wire; never retype.
+    expect(emittedRendering(text("123"))).toEqual({ text: "123", lang: "text" });
+    expect(emittedRendering(text("true"))).toEqual({ text: "true", lang: "text" });
+    expect(emittedRendering(text("null"))).toEqual({ text: "null", lang: "text" });
   });
 
-  it("leaves other content and file references untouched", () => {
-    expect(emittedValue({ type: "content", content: { a: 1 } })).toEqual({ a: 1 });
-    expect(emittedValue({ type: "file", file: { name: "x.csv" } })).toEqual({ name: "x.csv" });
+  it("renders other content shapes and file references as JSON", () => {
+    expect(emittedRendering({ type: "content", content: { a: 1 } })).toEqual({
+      text: '{\n  "a": 1\n}',
+      lang: "json",
+    });
+    expect(emittedRendering({ type: "file", file: { name: "x.csv" } }).lang).toBe("json");
   });
 });
