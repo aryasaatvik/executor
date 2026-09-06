@@ -396,9 +396,10 @@ export const workspaceWritePermissions = (target: TargetShape, admin: Identity, 
           const refreshed = yield* adminClient.connections.refresh({
             params: { owner: "org", integration: seedIntegration, name: adminConnection },
           });
-          expect(refreshed.length, "an admin may refresh a Workspace connection").toBeGreaterThan(
-            0,
-          );
+          expect(
+            refreshed.toolCount,
+            "an admin may refresh a Workspace connection",
+          ).toBeGreaterThan(0);
           const adminRemoved = yield* adminClient.connections.remove({
             params: { owner: "org", integration: seedIntegration, name: adminConnection },
           });
