@@ -1,4 +1,4 @@
-import { Clock, Effect, Option, Predicate, Schema } from "effect";
+import { Clock, Effect, Option, Predicate, Schema, Semaphore } from "effect";
 
 import {
   type ExecutionEvent,
@@ -48,9 +48,14 @@ import { type RunDetail, RunDetailFromJsonString } from "./detail-types";
 // Stale-run sweep: a run whose finish event never arrived (the host evicted
 // the isolate, or the observer was torn down with it) would otherwise sit at
 // "running" forever. Each ExecutionStarted closes a bounded batch of `running`
-// rows older than `STALE_RUNNING_AFTER_MS` as `interrupted`, so the list heals
-// itself the next time the host runs anything. Waiting runs are never swept:
-// an approval can legitimately stay open for a long time.
+// rows older than the configured cutoff as `interrupted`, so the list heals
+// itself the next time the host runs anything. Three guards keep it from
+// touching a live run: a row whose buffer is still in this process is alive
+// by definition and skipped; the cutoff is far above the sandbox bound and
+// host-configurable for longer sandboxes; and every status transition (sweep
+// and finish alike) takes the same in-process lock and re-reads the row, so a
+// finish that lands while the sweep is deciding always wins. Waiting runs are
+// never swept: an approval can legitimately stay open for a long time.
 //
 // Every `unknown` payload is serialized to a JSON string via Effect Schema
 // (`Schema.UnknownFromJsonString`); the detail object round-trips via
@@ -95,10 +100,18 @@ const logCountsOf = (logs: unknown): { errors: number; warns: number } => {
   return { errors, warns };
 };
 
-/** A `running` row older than this is treated as abandoned by the sweep. Well
- *  above the sandbox's own 5-minute execution bound plus the host's grace, so
- *  a slow-but-live run is never closed underneath itself. */
-export const STALE_RUNNING_AFTER_MS = 15 * 60_000;
+/** Default age after which a `running` row is treated as abandoned by the
+ *  sweep. Six times the sandbox's default 5-minute execution bound; a host
+ *  that raises `EXECUTOR_SANDBOX_TIMEOUT_MS` should raise
+ *  `staleRunningAfterMs` with it. */
+export const DEFAULT_STALE_RUNNING_AFTER_MS = 30 * 60_000;
+
+export interface ExecutionHistoryStoreOptions {
+  /** Age in ms after which a `running` row with no live buffer in this process
+   *  is closed as `interrupted`. Defaults to
+   *  {@link DEFAULT_STALE_RUNNING_AFTER_MS}. */
+  readonly staleRunningAfterMs?: number;
+}
 
 /** Rows closed per sweep. Bounded so one ExecutionStarted never pays for an
  *  unbounded backlog; a large backlog drains across successive runs. */
@@ -346,12 +359,19 @@ const chooseBucketMs = (timeRange: { from?: number; to?: number } | undefined): 
   );
 };
 
-export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistoryStore => {
+export const makeExecutionHistoryStore = (
+  deps: StorageDeps,
+  options?: ExecutionHistoryStoreOptions,
+): ExecutionHistoryStore => {
   const pluginStorage: PluginStorageFacade = deps.pluginStorage;
   const runsC: PluginStorageCollectionFacade<typeof runs> = pluginStorage.collection(runs);
   const blobs = deps.blobs;
+  const staleRunningAfterMs = options?.staleRunningAfterMs ?? DEFAULT_STALE_RUNNING_AFTER_MS;
 
   const buffers = new Map<string, RunBuffer>();
+  // Serializes terminal status transitions (finish writes and sweep closes) so
+  // the sweep's read-check-write cannot interleave with a concurrent finish.
+  const terminalWrites = Semaphore.makeUnsafe(1);
 
   const putRun = (owner: Owner, row: RunRow): Effect.Effect<void, StorageFailure> =>
     runsC.put({ owner, key: row.executionId, data: row }).pipe(Effect.asVoid);
@@ -384,52 +404,57 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
    *  never block recording the run that triggered it. */
   const sweepStaleRuns = (owner: Owner, now: number): Effect.Effect<void, StorageFailure> =>
     Effect.gen(function* () {
-      const cutoff = now - STALE_RUNNING_AFTER_MS;
-      const stale = yield* runsC.query({
+      const cutoff = now - staleRunningAfterMs;
+      const candidates = yield* runsC.query({
         where: { status: "running", startedAt: { lt: cutoff } },
         orderBy: [{ field: "startedAt", direction: "asc" }],
         limit: STALE_SWEEP_BATCH,
       });
       yield* Effect.forEach(
-        stale,
-        (entry) => {
+        candidates,
+        (entry) =>
           // Only the owner's own rows are visible through the scoped facade, but
           // the write path still names the owner explicitly.
-          if (entry.owner !== owner) return Effect.void;
-          const row = entry.data;
-          const errorText = staleRunErrorText(now - row.startedAt);
-          buffers.delete(row.executionId);
-          return Effect.all(
-            [
-              putRun(owner, {
-                ...row,
-                status: "interrupted",
-                completedAt: now,
-                durationMs: now - row.startedAt,
-              }),
-              readDetail(row.executionId).pipe(
-                Effect.flatMap((stubOpt) =>
-                  putDetail(owner, row.executionId, {
-                    ...Option.getOrElse(stubOpt, () => ({
-                      code: "",
-                      resultJson: null,
-                      outputJson: null,
-                      logsJson: null,
-                      triggerMetaJson: null,
-                      toolCalls: [],
-                      interactions: [],
-                    })),
-                    errorText,
-                  }),
-                ),
-              ),
-            ],
-            { concurrency: "unbounded", discard: true },
-          );
-        },
-        { concurrency: 4, discard: true },
+          entry.owner !== owner || buffers.has(entry.data.executionId)
+            ? Effect.void
+            : closeStaleRun(owner, entry.data.executionId, now),
+        { discard: true },
       );
     });
+
+  /** Close one candidate under the terminal-write lock, re-reading the row
+   *  first: if a finish landed since the query (or a buffer appeared), the
+   *  row is no longer `running` and is left alone. */
+  const closeStaleRun = (
+    owner: Owner,
+    executionId: string,
+    now: number,
+  ): Effect.Effect<void, StorageFailure> =>
+    terminalWrites.withPermits(1)(
+      Effect.gen(function* () {
+        if (buffers.has(executionId)) return;
+        const current = yield* runsC.get({ key: executionId });
+        if (current === null || current.data.status !== "running") return;
+        const row = current.data;
+        const errorText = staleRunErrorText(now - row.startedAt);
+        const stub = Option.getOrElse(yield* readDetail(executionId), () => ({
+          code: "",
+          resultJson: null,
+          outputJson: null,
+          logsJson: null,
+          triggerMetaJson: null,
+          toolCalls: [],
+          interactions: [],
+        }));
+        yield* putRun(owner, {
+          ...row,
+          status: "interrupted",
+          completedAt: now,
+          durationMs: now - row.startedAt,
+        });
+        yield* putDetail(owner, executionId, { ...stub, errorText });
+      }),
+    );
 
   const onExecutionStarted = (event: Extract<ExecutionEvent, { _tag: "ExecutionStarted" }>) => {
     const owner = ownerOf(event.owner);
@@ -707,6 +732,9 @@ export const makeExecutionHistoryStore = (deps: StorageDeps): ExecutionHistorySt
 
       yield* putDetail(owner, event.executionId, detail);
     }).pipe(
+      // Under the same lock as the sweep, so the two row writes never
+      // interleave: whichever is decided second sees the other's status.
+      terminalWrites.withPermits(1),
       // Always release the buffer, even if a write fails or is interrupted —
       // otherwise a StorageFailure during the flush leaks the RunBuffer forever.
       Effect.ensuring(Effect.sync(() => buffers.delete(event.executionId))),

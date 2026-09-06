@@ -1,7 +1,13 @@
 import { definePlugin } from "@executor-js/sdk/core";
 
 import { runs } from "./collections";
-import { makeExecutionHistoryObserver, makeExecutionHistoryStore } from "./store";
+import {
+  type ExecutionHistoryStoreOptions,
+  makeExecutionHistoryObserver,
+  makeExecutionHistoryStore,
+} from "./store";
+
+export type ExecutionHistoryPluginOptions = ExecutionHistoryStoreOptions;
 
 // ---------------------------------------------------------------------------
 // Execution-history plugin (SDK surface). A pure sink: it contributes no tools
@@ -20,11 +26,11 @@ import { makeExecutionHistoryObserver, makeExecutionHistoryStore } from "./store
 // consumers never load `@executor-js/api`.
 // ---------------------------------------------------------------------------
 
-export const executionHistoryPlugin = definePlugin(() => ({
+export const executionHistoryPlugin = definePlugin((options?: ExecutionHistoryPluginOptions) => ({
   id: "executionHistory" as const,
   packageName: "@executor-js/plugin-execution-history",
   pluginStorage: { runs },
-  storage: (deps) => makeExecutionHistoryStore(deps),
+  storage: (deps) => makeExecutionHistoryStore(deps, options),
   extension: (ctx) => ({
     list: ctx.storage.list,
     get: ctx.storage.get,
