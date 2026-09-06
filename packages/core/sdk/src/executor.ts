@@ -6053,79 +6053,85 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         // caller's interruption cannot fail the peers awaiting the same
         // entry; each caller awaits the shared deferred and stamps its own
         // span with the outcome.
-        const outcome = yield* Effect.suspend(() => {
-          const key = healthProbeGateKey(tenant, connectionRow);
-          const existing = healthProbeInFlight.get(key);
-          if (existing) return Deferred.await(existing);
-          const deferred = Deferred.makeUnsafe<HealthProbeOutcome, StorageFailure>();
-          // Nothing suspends between the lookup above and this registration,
-          // so check-and-set is atomic against peer fibers.
-          healthProbeInFlight.set(key, deferred);
-          const freshVerdict: Effect.Effect<HealthProbeOutcome, StorageFailure> =
-            spec === undefined && connectionRow.oauth_client != null
-              ? // No probe operation is declared, so "healthy" here means only
-                // "the credential resolved (refreshing if due)" — a refresh
-                // failure is the one real signal this path can produce, and it
-                // must not hide inside a green span.
-                oauthCredentialHealthWithoutProbe(connectionRow).pipe(
-                  Effect.tap((result) => persistProbeHealthResult(ref, result)),
-                  Effect.map((result) => ({
-                    source: "credential_only" as const,
-                    result,
-                  })),
-                )
-              : foldCredentialResolutionIntoVerdict(
-                  Effect.gen(function* () {
-                    const values = yield* resolveConnectionValues(connectionRow);
-                    const record = rowToIntegrationRecord(
-                      integrationRow,
-                      yield* describeAuthMethodsForRow(integrationRow),
-                    );
-                    const grantedScopes = grantedScopesFromRow(connectionRow);
-                    const credential: ToolInvocationCredential = {
-                      owner: connectionRow.owner as Owner,
-                      integration: ref.integration,
-                      connection: ConnectionName.make(connectionRow.name),
-                      template: AuthTemplateSlug.make(connectionRow.template),
-                      value: values[PRIMARY_INPUT_VARIABLE] ?? null,
-                      values,
-                      config: record.config,
-                      ...(grantedScopes ? { grantedScopes } : {}),
-                    };
-                    // Core resolves the declared spec (its own column) and
-                    // hands it to the plugin; plugins no longer read it out of
-                    // their config.
-                    return yield* foldPluginFailure(
-                      check({
-                        ctx: runtime.ctx,
-                        integration: record,
-                        credential,
-                        spec,
-                      }),
-                      `Health check for connection "${ref.name}" failed.`,
-                    );
-                  }),
-                ).pipe(
-                  // Persist the verdict on the connection row so the accounts
-                  // list shows alive/expired at a glance, AND so the freshness
-                  // gate above has something to serve. A probe that could not
-                  // resolve its credential persists too: it is the connection
-                  // most likely to be re-probed by every surface on every
-                  // mount, so leaving it unwritten is what turns one broken
-                  // connection into unbounded upstream and error traffic.
-                  Effect.tap((result) => persistProbeHealthResult(ref, result)),
-                  Effect.map((result) => ({
-                    source: "probe" as const,
-                    result,
-                  })),
-                );
-          const run = freshVerdict.pipe(
-            Effect.exit,
-            Effect.flatMap((exit) => Deferred.done(deferred, exit)),
-            Effect.ensuring(Effect.sync(() => void healthProbeInFlight.delete(key))),
-          );
-          return Effect.forkDetach(run).pipe(Effect.andThen(Deferred.await(deferred)));
-        });
+        // Registration and startup must complete together. Cancellation between them
+        // would leave a Deferred that every later check waits on forever.
+        const outcome = yield* Effect.uninterruptibleMask((restore) =>
+          Effect.suspend(() => {
+            const key = healthProbeGateKey(tenant, connectionRow);
+            const existing = healthProbeInFlight.get(key);
+            if (existing) return restore(Deferred.await(existing));
+            const deferred = Deferred.makeUnsafe<HealthProbeOutcome, StorageFailure>();
+            // Nothing suspends between the lookup above and this registration,
+            // so check-and-set is atomic against peer fibers.
+            healthProbeInFlight.set(key, deferred);
+            const freshVerdict: Effect.Effect<HealthProbeOutcome, StorageFailure> =
+              spec === undefined && connectionRow.oauth_client != null
+                ? // No probe operation is declared, so "healthy" here means only
+                  // "the credential resolved (refreshing if due)" — a refresh
+                  // failure is the one real signal this path can produce, and it
+                  // must not hide inside a green span.
+                  oauthCredentialHealthWithoutProbe(connectionRow).pipe(
+                    Effect.tap((result) => persistProbeHealthResult(ref, result)),
+                    Effect.map((result) => ({
+                      source: "credential_only" as const,
+                      result,
+                    })),
+                  )
+                : foldCredentialResolutionIntoVerdict(
+                    Effect.gen(function* () {
+                      const values = yield* resolveConnectionValues(connectionRow);
+                      const record = rowToIntegrationRecord(
+                        integrationRow,
+                        yield* describeAuthMethodsForRow(integrationRow),
+                      );
+                      const grantedScopes = grantedScopesFromRow(connectionRow);
+                      const credential: ToolInvocationCredential = {
+                        owner: connectionRow.owner as Owner,
+                        integration: ref.integration,
+                        connection: ConnectionName.make(connectionRow.name),
+                        template: AuthTemplateSlug.make(connectionRow.template),
+                        value: values[PRIMARY_INPUT_VARIABLE] ?? null,
+                        values,
+                        config: record.config,
+                        ...(grantedScopes ? { grantedScopes } : {}),
+                      };
+                      // Core resolves the declared spec (its own column) and
+                      // hands it to the plugin; plugins no longer read it out of
+                      // their config.
+                      return yield* foldPluginFailure(
+                        check({
+                          ctx: runtime.ctx,
+                          integration: record,
+                          credential,
+                          spec,
+                        }),
+                        `Health check for connection "${ref.name}" failed.`,
+                      );
+                    }),
+                  ).pipe(
+                    // Persist the verdict on the connection row so the accounts
+                    // list shows alive/expired at a glance, AND so the freshness
+                    // gate above has something to serve. A probe that could not
+                    // resolve its credential persists too: it is the connection
+                    // most likely to be re-probed by every surface on every
+                    // mount, so leaving it unwritten is what turns one broken
+                    // connection into unbounded upstream and error traffic.
+                    Effect.tap((result) => persistProbeHealthResult(ref, result)),
+                    Effect.map((result) => ({
+                      source: "probe" as const,
+                      result,
+                    })),
+                  );
+            const run = freshVerdict.pipe(
+              Effect.exit,
+              Effect.flatMap((exit) => Deferred.done(deferred, exit)),
+              Effect.ensuring(Effect.sync(() => void healthProbeInFlight.delete(key))),
+            );
+            return Effect.forkDetach(run, { startImmediately: true }).pipe(
+              Effect.andThen(restore(Deferred.await(deferred))),
+            );
+          }),
+        );
         yield* annotateHealthVerdict(outcome.source, outcome.result, previous);
         return outcome.result;
       }).pipe(
