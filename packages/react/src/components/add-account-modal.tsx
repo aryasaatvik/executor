@@ -139,7 +139,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "./tabs";
 const ONEPASSWORD_PROVIDER = ProviderKey.make("onepassword");
 
 type CredentialOrigin = "paste" | "onepassword";
-type CredentialInput = { readonly variable: string; readonly label: string };
+type CredentialInput = {
+  readonly variable: string;
+  readonly label: string;
+  readonly description?: string;
+  readonly placeholder?: string;
+  readonly secret?: boolean;
+  readonly optional?: boolean;
+};
 
 type CredentialPayloadOrigin =
   | { readonly values: Record<string, string> }
@@ -166,10 +173,17 @@ export function createCredentialPayloadOrigin(args: {
     };
   }
 
-  const values = Object.fromEntries(
-    args.inputs.map((input) => [input.variable, (args.values[input.variable] ?? "").trim()]),
+  const entries = args.inputs.map(
+    (input) => [input, (args.values[input.variable] ?? "").trim()] as const,
   );
-  return Object.values(values).every((value) => value.length > 0) ? { values } : null;
+  if (entries.some(([input, value]) => input.optional !== true && value.length === 0)) return null;
+  return {
+    values: Object.fromEntries(
+      entries
+        .filter(([, value]) => value.length > 0)
+        .map(([input, value]) => [input.variable, value]),
+    ),
+  };
 }
 
 const numberBadge = (n: number) => (
@@ -225,6 +239,7 @@ function PasteCredentialInputs(props: {
   // to see all of it, not toggle per field.
   const [revealed, setRevealed] = useState(false);
   const inputType = revealed ? "text" : "password";
+  const hasSecretInput = props.inputs.some((input) => input.secret !== false);
   if (!props.singleInput) {
     return (
       <div className="grid gap-3 sm:grid-cols-2">
@@ -236,12 +251,17 @@ function PasteCredentialInputs(props: {
                 className="min-w-0 truncate font-mono text-xs font-medium text-muted-foreground"
               >
                 {input.label}
+                {input.optional === true ? " (optional)" : ""}
               </Label>
             </div>
+            {input.description ? (
+              <p className="text-xs text-muted-foreground">{input.description}</p>
+            ) : null}
             <div className="flex items-center gap-1">
               <Input
                 id={`credential-input-${input.variable}`}
-                type={inputType}
+                type={input.secret === false ? "text" : inputType}
+                placeholder={input.placeholder}
                 autoComplete="off"
                 data-1p-ignore
                 data-lpignore="true"
@@ -257,7 +277,9 @@ function PasteCredentialInputs(props: {
                 className="h-9 font-mono text-sm"
                 data-ph-block
               />
-              <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              {input.secret === false ? null : (
+                <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              )}
             </div>
           </div>
         ))}
@@ -273,8 +295,14 @@ function PasteCredentialInputs(props: {
       {props.inputs.map((input) => (
         <div key={input.variable} className="space-y-1">
           {labelled && (
-            <Label className="font-mono text-xs text-muted-foreground">{input.label}</Label>
+            <Label className="font-mono text-xs text-muted-foreground">
+              {input.label}
+              {input.optional === true ? " (optional)" : ""}
+            </Label>
           )}
+          {input.description ? (
+            <p className="text-xs text-muted-foreground">{input.description}</p>
+          ) : null}
           {props.affix ? (
             // Merged field: the placement's lead + prefix is a FIXED addon (its
             // own muted segment, divider, non-selectable), and the user types
@@ -291,7 +319,7 @@ function PasteCredentialInputs(props: {
               </span>
               {/* oxlint-disable-next-line react/forbid-elements */}
               <input
-                type={inputType}
+                type={input.secret === false ? "text" : inputType}
                 autoComplete="off"
                 // The key is the modal's real first input: the display name is
                 // derived from it, so this is where typing starts.
@@ -313,12 +341,15 @@ function PasteCredentialInputs(props: {
                 className="min-w-0 flex-1 bg-transparent px-3 outline-none"
                 data-ph-block
               />
-              <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              {input.secret === false ? null : (
+                <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              )}
             </div>
           ) : (
             <div className="flex items-center gap-1">
               <Input
-                type={inputType}
+                type={input.secret === false ? "text" : inputType}
+                placeholder={input.placeholder}
                 autoComplete="off"
                 data-1p-ignore
                 data-lpignore="true"
@@ -338,7 +369,9 @@ function PasteCredentialInputs(props: {
                 className="font-mono"
                 data-ph-block
               />
-              <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              {input.secret === false || !hasSecretInput ? null : (
+                <RevealKeyButton revealed={revealed} onToggle={() => setRevealed((v) => !v)} />
+              )}
             </div>
           )}
         </div>
@@ -1730,6 +1763,9 @@ function AddAccountModalView(props: AddAccountModalProps) {
   // a variable collapse to one input.
   const credentialInputs = useMemo<readonly CredentialInput[]>(() => {
     if (!method || method.kind === "oauth" || method.kind === "none") return [];
+    if (method.credentialInputs && method.credentialInputs.length > 0) {
+      return method.credentialInputs;
+    }
     const byVar = new Map<string, string[]>();
     for (const placement of method.placements) {
       const variable = placement.variable ?? "token";

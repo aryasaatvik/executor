@@ -90,6 +90,7 @@ export {
 // Integration / connection / tool domain contracts.
 export type {
   AuthMethodDescriptor,
+  AuthMethodCredentialInputDescriptor,
   AuthMethodOAuthDescriptor,
   AuthPlacementDescriptor,
   Integration,

@@ -1,4 +1,5 @@
 import { CURATED_CODEX_PLUGINS } from "./codex-plugin-presets";
+import type { McpAuthMethodInput } from "./types";
 
 export interface McpRemotePreset {
   /** Image to show when `icon` cannot be resolved on this machine. */
@@ -11,6 +12,9 @@ export interface McpRemotePreset {
   readonly icon?: string;
   readonly featured?: boolean;
   readonly family?: string;
+  /** Built-in authentication strategy for providers whose credentials are
+   * resolved by the MCP plugin rather than authored as request placements. */
+  readonly authenticationTemplate?: readonly McpAuthMethodInput[];
   readonly transport?: undefined;
 }
 
@@ -57,6 +61,33 @@ const codexPluginPresets: readonly McpStdioPreset[] = CURATED_CODEX_PLUGINS.map(
 }));
 
 export const mcpPresets: readonly McpPreset[] = [
+  {
+    id: "aws-mcp",
+    name: "AWS MCP",
+    summary: "AWS documentation, APIs, and automation through the managed AWS MCP Server.",
+    url: "https://aws-mcp.us-east-1.api.aws/mcp",
+    endpoint: "https://aws-mcp.us-east-1.api.aws/mcp",
+    logoDomain: "aws.amazon.com",
+    featured: true,
+    authenticationTemplate: [{ kind: "aws_iam" }],
+  },
+  {
+    id: "aws-mcp-eu-central-1",
+    name: "AWS MCP (Europe)",
+    summary: "AWS documentation, APIs, and automation through the Frankfurt AWS MCP Server.",
+    url: "https://aws-mcp.eu-central-1.api.aws/mcp",
+    endpoint: "https://aws-mcp.eu-central-1.api.aws/mcp",
+    logoDomain: "aws.amazon.com",
+    authenticationTemplate: [{ kind: "aws_iam" }],
+  },
+  {
+    id: "emulate-mcp",
+    name: "Emulate MCP",
+    summary: "Deterministic MCP fixtures for validating native text and image content.",
+    url: "https://emulators.dev/mcp/query/mcp?token=demo-token",
+    endpoint: "https://emulators.dev/mcp/query/mcp?token=demo-token",
+    icon: "https://integrations.sh/logo/emulators.dev",
+  },
   {
     id: "deepwiki",
     name: "DeepWiki",
