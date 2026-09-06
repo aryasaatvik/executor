@@ -351,7 +351,6 @@ describe("oauth.start / oauth.complete", () => {
     ),
   );
 
-
   it.effect("persists HTTP Basic client auth for code exchange and refresh", () =>
     Effect.scoped(
       Effect.gen(function* () {
