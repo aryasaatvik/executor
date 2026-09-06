@@ -199,10 +199,7 @@ scenario(
       const synced = yield* client.connections.refresh({
         params: { owner: "org", integration: slug, name },
       });
-      expect(
-        synced.map((tool) => String(tool.name)),
-        "the healthy connection syncs the server's catalog",
-      ).toEqual(["simple_echo"]);
+      expect(synced.toolCount, "the healthy connection syncs the server's catalog").toBe(1);
 
       // The provider revokes the grant server-side; executor has no idea and
       // still considers the stored token unexpired.
@@ -222,9 +219,9 @@ scenario(
       ).toEqual([]);
 
       expect(
-        refreshed.map((tool) => String(tool.name)),
+        refreshed.toolCount,
         "the previously synced catalog is preserved through the failed refresh",
-      ).toEqual(["simple_echo"]);
+      ).toBe(1);
 
       const reread = yield* client.connections.get({
         params: { owner: "org", integration: slug, name },
@@ -320,10 +317,7 @@ scenario(
       const synced = yield* client.connections.refresh({
         params: { owner: "org", integration: slug, name },
       });
-      expect(
-        synced.map((tool) => String(tool.name)),
-        "the healthy connection syncs the server's catalog",
-      ).toEqual(["simple_echo"]);
+      expect(synced.toolCount, "the healthy connection syncs the server's catalog").toBe(1);
 
       // Revocation landing between the handshake and the listing: the server
       // keeps honouring the bearer for `initialize` but answers every
@@ -344,9 +338,9 @@ scenario(
       ).toEqual([]);
 
       expect(
-        refreshed.map((tool) => String(tool.name)),
+        refreshed.toolCount,
         "the previously synced catalog is preserved through the failed refresh",
-      ).toEqual(["simple_echo"]);
+      ).toBe(1);
 
       const reread = yield* client.connections.get({
         params: { owner: "org", integration: slug, name },
