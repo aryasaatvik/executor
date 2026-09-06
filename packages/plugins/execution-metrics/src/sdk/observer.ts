@@ -29,6 +29,12 @@ const executionsFailed = Metric.counter("executor.execution.failed_total", {
   incremental: true,
 });
 
+const executionsInterrupted = Metric.counter("executor.execution.interrupted_total", {
+  description:
+    "Executor executions interrupted before completing (client abort, host timeout, shutdown).",
+  incremental: true,
+});
+
 const executionDuration = Metric.histogram("executor.execution.duration_ms", {
   description: "Executor execution duration in milliseconds.",
   boundaries: Metric.exponentialBoundaries({ start: 1, factor: 2, count: 16 }),
@@ -99,7 +105,9 @@ export const createExecutionMetricsObserver = (): ExecutionObserver => {
       const attributes = triggerAttributes(started?.trigger);
       return yield* event.status === "completed"
         ? updateCounter(executionsCompleted, attributes)
-        : updateCounter(executionsFailed, attributes);
+        : event.status === "interrupted"
+          ? updateCounter(executionsInterrupted, attributes)
+          : updateCounter(executionsFailed, attributes);
     });
 
   return {
