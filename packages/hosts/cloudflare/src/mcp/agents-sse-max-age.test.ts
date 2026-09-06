@@ -200,19 +200,8 @@ const installClosedRejectingTransformStream = () => {
 const makeExecutionContext = (): ExecutionContext => ({
   passThroughOnException: () => {},
   props: undefined,
-  tracing: {
-    enterSpan: (_name, callback, ...args) => callback(new TestSpan(), ...args),
-    startActiveSpan: (_name, callback, ...args) => callback(new TestSpan(), ...args),
-    Span: TestSpan,
-  },
   waitUntil: () => {},
 });
-
-class TestSpan {
-  readonly isTraced = false;
-  setAttribute(): void {}
-  end(): void {}
-}
 
 const makeWebSocket = (): FakeWebSocket => {
   const ws = new EventTarget() as FakeWebSocket;

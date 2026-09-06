@@ -105,6 +105,10 @@ export const OrgAuthLive = Layer.effect(
             name: session.name,
             avatarUrl: session.avatarUrl,
             roles: [],
+            // No workspace role is resolved on this path, matching the plain
+            // AuthContext upstream builds here; MCP and API role gates read
+            // the WorkOS auth provider instead.
+            orgRoleModel: "none",
           });
 
           return yield* Effect.provideService(httpEffect, AuthContext, auth);

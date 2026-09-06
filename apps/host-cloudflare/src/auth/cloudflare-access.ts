@@ -76,6 +76,8 @@ export const principalFromAccessClaims = (
         name: alias.name ?? identity.commonName,
         avatarUrl: null,
         roles: ["admin", ...groups],
+        orgRoleModel: "organization",
+        orgRole: "admin",
         actor,
       };
     }
@@ -89,6 +91,8 @@ export const principalFromAccessClaims = (
       name: identity.commonName,
       avatarUrl: null,
       roles: groups.length > 0 ? groups : ["member"],
+      orgRoleModel: "organization",
+      orgRole: "member",
       actor,
     };
   }
