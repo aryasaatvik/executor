@@ -22,12 +22,16 @@ import { definePluginStorageCollection } from "@executor-js/sdk/core";
 // type-enforces that only declared fields appear in `where`/`orderBy`).
 // ---------------------------------------------------------------------------
 
-/** Terminal + transient lifecycle state of a single execution. */
+/** Terminal + transient lifecycle state of a single execution. `interrupted`
+ *  is a run torn down from outside (client abort, host backstop, sandbox
+ *  shutdown) or one that never reported completion and was closed by the
+ *  stale-run sweep; it is terminal but is not a code failure. */
 export const RunStatus = Schema.Literals([
   "running",
   "waiting_for_interaction",
   "completed",
   "failed",
+  "interrupted",
 ]);
 export type RunStatus = typeof RunStatus.Type;
 
