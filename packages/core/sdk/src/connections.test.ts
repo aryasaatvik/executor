@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import {
   Cause,
   Deferred,
@@ -11,6 +11,7 @@ import {
   Predicate,
   Result,
   Schema,
+  Scheduler,
   Tracer,
 } from "effect";
 
@@ -3524,6 +3525,70 @@ describe("credential-only health path", () => {
 });
 
 describe("health probe gate lifecycle", () => {
+  it.effect("cancellation between gate registration and fork cannot strand later checks", () =>
+    Effect.gen(function* () {
+      const { executor, counters, stamp } = yield* makeHealthHarness();
+      yield* stamp({ oauth_client: "acme", expires_at: null });
+      const ref = { owner: "org", integration: INTEG, name: ConnectionName.make("main") } as const;
+      const controller = new AbortController();
+      let registered = false;
+      let interrupted = false;
+      let cancelOnResume = false;
+      const scheduler = new Scheduler.MixedScheduler("async", (resume) => {
+        const timer = setTimeout(() => {
+          if (cancelOnResume) {
+            cancelOnResume = false;
+            controller.abort();
+          }
+          resume();
+        }, 0);
+        return () => clearTimeout(timer);
+      });
+      scheduler.shouldYield = () => {
+        if (!registered || interrupted) return false;
+        interrupted = true;
+        cancelOnResume = true;
+        return true;
+      };
+
+      // Observe registration only to place cancellation in the otherwise tiny
+      // register/fork window. All writes retain their normal behavior, and the
+      // assertions below use the public health API.
+      const originalSet = Map.prototype.set;
+      const registration = vi.spyOn(Map.prototype, "set").mockImplementation(function (
+        this: Map<unknown, unknown>,
+        key: unknown,
+        value: unknown,
+      ) {
+        const result = originalSet.call(this, key, value);
+        if (
+          typeof key === "string" &&
+          key.endsWith(',"vercel","main"]') &&
+          Deferred.isDeferred(value)
+        ) {
+          registered = true;
+        }
+        return result;
+      });
+      yield* Effect.promise(() =>
+        Effect.runPromiseExit(executor.connections.checkHealth(ref), {
+          signal: controller.signal,
+          scheduler,
+        }),
+      ).pipe(Effect.ensuring(Effect.sync(() => registration.mockRestore())));
+
+      expect(interrupted).toBe(true);
+      const next = yield* Effect.promise(() =>
+        Effect.runPromise(
+          executor.connections.checkHealth(ref).pipe(Effect.timeoutOption("1 second")),
+        ),
+      );
+      expect(Option.isSome(next)).toBe(true);
+      expect(Option.getOrThrow(next).status).toBe("healthy");
+      expect(counters.resolves).toBeGreaterThan(0);
+    }),
+  );
+
   it.effect("a failed probe clears its gate entry for the next check", () =>
     Effect.gen(function* () {
       let firstProbe = true;
