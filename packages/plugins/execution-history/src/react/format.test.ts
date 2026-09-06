@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { outputItems, toolCallOutcome } from "./format";
+import { emittedValue, outputItems, toolCallOutcome } from "./format";
 
 describe("toolCallOutcome", () => {
   it("passes through a recorded failure", () => {
@@ -48,5 +48,22 @@ describe("outputItems", () => {
     expect(outputItems(null)).toEqual([]);
     expect(outputItems("not json")).toEqual([]);
     expect(outputItems(JSON.stringify([{ type: "other" }]))).toEqual([]);
+  });
+});
+
+describe("emittedValue", () => {
+  it("unwraps an MCP text block carrying JSON", () => {
+    const item = { type: "content", content: { type: "text", text: '{"probe":"A"}' } } as const;
+    expect(emittedValue(item)).toEqual({ probe: "A" });
+  });
+
+  it("unwraps an MCP text block carrying a plain string", () => {
+    const item = { type: "content", content: { type: "text", text: "hello" } } as const;
+    expect(emittedValue(item)).toBe("hello");
+  });
+
+  it("leaves other content and file references untouched", () => {
+    expect(emittedValue({ type: "content", content: { a: 1 } })).toEqual({ a: 1 });
+    expect(emittedValue({ type: "file", file: { name: "x.csv" } })).toEqual({ name: "x.csv" });
   });
 });

@@ -21,6 +21,7 @@ import { cn } from "@executor-js/react/lib/utils";
 import type { InteractionRow, InteractionStatus, RunRow, ToolCallRow } from "../sdk/collections";
 import { runDetailAtom } from "./atoms";
 import {
+  emittedValue,
   formatDateTime,
   formatDuration,
   logLines,
@@ -103,7 +104,7 @@ function OutputBlock(props: { readonly outputJson: string | null }) {
       {items.map((item, index) => (
         <CodeBlock
           key={index}
-          code={JSON.stringify(item.type === "content" ? item.content : item.file, null, 2)}
+          code={JSON.stringify(emittedValue(item), null, 2)}
           lang="json"
           title={item.type === "content" ? `emit #${index + 1}` : `file #${index + 1}`}
         />

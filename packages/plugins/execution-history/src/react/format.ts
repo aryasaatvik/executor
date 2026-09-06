@@ -71,6 +71,26 @@ const decodeOutputItems = Schema.decodeUnknownOption(
   ),
 );
 
+/** The sandbox wraps each `emit()` value in an MCP text content block whose
+ *  `text` is the JSON-encoded value (or the raw string). Unwrap that so the
+ *  drawer shows what the code emitted, not the transport envelope; anything
+ *  else renders as-is. */
+const decodeTextBlock = Schema.decodeUnknownOption(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+
+export const emittedValue = (item: OutputItem): unknown => {
+  if (item.type !== "content") return item.file;
+  return Option.match(decodeTextBlock(item.content), {
+    onNone: () => item.content,
+    onSome: (block) =>
+      Option.match(decodeJson(block.text), {
+        onNone: () => block.text,
+        onSome: (value) => value,
+      }),
+  });
+};
+
 export const outputItems = (raw: string | null): readonly OutputItem[] =>
   !raw
     ? []
