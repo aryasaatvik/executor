@@ -36,6 +36,10 @@
         "pages": ["hosted/cloud", "hosted/docker", "hosted/cloudflare", "hosted/tracing"]
       },
       {
+        "group": "Integrations",
+        "pages": ["integrations/aws-mcp"]
+      },
+      {
         "group": "Concepts",
         "pages": ["concepts/integrations", "concepts/connections", "concepts/policies"]
       }

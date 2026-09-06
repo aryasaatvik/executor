@@ -240,10 +240,18 @@ export default function AddMcpIntegration(props: {
     [probe, props.initialAuthHeader, props.initialAuthKind],
   );
   const authMethodList = useAuthMethodList(authMethodSeeds);
+  const presetAuthenticationTemplate =
+    preset && preset.transport === undefined && state.url.trim() === preset.endpoint
+      ? preset.authenticationTemplate
+      : undefined;
 
   const remoteIdentity = useIntegrationIdentity({
     fallbackName:
-      integrationDisplayNameFromUrl(state.url, "MCP") ?? probe?.serverName ?? probe?.name ?? "",
+      (preset && !isStdioPreset && preset.transport === undefined ? preset.name : undefined) ??
+      integrationDisplayNameFromUrl(state.url, "MCP") ??
+      probe?.serverName ??
+      probe?.name ??
+      "",
   });
   // Agent-visible description: prefilled from the server's `instructions`
   // until the user types (null = untouched, keep deriving from the probe).
@@ -360,15 +368,17 @@ export default function AddMcpIntegration(props: {
     dispatch({ type: "add-start" });
     // Every row registers as a declared method (a lone no-auth row registers
     // the open-server method). Slugs are assigned server-side by kind.
-    const methods = authMethodList.rows.map((row: AuthMethodRow) =>
-      mcpWireAuthInput(mcpAuthMethodInputFromEditorValue(row.value)),
-    );
+    const methods = presetAuthenticationTemplate
+      ? [...presetAuthenticationTemplate]
+      : authMethodList.rows.map((row: AuthMethodRow) =>
+          mcpWireAuthInput(mcpAuthMethodInputFromEditorValue(row.value)),
+        );
     const slug = await registerIntegration(
       methods.length > 0 ? methods : [{ kind: "none" as const }],
     );
     if (slug === null) return;
     props.onComplete(slug);
-  }, [probe, authMethodList.rows, registerIntegration, props]);
+  }, [probe, presetAuthenticationTemplate, authMethodList.rows, registerIntegration, props]);
 
   // ---- Stdio actions ----
 
@@ -493,7 +503,18 @@ export default function AddMcpIntegration(props: {
               shared list editor. The credentials themselves (API key value /
               OAuth sign-in) are added from the integration's detail hub after
               adding. */}
-          {probe && (
+          {probe && presetAuthenticationTemplate ? (
+            <CardStack>
+              <CardStackContent className="border-t-0">
+                <CardStackEntryField
+                  label="Authentication"
+                  description="- AWS IAM role credentials are configured when you add an account."
+                >
+                  <p className="text-sm font-medium">AWS IAM role</p>
+                </CardStackEntryField>
+              </CardStackContent>
+            </CardStack>
+          ) : probe ? (
             <AuthMethodListEditor
               list={authMethodList}
               title="How does this server authenticate?"
@@ -501,7 +522,7 @@ export default function AddMcpIntegration(props: {
               emptyHint="No methods declared. Add a method, or add the server without auth and connect from the integration page later."
               footerHint="Nothing here takes your credential. Add the integration first, then connect an account on its page."
             />
-          )}
+          ) : null}
 
           {probe && props.initialAuthNote ? (
             <p className="text-xs leading-relaxed text-muted-foreground">{props.initialAuthNote}</p>

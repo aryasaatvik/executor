@@ -49,6 +49,7 @@ type McpRemoteConfig = Extract<McpIntegrationConfig, { transport: "remote" }>;
 const methodSeedLabel = (method: McpAuthMethod): string => {
   if (method.kind === "oauth2") return "OAuth";
   if (method.kind === "apikey") return apiKeyMethodLabel(method);
+  if (method.kind === "aws_iam") return "AWS IAM role";
   return "No authentication";
 };
 
@@ -339,6 +340,25 @@ function StdioEdit(props: {
   );
 }
 
+function AwsIamReadOnly() {
+  return (
+    <div className="space-y-3 border-t border-border/60 pt-5">
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-foreground">Authentication method</p>
+        <p className="text-xs text-muted-foreground">
+          AWS IAM credentials and the target role are configured independently on each account.
+        </p>
+      </div>
+      <div className="flex items-center gap-3 rounded-md border border-border/60 bg-muted/40 px-3 py-2">
+        <p className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">AWS IAM role</p>
+        <Badge variant="secondary" className="text-xs">
+          managed
+        </Badge>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Main component — the mcp plugin's section of the integration Edit sheet.
 // `integrationId` is the integration slug (v2).
@@ -361,6 +381,10 @@ export default function EditMcpIntegration({
         {...(onPendingChange ? { onPendingChange } : {})}
       />
     );
+  }
+
+  if (server.config.authenticationTemplate.some((method) => method.kind === "aws_iam")) {
+    return <AwsIamReadOnly />;
   }
 
   return (

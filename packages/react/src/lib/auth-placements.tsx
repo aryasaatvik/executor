@@ -16,7 +16,10 @@
 // ---------------------------------------------------------------------------
 
 import { AuthTemplateSlug } from "@executor-js/sdk/shared";
-import type { AuthMethodDescriptor } from "@executor-js/sdk/shared";
+import type {
+  AuthMethodCredentialInputDescriptor,
+  AuthMethodDescriptor,
+} from "@executor-js/sdk/shared";
 
 export type Carrier = "header" | "query" | "env";
 
@@ -99,6 +102,7 @@ export interface AuthMethod {
   readonly source: "spec" | "custom";
   readonly template: AuthTemplateSlug;
   readonly placements: readonly Placement[];
+  readonly credentialInputs?: readonly AuthMethodCredentialInputDescriptor[];
   /** Declared OAuth endpoints/scopes (only for `kind === "oauth"`). */
   readonly oauth?: AuthMethodOAuth;
 }
@@ -210,7 +214,9 @@ function authMethodFromDescriptor(descriptor: AuthMethodDescriptor): AuthMethod 
             ...(placement.literal !== undefined ? { literal: placement.literal } : {}),
           }),
         )
-      : DEFAULT_PLACEMENTS;
+      : descriptor.credentialInputs && descriptor.credentialInputs.length > 0
+        ? []
+        : DEFAULT_PLACEMENTS;
   return {
     id: descriptor.id,
     label: descriptor.label,
@@ -218,6 +224,7 @@ function authMethodFromDescriptor(descriptor: AuthMethodDescriptor): AuthMethod 
     source: "spec",
     template,
     placements,
+    ...(descriptor.credentialInputs ? { credentialInputs: descriptor.credentialInputs } : {}),
   };
 }
 

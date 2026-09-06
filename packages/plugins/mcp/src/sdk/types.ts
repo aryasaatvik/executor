@@ -8,6 +8,7 @@ import {
   isApiKeyAuthTemplate,
   normalizeAuthMethodSlugs,
 } from "@executor-js/sdk/http-auth";
+import type { AuthMethodCredentialInputDescriptor } from "@executor-js/sdk/core";
 
 // ---------------------------------------------------------------------------
 // MCP plugin v2 data model.
@@ -88,6 +89,45 @@ export const McpOAuthMethod = Schema.Struct({
 });
 export type McpOAuthMethod = typeof McpOAuthMethod.Type;
 
+/** AWS IAM credentials are exchanged at runtime for a short-lived bearer for
+ * the managed AWS MCP Server. The connection stores the source values; the
+ * integration config stores only this strategy tag. */
+export const McpAwsIamMethod = Schema.Struct({
+  slug: Schema.String,
+  kind: Schema.Literal("aws_iam"),
+});
+export type McpAwsIamMethod = typeof McpAwsIamMethod.Type;
+
+export const awsIamCredentialInputs: readonly AuthMethodCredentialInputDescriptor[] = [
+  {
+    variable: "access_key_id",
+    label: "Access key ID",
+    placeholder: "AKIA…",
+    description: "Bootstrap IAM identity permitted to assume the target role.",
+    secret: false,
+  },
+  { variable: "secret_access_key", label: "Secret access key" },
+  {
+    variable: "session_token",
+    label: "Session token",
+    description: "Only required when the bootstrap credentials are temporary.",
+    optional: true,
+  },
+  {
+    variable: "role_arn",
+    label: "Role ARN",
+    placeholder: "arn:aws:iam::123456789012:role/ExecutorAwsMcp",
+    description: "Role Executor assumes for AWS MCP access.",
+    secret: false,
+  },
+  {
+    variable: "external_id",
+    label: "External ID",
+    description: "Optional value required by the role trust policy.",
+    optional: true,
+  },
+];
+
 /** Stdio env credential: the named environment variables a stdio server needs
  *  (often API keys / tokens). A connection supplies one secret value per `var`,
  *  keyed by the var name; at launch the connector injects them into the
@@ -106,6 +146,7 @@ export const McpAuthMethod = Schema.Union([
   NoneAuthMethod,
   ApiKeyAuthMethod,
   McpOAuthMethod,
+  McpAwsIamMethod,
   McpStdioEnvMethod,
 ]);
 export type McpAuthMethod = typeof McpAuthMethod.Type;
@@ -154,6 +195,7 @@ export const McpAuthMethodInput = Schema.Union([
     scopes: Schema.optional(Schema.NonEmptyArray(Schema.String)),
     enterpriseIdentityProvider: Schema.optional(McpEnterpriseIdentityProvider),
   }),
+  Schema.Struct({ slug: Schema.optional(Schema.String), kind: Schema.Literal("aws_iam") }),
   // Credential methods are authored request-shaped — the ONE apikey input
   // dialect: `{ type: "apiKey", headers: { Authorization: ["Bearer ",
   // variable("token")] }, queryParams: { … } }`. Stored configs and the
