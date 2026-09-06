@@ -8,7 +8,6 @@ import {
   type ConnectionRef,
   type CreateConnectionInput,
   type HealthCheckResult,
-  type Tool,
   type ValidateConnectionInput,
 } from "@executor-js/sdk";
 
@@ -30,16 +29,6 @@ const toResponse = (c: Connection) => ({
   oauthScope: c.oauthScope ?? null,
   missingOAuthScopes: c.missingOAuthScopes ?? [],
   lastHealth: c.lastHealth ?? null,
-});
-
-const toolToResponse = (t: Tool) => ({
-  address: String(t.address),
-  owner: t.owner,
-  integration: t.integration,
-  connection: t.connection,
-  name: String(t.name),
-  pluginId: t.pluginId,
-  description: t.description,
 });
 
 const toHealthResponse = (r: HealthCheckResult) => ({
@@ -140,7 +129,7 @@ export const ConnectionsHandlers = HttpApiBuilder.group(ExecutorApi, "connection
             integration: path.integration,
             name: path.name,
           });
-          return tools.map(toolToResponse);
+          return { toolCount: tools.length };
         }),
       ),
     )

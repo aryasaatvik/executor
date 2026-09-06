@@ -378,12 +378,13 @@ export function IntegrationDetailPage(props: {
   };
 
   const handleRefresh = async () => {
-    if (!integrationData) return;
+    if (!integrationData || refreshing) return;
     setRefreshing(true);
     // v2: refresh re-resolves tools per connection. Refresh every connection of
     // this integration for the active owner.
     const connections = AsyncResult.isSuccess(connectionsResult) ? connectionsResult.value : [];
     const refreshExits: boolean[] = [];
+    let firstProblem: string | null = null;
     let connectionCount = 0;
     for (const connection of connections) {
       if (connection.integration !== slug) continue;
@@ -393,12 +394,21 @@ export function IntegrationDetailPage(props: {
         reactivityKeys: connectionWriteKeys,
       });
       refreshExits.push(Exit.isSuccess(refreshExit));
+      if (Exit.isFailure(refreshExit) && firstProblem === null) {
+        firstProblem = messageFromExit(refreshExit, "Failed to refresh tools");
+      }
     }
+    const success = connectionCount > 0 && refreshExits.every(Boolean);
     trackEvent("integration_refreshed", {
       integration_slug: String(slug),
       connection_count: connectionCount,
-      success: connectionCount > 0 && refreshExits.every(Boolean),
+      success,
     });
+    if (success) {
+      toast.success("Tools refreshed");
+    } else {
+      toast.error(firstProblem ?? "No connections to refresh");
+    }
     setRefreshing(false);
   };
 
