@@ -1,6 +1,6 @@
 import { definePlugin } from "@executor-js/sdk/core";
 
-import { executionHistoryPlugin } from "../sdk/plugin";
+import { type ExecutionHistoryPluginOptions, executionHistoryPlugin } from "../sdk/plugin";
 import { ExecutionHistoryGroup } from "./group";
 import { ExecutionHistoryExtensionService, ExecutionHistoryHandlers } from "./handlers";
 
@@ -16,9 +16,11 @@ export {
 // mount the execution-history read API. Hosts that compose an `HttpApi` import
 // this; SDK-only consumers stay on `@executor-js/plugin-execution-history` and
 // never load `@executor-js/api`.
-export const executionHistoryHttpPlugin = definePlugin(() => ({
-  ...executionHistoryPlugin(),
-  routes: () => ExecutionHistoryGroup,
-  handlers: () => ExecutionHistoryHandlers,
-  extensionService: ExecutionHistoryExtensionService,
-}));
+export const executionHistoryHttpPlugin = definePlugin(
+  (options?: ExecutionHistoryPluginOptions) => ({
+    ...executionHistoryPlugin(options),
+    routes: () => ExecutionHistoryGroup,
+    handlers: () => ExecutionHistoryHandlers,
+    extensionService: ExecutionHistoryExtensionService,
+  }),
+);
