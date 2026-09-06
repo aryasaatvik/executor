@@ -118,10 +118,7 @@ scenario(
       const refreshed = yield* client.connections.refresh({
         params: { owner: "org", integration: slug, name: MAIN },
       });
-      expect(
-        refreshed.map((tool) => String(tool.address)),
-        "refresh returns the re-discovered tool set",
-      ).toContain(`tools.${slug}.org.main.after_refresh`);
+      expect(refreshed.toolCount, "refresh reports the re-discovered tool set").toBe(1);
 
       const after = yield* client.tools.list({ query: { integration: slug } });
       const addresses = after.map((tool) => String(tool.address));
