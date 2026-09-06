@@ -71,6 +71,37 @@ const decodeOutputItems = Schema.decodeUnknownOption(
   ),
 );
 
+/** The sandbox wraps each `emit()` value in an MCP text content block: a
+ *  string is carried verbatim, anything else JSON-encoded. The two are not
+ *  distinguishable afterwards (`emit("123")` and `emit(123)` both arrive as
+ *  the text `123`), so the drawer never retypes a text block: it shows the
+ *  text as-is and only pretty-prints it when it is a JSON object or array,
+ *  which is what an emitted structure looks like on the wire. Other content
+ *  shapes and file references render as JSON. */
+const decodeTextBlock = Schema.decodeUnknownOption(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+
+export interface EmittedRendering {
+  readonly text: string;
+  readonly lang: "json" | "text";
+}
+
+export const emittedRendering = (item: OutputItem): EmittedRendering => {
+  if (item.type !== "content") return { text: JSON.stringify(item.file, null, 2), lang: "json" };
+  return Option.match(decodeTextBlock(item.content), {
+    onNone: () => ({ text: JSON.stringify(item.content, null, 2), lang: "json" }),
+    onSome: (block) =>
+      Option.match(decodeJson(block.text), {
+        onNone: () => ({ text: block.text, lang: "text" }),
+        onSome: (value) =>
+          value !== null && typeof value === "object"
+            ? { text: JSON.stringify(value, null, 2), lang: "json" }
+            : { text: block.text, lang: "text" },
+      }),
+  });
+};
+
 export const outputItems = (raw: string | null): readonly OutputItem[] =>
   !raw
     ? []
