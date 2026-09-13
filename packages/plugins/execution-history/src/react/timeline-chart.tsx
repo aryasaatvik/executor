@@ -196,9 +196,7 @@ export function RunsTimelineChart(props: {
           <ReferenceArea
             x1={Math.min(dragStart, dragEnd)}
             x2={Math.max(dragStart, dragEnd)}
-            strokeOpacity={0.3}
-            fill="var(--foreground)"
-            fillOpacity={0.08}
+            shape={<rect fill="var(--foreground)" fillOpacity={0.08} />}
           />
         ) : null}
       </BarChart>
