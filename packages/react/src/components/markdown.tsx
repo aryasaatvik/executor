@@ -99,7 +99,7 @@ export function Markdown(props: { children: string; className?: string }) {
         components={components}
         linkSafety={{ enabled: true }}
         skipHtml
-        urlTransform={(url) => sanitizeMarkdownUrl(url)}
+        urlTransform={sanitizeMarkdownUrl}
       >
         {props.children}
       </Streamdown>
