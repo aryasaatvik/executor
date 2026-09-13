@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  type KeyboardEvent,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   Command,
   CommandEmpty,
@@ -177,7 +185,7 @@ export const RunsFilterCommand = forwardRef<HTMLInputElement, RunsFilterCommandP
         <Command
           shouldFilter={false}
           className="overflow-visible bg-transparent"
-          onKeyDown={(event) => {
+          onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
             if (event.key === "Enter") {
               event.preventDefault();
               applyTokens();
