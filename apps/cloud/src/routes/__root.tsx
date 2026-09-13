@@ -183,6 +183,14 @@ function ShellErrorFallback() {
   );
 }
 
+// Sentry's published ErrorBoundary class declaration is not recognized as a
+// JSX class by the native TypeScript checker. Its supported HOC exposes the
+// same runtime boundary through a functional component type.
+const ShellErrorBoundary = Sentry.withErrorBoundary(
+  ({ children }: { readonly children?: React.ReactNode }) => <>{children}</>,
+  { fallback: <ShellErrorFallback />, showDialog: false },
+);
+
 function AuthGate() {
   const auth = useAuth();
   const location = useLocation();
@@ -291,7 +299,7 @@ function AuthGate() {
 
   return (
     <AutumnProvider pathPrefix="/api/billing" headers={billingHeaders}>
-      <Sentry.ErrorBoundary fallback={<ShellErrorFallback />} showDialog={false}>
+      <ShellErrorBoundary>
         {/* scopeKey ties the atom registry to the URL's org: cached query
             results can never survive an org change, and the bare → slugged
             canonicalization remounts the registry so anything fetched
@@ -322,7 +330,7 @@ function AuthGate() {
             </ExecutorPluginsProvider>
           </React.Suspense>
         </ExecutorProvider>
-      </Sentry.ErrorBoundary>
+      </ShellErrorBoundary>
     </AutumnProvider>
   );
 }
