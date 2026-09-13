@@ -1,0 +1,4 @@
+[install]
+# Keep this workspace's isolated-install virtual store local. A global store
+# resolves transitive packages outside the workspace graph during test runs.
+globalStore = false
