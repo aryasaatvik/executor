@@ -29,6 +29,7 @@ import { Skeleton } from "../components/skeleton";
 import { useExecutorDocumentTitle } from "../lib/document-title";
 import {
   availableCatalogKinds,
+  catalogIntegrationIdentity,
   catalogLogoUrl,
   filterCatalogEntries,
   resolveConnectTarget,
@@ -531,7 +532,7 @@ export function IntegrationBrowsePage() {
     (input: {
       readonly kind: string;
       readonly url: string;
-      readonly slug?: string;
+      readonly title: string;
       readonly domain: string;
       readonly auth?: CatalogSurface["auth"];
       readonly specOverrides?: CatalogSurface["specOverrides"];
@@ -541,12 +542,13 @@ export function IntegrationBrowsePage() {
         via: "catalog",
         catalog_domain: input.domain,
       });
+      const identity = catalogIntegrationIdentity({ title: input.title });
       void navigate({
         to: "/{-$orgSlug}/integrations/add/$pluginKey",
         params: { pluginKey: input.kind },
         search: {
           url: input.url,
-          ...(input.slug ? { namespace: input.slug } : {}),
+          ...(identity.namespace ? { namespace: identity.namespace } : {}),
           ...(input.auth?.header ? { authHeader: input.auth.header } : {}),
           ...(input.auth?.note ? { authNote: input.auth.note } : {}),
           ...(input.auth?.kind ? { authKind: input.auth.kind } : {}),
@@ -580,6 +582,7 @@ export function IntegrationBrowsePage() {
     }): Promise<boolean> => {
       const fn = quickAdders.current.get(KIND_TO_PLUGIN_KEY[input.kind] ?? input.kind);
       if (!fn) return false;
+      const identity = catalogIntegrationIdentity({ title: input.title, sourceSlug: input.slug });
       const rowKey = input.rowKey;
       setQuickAddingKeys((previous) => new Set(previous).add(rowKey));
       trackEvent("integration_add_started", {
@@ -591,7 +594,7 @@ export function IntegrationBrowsePage() {
         url: input.url,
         name: input.title,
         domain: input.domain,
-        ...(input.slug ? { slug: input.slug } : {}),
+        ...(identity.namespace ? { slug: identity.namespace } : {}),
         ...(input.auth?.header ? { authHeader: input.auth.header } : {}),
         ...(input.auth?.kind ? { authKind: input.auth.kind } : {}),
         ...(input.specOverrides ? { specOverrides: input.specOverrides } : {}),
@@ -636,8 +639,8 @@ export function IntegrationBrowsePage() {
         goToAdd({
           kind,
           url: knownUrl,
+          title,
           domain: entry.domain,
-          ...(surface ? { slug: surface.slug } : {}),
           ...(surface?.auth ? { auth: surface.auth } : {}),
           ...(surface?.specOverrides ? { specOverrides: surface.specOverrides } : {}),
         });
@@ -672,8 +675,8 @@ export function IntegrationBrowsePage() {
       goToAdd({
         kind: target.kind,
         url: target.url,
+        title,
         domain: entry.domain,
-        ...(target.slug ? { slug: target.slug } : {}),
       });
     },
     [goToAdd, resolvingDomain, tryQuickAdd],

@@ -39,11 +39,15 @@ scenario(
                 results: [
                   {
                     domain: "todoist.com",
-                    name: "todoist.com",
+                    name: `Todoist ${suffix}`,
                     description: "Tasks, projects, and collaboration.",
                     kinds: ["mcp", "cli"],
                     surfaces: [
-                      { kind: "mcp", slug: `todoist-${suffix}`, url: server.endpoint },
+                      {
+                        kind: "mcp",
+                        slug: `todoist-${suffix}-mcp-2-2-2`,
+                        url: server.endpoint,
+                      },
                       { kind: "cli", slug: "todoist-cli" },
                     ],
                   },
@@ -65,22 +69,25 @@ scenario(
         await step("Searching surfaces the connectable rows, not the CLI", async () => {
           await visit(page, "/integrations/browse");
           await page.getByPlaceholder(/Search integrations, or paste a URL/).fill("todoist");
-          await page.getByTestId(`catalog-todoist-${suffix}`).getByText("Todoist MCP").waitFor();
+          await page
+            .getByTestId(`catalog-todoist-${suffix}-mcp-2-2-2`)
+            .getByText(`Todoist ${suffix} MCP`)
+            .waitFor();
           await page.getByTestId("catalog-deadserver").waitFor();
           expect(await page.getByTestId("catalog-todoist-cli").count()).toBe(0);
         });
 
         await step("Add registers in place; the card flips to View", async () => {
           await page
-            .getByTestId(`catalog-todoist-${suffix}`)
-            .getByRole("button", { name: "Add Todoist MCP" })
+            .getByTestId(`catalog-todoist-${suffix}-mcp-2-2-2`)
+            .getByRole("button", { name: `Add Todoist ${suffix} MCP` })
             .click();
           // Generous timeout: the quick add probes the fixture server and
           // registers, all behind one click, and the dev server can queue
           // under CI load.
           await page
-            .getByTestId(`catalog-todoist-${suffix}`)
-            .getByRole("link", { name: "View Todoist MCP" })
+            .getByTestId(`catalog-todoist-${suffix}-mcp-2-2-2`)
+            .getByRole("link", { name: `View Todoist ${suffix} MCP` })
             .waitFor({ timeout: 90_000 });
           // The whole point: the user never left the picker.
           expect(new URL(page.url()).pathname).toMatch(/\/integrations\/browse$/);
@@ -88,13 +95,22 @@ scenario(
 
         await step("View jumps to the integration's hub", async () => {
           await page
-            .getByTestId(`catalog-todoist-${suffix}`)
-            .getByRole("link", { name: "View Todoist MCP" })
+            .getByTestId(`catalog-todoist-${suffix}-mcp-2-2-2`)
+            .getByRole("link", { name: `View Todoist ${suffix} MCP` })
             .click();
-          await page.waitForURL(new RegExp(`/integrations/todoist_${suffix}`));
+          await page.waitForURL(new RegExp(`/integrations/todoist_${suffix}_mcp`));
           await page.goBack();
           await page.getByPlaceholder(/Search integrations, or paste a URL/).fill("todoist");
           await page.getByTestId("catalog-deadserver").waitFor();
+        });
+
+        await step("A catalog refresh keeps the existing canonical integration", async () => {
+          await page.reload();
+          await page.getByPlaceholder(/Search integrations, or paste a URL/).fill("todoist");
+          await page
+            .getByTestId(`catalog-todoist-${suffix}-mcp-2-2-2`)
+            .getByRole("link", { name: `View Todoist ${suffix} MCP` })
+            .waitFor();
         });
 
         await step("An unreachable endpoint falls back to the config screen", async () => {
@@ -108,7 +124,7 @@ scenario(
           await page.waitForURL(/\/integrations\/add\/mcp/, { timeout: 90_000 });
           const url = new URL(page.url());
           expect(url.searchParams.get("url")).toBe("https://mcp.notareal.invalid/mcp");
-          expect(url.searchParams.get("namespace")).toBe("deadserver");
+          expect(url.searchParams.get("namespace")).toBe("deadserver_mcp");
         });
       });
     }),

@@ -1321,6 +1321,33 @@ paths:
     ),
   );
 
+  it.effect("addSpec rejects a real local collision instead of allocating a suffix", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const server = yield* servePluginTestApi();
+        const executor = yield* createExecutor(makeTestConfig({ plugins: testPlugins() }));
+
+        yield* executor.openapi.addSpec({
+          spec: { kind: "blob", value: server.specJson },
+          slug: "samva_rest_api",
+          name: "Samva REST API",
+        });
+
+        const error = yield* executor.openapi
+          .addSpec({
+            spec: { kind: "blob", value: server.specJson },
+            slug: "samva_rest_api",
+            name: "Samva REST API (private)",
+          })
+          .pipe(Effect.flip);
+
+        expect(Predicate.isTagged(error, "IntegrationAlreadyExistsError")).toBe(true);
+        expect(String((error as IntegrationAlreadyExistsError).slug)).toBe("samva_rest_api");
+        expect(yield* executor.openapi.getIntegration("samva_rest_api_2")).toBeNull();
+      }),
+    ),
+  );
+
   it.effect("updateSpec re-fetches the source URL and rebuilds tools in place", () =>
     Effect.scoped(
       Effect.gen(function* () {
