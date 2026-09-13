@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { getDomain } from "tldts";
 import type { IntegrationPlugin } from "@executor-js/sdk/client";
+import { slugifyNamespace } from "../plugins/namespace";
 
 export const INTEGRATIONS_SH_ORIGIN = "https://integrations.sh";
 
@@ -60,6 +61,20 @@ export interface CatalogSurface {
    *  (e.g. Neon's console session cookies posing as security schemes). */
   readonly specOverrides?: readonly unknown[];
 }
+
+/**
+ * The registry's surface slug identifies the upstream record; it is not an
+ * Executor namespace allocator. Registry operators may repair or disambiguate
+ * their own records by changing that slug, while local routes must remain
+ * stable for a product the user has already added.
+ */
+export const catalogIntegrationIdentity = (input: {
+  readonly title: string;
+  readonly sourceSlug?: string;
+}): { readonly namespace: string; readonly sourceSlug?: string } => ({
+  namespace: slugifyNamespace(input.title),
+  ...(input.sourceSlug ? { sourceSlug: input.sourceSlug } : {}),
+});
 
 export interface CatalogSearchEntry {
   readonly domain: string;

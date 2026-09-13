@@ -3,6 +3,7 @@ import type { IntegrationPlugin } from "@executor-js/sdk/client";
 
 import {
   availableCatalogKinds,
+  catalogIntegrationIdentity,
   filterCatalogEntries,
   parseCatalogSearch,
   pickConnectTarget,
@@ -30,6 +31,43 @@ describe("parseCatalogSearch", () => {
   it("returns nothing for a malformed payload", () => {
     expect(parseCatalogSearch({ nope: true })).toEqual([]);
     expect(parseCatalogSearch(undefined)).toEqual([]);
+  });
+});
+
+describe("catalogIntegrationIdentity", () => {
+  it("keeps an upstream collision suffix out of Executor's namespace", () => {
+    expect(
+      catalogIntegrationIdentity({
+        title: "Samva REST API",
+        sourceSlug: "samva-rest-api-2-2-2-2",
+      }),
+    ).toEqual({
+      namespace: "samva_rest_api",
+      sourceSlug: "samva-rest-api-2-2-2-2",
+    });
+  });
+
+  it("is stable across repeated discovery of the same product", () => {
+    const first = catalogIntegrationIdentity({
+      title: "Samva REST API",
+      sourceSlug: "samva-rest-api-2-2-2-2",
+    });
+    const refreshed = catalogIntegrationIdentity({
+      title: "Samva REST API",
+      sourceSlug: "samva-rest-api",
+    });
+
+    expect(first.namespace).toBe("samva_rest_api");
+    expect(refreshed.namespace).toBe(first.namespace);
+  });
+
+  it("leaves a real local title collision for the add flow to reject", () => {
+    const first = catalogIntegrationIdentity({ title: "Acme API", sourceSlug: "acme-public" });
+    const second = catalogIntegrationIdentity({ title: "Acme API", sourceSlug: "acme-private" });
+
+    expect(first.namespace).toBe("acme_api");
+    expect(second.namespace).toBe(first.namespace);
+    expect(second.sourceSlug).not.toBe(first.sourceSlug);
   });
 });
 
