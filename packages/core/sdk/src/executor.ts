@@ -6708,12 +6708,11 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       filter?: ToolSchemaListFilter,
     ): Effect.Effect<readonly ToolSchemaEntry[], StorageFailure> =>
       Effect.gen(function* () {
-        if (toolsSyncGraceMs === null) {
-          yield* syncStaleConnectionTools;
-        } else {
-          yield* awaitStaleSyncWithinGrace(toolsSyncGraceMs);
-        }
-
+        // Deliberately no stale-sync wait. This surface serves persisted
+        // schemas for catalog hydration, and the caller decides freshness from
+        // the manifest fingerprint. Inheriting `toolsList`'s sync grace would
+        // put a fixed multi-second tax on every page of an otherwise simple
+        // scan.
         // Unlike `toolsList`, this selects the schema columns: they are the
         // payload. Definitions are read per connection below, once.
         const rows = yield* core.findMany("tool", {
