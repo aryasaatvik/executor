@@ -11,6 +11,7 @@ import {
   ConnectionName,
   IntegrationSlug,
   OAuthClientSlug,
+  Owner,
   ProviderItemId,
   ProviderKey,
   ToolAddress,
@@ -1073,6 +1074,102 @@ describe("muscle memory (observed output shapes)", () => {
       yield* executor.execute(addr("inspect"), { pet: { lives: 9 } });
       const schema = yield* executor.tools.schema(addr("inspect"));
       expect(schema?.outputSchema).toEqual({ $ref: "#/$defs/Owner" });
+    }),
+  );
+});
+
+describe("tools.schemas (bulk, signature-oriented read)", () => {
+  // Fully scoped: integration + owner + connection make the read cacheable.
+  const SCOPE = { integration: INTEG, owner: Owner.make("org"), connection: CONN } as const;
+
+  const provisioned = Effect.fn(function* () {
+    const executor = yield* makeTestExecutor({
+      plugins: [demoPlugin] as const,
+      coreTools: { webBaseUrl: "http://localhost:3000" },
+    });
+    yield* executor.demo.seed();
+    yield* executor.execute(ToolAddress.make("executor.coreTools.connections.create"), {
+      owner: "org",
+      name: String(CONN),
+      integration: String(INTEG),
+      template: String(TEMPLATE),
+      identityLabel: "Demo",
+      from: { provider: "memory", id: "secret-token" },
+    });
+    return executor;
+  });
+
+  it.effect("returns input schemas with only the definitions they reference", () =>
+    Effect.gen(function* () {
+      const executor = yield* provisioned();
+      const entries = yield* executor.tools.schemas(SCOPE);
+      expect(entries.map((entry) => entry.name)).toEqual(["inspect", "run"]);
+
+      // A second read serves the cached aggregate; the entries are identical.
+      const again = yield* executor.tools.schemas(SCOPE);
+      expect(again).toEqual(entries);
+
+      const inspect = entries.find((entry) => entry.name === "inspect");
+      expect(inspect?.inputSchema).toMatchObject({ type: "object", required: ["pet"] });
+      // Only the reachable subgraph Pet -> Dog/Cat -> Collar. `Owner` is the
+      // output root and `Unused` is malformed; neither is an input reference.
+      expect(Object.keys(inspect?.definitions ?? {}).sort()).toEqual([
+        "Cat",
+        "Collar",
+        "Dog",
+        "Pet",
+      ]);
+
+      const run = entries.find((entry) => entry.name === "run");
+      expect(run?.inputSchema).toBeUndefined();
+      expect(run?.definitions).toBeUndefined();
+    }),
+  );
+
+  it.effect("pages by address with limit and after", () =>
+    Effect.gen(function* () {
+      const executor = yield* provisioned();
+      const first = yield* executor.tools.schemas({ ...SCOPE, limit: 1 });
+      expect(first.map((entry) => entry.name)).toEqual(["inspect"]);
+      const next = yield* executor.tools.schemas({
+        ...SCOPE,
+        limit: 1,
+        after: String(first[0]!.address),
+      });
+      expect(next.map((entry) => entry.name)).toEqual(["run"]);
+    }),
+  );
+
+  it.effect("omits blocked tools unless includeBlocked is set", () =>
+    Effect.gen(function* () {
+      const executor = yield* provisioned();
+      yield* executor.policies.create({
+        owner: "org",
+        pattern: "demo.org.main.run",
+        action: "block",
+      });
+      const visible = yield* executor.tools.schemas(SCOPE);
+      expect(visible.map((entry) => entry.name)).toEqual(["inspect"]);
+      const all = yield* executor.tools.schemas({ ...SCOPE, includeBlocked: true });
+      expect(all.map((entry) => entry.name)).toEqual(["inspect", "run"]);
+    }),
+  );
+
+  it.effect("applies a policy change over a warm cached aggregate", () =>
+    Effect.gen(function* () {
+      const executor = yield* provisioned();
+      // Warm the cache with both tools visible.
+      const before = yield* executor.tools.schemas(SCOPE);
+      expect(before.map((entry) => entry.name)).toEqual(["inspect", "run"]);
+
+      // Policy resolves after the cache, so a new block wins immediately.
+      yield* executor.policies.create({
+        owner: "org",
+        pattern: "demo.org.main.run",
+        action: "block",
+      });
+      const after = yield* executor.tools.schemas(SCOPE);
+      expect(after.map((entry) => entry.name)).toEqual(["inspect"]);
     }),
   );
 });

@@ -17,6 +17,7 @@ import {
   Owner,
   ToolAddress,
   ToolNotFoundError,
+  ToolSchemaEntry,
   ToolSchemaView,
 } from "@executor-js/sdk/shared";
 
@@ -58,6 +59,17 @@ const SchemaQuery = Schema.Struct({
   address: ToolAddress,
 });
 
+// Bulk schema reads reuse `tools.list`'s filters and add keyset paging.
+// `limit` and `includeBlocked` arrive as strings; the handler parses them.
+const ListToolSchemasQuery = Schema.Struct({
+  integration: Schema.optional(IntegrationSlug),
+  owner: Schema.optional(Owner),
+  connection: Schema.optional(ConnectionName),
+  includeBlocked: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.String),
+  after: Schema.optional(Schema.String),
+});
+
 // ---------------------------------------------------------------------------
 // Error schemas with HTTP status annotations
 // ---------------------------------------------------------------------------
@@ -81,5 +93,12 @@ export const ToolsApi = HttpApiGroup.make("tools")
       query: SchemaQuery,
       success: ToolSchemaView,
       error: [InternalError, ToolNotFound],
+    }),
+  )
+  .add(
+    HttpApiEndpoint.get("listSchemas", "/tools/schemas", {
+      query: ListToolSchemasQuery,
+      success: Schema.Array(ToolSchemaEntry),
+      error: InternalError,
     }),
   );

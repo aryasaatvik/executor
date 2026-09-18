@@ -45,6 +45,26 @@ export const ToolSchemaView = Schema.Struct({
 export type ToolSchemaView = typeof ToolSchemaView.Type;
 
 // ---------------------------------------------------------------------------
+// ToolSchemaEntry — the lean, signature-oriented schema read.
+//
+// `ToolSchemaView` carries TypeScript previews, the output schema, and
+// annotations for the console's single-tool describe surface. Bulk consumers
+// that only need model-visible input shapes (Code Mode signatures, catalog
+// hydration) read entries instead: the input schema plus the `$defs` it
+// actually references. Output schemas and previews are omitted on purpose —
+// they dominate payload and compile cost and never affect a signature.
+// ---------------------------------------------------------------------------
+
+export const ToolSchemaEntry = Schema.Struct({
+  address: ToolAddress,
+  name: Schema.optional(Schema.String),
+  description: Schema.optional(Schema.String),
+  inputSchema: Schema.optional(Schema.Unknown),
+  definitions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export type ToolSchemaEntry = typeof ToolSchemaEntry.Type;
+
+// ---------------------------------------------------------------------------
 // ToolSchemaManifest — the compact change-detection read model for tools.
 // Source refresh writes persisted manifest rows beside tool/definition rows;
 // callers that only need invalidation metadata can scan this surface without

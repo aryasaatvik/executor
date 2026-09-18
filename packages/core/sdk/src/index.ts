@@ -108,12 +108,13 @@ export type {
   UpdateConnectionInput,
   ValidateConnectionInput,
 } from "./connection";
-export type { Tool, ToolDef, ToolListFilter, ToolAnnotations } from "./tool";
+export type { Tool, ToolDef, ToolListFilter, ToolSchemaListFilter, ToolAnnotations } from "./tool";
 // Credential providers.
 export type { CredentialProvider, ProviderEntry } from "./provider";
 
 // Public projections / detection.
 export {
+  ToolSchemaEntry,
   ToolSchemaManifest,
   ToolSchemaView,
   ToolAnnotationsView,
