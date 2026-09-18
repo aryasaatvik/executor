@@ -56,3 +56,11 @@ export interface ToolListFilter {
    *  so agent-facing surfaces silently omit blocked tools. */
   readonly includeBlocked?: boolean;
 }
+
+/** Narrow `tools.schemas` — a `ToolListFilter` plus keyset paging. */
+export interface ToolSchemaListFilter extends ToolListFilter {
+  /** Maximum entries to return. Omit for every match in the filter's scope. */
+  readonly limit?: number;
+  /** Keyset cursor: return entries whose `address` sorts strictly after this. */
+  readonly after?: string;
+}

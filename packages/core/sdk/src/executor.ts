@@ -225,11 +225,18 @@ import {
 } from "./owner-policy";
 import {
   ToolAnnotationsView,
+  ToolSchemaEntry,
   ToolSchemaManifest,
   ToolSchemaView,
   type IntegrationDetectionResult,
 } from "./types";
-import { type Tool, type ToolAnnotations, type ToolDef, type ToolListFilter } from "./tool";
+import {
+  type Tool,
+  type ToolAnnotations,
+  type ToolDef,
+  type ToolListFilter,
+  type ToolSchemaListFilter,
+} from "./tool";
 import { buildToolTypeScriptPreview, type ToolTypeScriptPreview } from "./schema-types";
 import { collectReferencedDefinitions } from "./schema-refs";
 import {
@@ -527,6 +534,12 @@ export type Executor<TPlugins extends readonly AnyPlugin[] = readonly []> = {
       filter?: ToolListFilter,
     ) => Effect.Effect<readonly ToolSchemaManifest[], StorageFailure>;
     readonly schema: (address: ToolAddress) => Effect.Effect<ToolSchemaView | null, StorageFailure>;
+    /** Bulk, signature-oriented schema read. Skips the TypeScript preview and
+     *  the output schema, returning input schemas with the `$defs` they
+     *  reference. Paged by address through `after`/`limit`. */
+    readonly schemas: (
+      filter?: ToolSchemaListFilter,
+    ) => Effect.Effect<readonly ToolSchemaEntry[], StorageFailure>;
   };
 
   readonly providers: {
@@ -6683,6 +6696,148 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         return visible.sort((a, b) => String(a.address).localeCompare(String(b.address)));
       });
 
+    // Bulk, signature-oriented schema read. Two structural differences from
+    // `toolSchema` below:
+    //   - definition sets load once per connection and are reused across every
+    //     tool of that connection instead of per address;
+    //   - the TypeScript preview and the output schema are skipped entirely.
+    // Together those turn an O(tools × spec) walk into one linear in the tools
+    // asked for, which is what makes catalog hydration viable rather than
+    // thousands of single-tool compiles.
+    const toolsSchemas = (
+      filter?: ToolSchemaListFilter,
+    ): Effect.Effect<readonly ToolSchemaEntry[], StorageFailure> =>
+      Effect.gen(function* () {
+        if (toolsSyncGraceMs === null) {
+          yield* syncStaleConnectionTools;
+        } else {
+          yield* awaitStaleSyncWithinGrace(toolsSyncGraceMs);
+        }
+
+        // Unlike `toolsList`, this selects the schema columns: they are the
+        // payload. Definitions are read per connection below, once.
+        const rows = yield* core.findMany("tool", {
+          where: (b: AnyCb) =>
+            b.and(
+              filter?.integration === undefined
+                ? true
+                : b("integration", "=", String(filter.integration)),
+              filter?.owner === undefined ? true : b("owner", "=", filter.owner),
+              filter?.connection === undefined
+                ? true
+                : b("connection", "=", String(filter.connection)),
+            ),
+        });
+        const includeBlocked = filter?.includeBlocked ?? false;
+        const policyRules = yield* listActivePolicyRuleSet();
+        const catalogSlugs = yield* listCatalogSlugs();
+
+        const scoped = rows.filter((row) => catalogSlugs.has(String(row.integration)));
+
+        // One definition read per (owner, integration, connection) touched by
+        // the result, reused for every tool in it.
+        const definitionsByConnection = new Map<string, Map<string, unknown>>();
+        const scopes = new Map<
+          string,
+          { owner: string; integration: string; connection: string }
+        >();
+        for (const row of scoped) {
+          scopes.set(`${row.owner}\u0000${row.integration}\u0000${row.connection}`, {
+            owner: row.owner,
+            integration: row.integration,
+            connection: row.connection,
+          });
+        }
+        for (const [key, scope] of scopes) {
+          const definitionRows = yield* core.findMany("definition", {
+            where: (b: AnyCb) =>
+              b.and(
+                b("owner", "=", scope.owner),
+                b("integration", "=", scope.integration),
+                b("connection", "=", scope.connection),
+              ),
+          });
+          const defs = new Map<string, unknown>();
+          for (const definition of definitionRows) {
+            defs.set(definition.name, decodeJsonColumn(definition.schema));
+          }
+          definitionsByConnection.set(key, defs);
+        }
+
+        const entries: ToolSchemaEntry[] = [];
+        const append = (tool: Tool, inputSchema: unknown): void => {
+          const defs =
+            definitionsByConnection.get(
+              `${tool.owner}\u0000${tool.integration}\u0000${tool.connection}`,
+            ) ?? new Map<string, unknown>();
+          const referenced = collectReferencedDefinitions([inputSchema], defs);
+          entries.push(
+            ToolSchemaEntry.make({
+              address: tool.address,
+              name: tool.name,
+              description: tool.description,
+              inputSchema,
+              ...(Object.keys(referenced).length > 0
+                ? { definitions: referenced as Record<string, unknown> }
+                : {}),
+            }),
+          );
+        };
+
+        for (const row of scoped) {
+          const tool = rowToTool(row);
+          if (!matchesToolFilter(tool, filter)) continue;
+          if (!includeBlocked) {
+            const effective = yield* resolvePolicyFromRuleSet(
+              normalizedPolicyId(tool),
+              policyRules,
+              tool.annotations?.requiresApproval,
+            );
+            if (effective.action === "block") continue;
+          }
+          const runtime = runtimes.get(row.plugin_id);
+          const projected = runtime?.plugin.projectToolSchema
+            ? yield* runtime.plugin
+                .projectToolSchema({
+                  ctx: runtime.ctx,
+                  toolRow: row,
+                  inputSchema: tool.inputSchema,
+                  outputSchema: tool.outputSchema,
+                })
+                .pipe(
+                  Effect.mapError((cause) =>
+                    pluginStorageFailure(row.plugin_id, "projectToolSchema", cause),
+                  ),
+                )
+            : null;
+          const inputSchema =
+            projected && Object.prototype.hasOwnProperty.call(projected, "inputSchema")
+              ? projected.inputSchema
+              : tool.inputSchema;
+          append(tool, inputSchema);
+        }
+
+        for (const entry of staticTools.values()) {
+          const tool = staticToolToTool(entry);
+          if (!matchesToolFilter(tool, filter)) continue;
+          if (!includeBlocked) {
+            const effective = yield* resolvePolicyFromRuleSet(
+              normalizedPolicyId(tool),
+              policyRules,
+              tool.annotations?.requiresApproval,
+            );
+            if (effective.action === "block") continue;
+          }
+          append(tool, tool.inputSchema);
+        }
+
+        entries.sort((a, b) => String(a.address).localeCompare(String(b.address)));
+        const after = filter?.after;
+        const paged =
+          after === undefined ? entries : entries.filter((entry) => String(entry.address) > after);
+        return filter?.limit === undefined ? paged : paged.slice(0, filter.limit);
+      });
+
     const toolSchema = (
       address: ToolAddress,
     ): Effect.Effect<ToolSchemaView | null, StorageFailure> =>
@@ -8192,6 +8347,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         list: toolsList,
         manifest: toolsManifest,
         schema: toolSchema,
+        schemas: toolsSchemas,
       },
       providers: {
         list: providersList,
