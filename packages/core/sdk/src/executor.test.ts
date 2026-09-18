@@ -11,6 +11,7 @@ import {
   ConnectionName,
   IntegrationSlug,
   OAuthClientSlug,
+  Owner,
   ProviderItemId,
   ProviderKey,
   ToolAddress,
@@ -1078,6 +1079,9 @@ describe("muscle memory (observed output shapes)", () => {
 });
 
 describe("tools.schemas (bulk, signature-oriented read)", () => {
+  // Fully scoped: integration + owner + connection make the read cacheable.
+  const SCOPE = { integration: INTEG, owner: Owner.make("org"), connection: CONN } as const;
+
   const provisioned = Effect.fn(function* () {
     const executor = yield* makeTestExecutor({
       plugins: [demoPlugin] as const,
@@ -1098,8 +1102,12 @@ describe("tools.schemas (bulk, signature-oriented read)", () => {
   it.effect("returns input schemas with only the definitions they reference", () =>
     Effect.gen(function* () {
       const executor = yield* provisioned();
-      const entries = yield* executor.tools.schemas({ integration: INTEG });
+      const entries = yield* executor.tools.schemas(SCOPE);
       expect(entries.map((entry) => entry.name)).toEqual(["inspect", "run"]);
+
+      // A second read serves the cached aggregate; the entries are identical.
+      const again = yield* executor.tools.schemas(SCOPE);
+      expect(again).toEqual(entries);
 
       const inspect = entries.find((entry) => entry.name === "inspect");
       expect(inspect?.inputSchema).toMatchObject({ type: "object", required: ["pet"] });
@@ -1121,10 +1129,10 @@ describe("tools.schemas (bulk, signature-oriented read)", () => {
   it.effect("pages by address with limit and after", () =>
     Effect.gen(function* () {
       const executor = yield* provisioned();
-      const first = yield* executor.tools.schemas({ integration: INTEG, limit: 1 });
+      const first = yield* executor.tools.schemas({ ...SCOPE, limit: 1 });
       expect(first.map((entry) => entry.name)).toEqual(["inspect"]);
       const next = yield* executor.tools.schemas({
-        integration: INTEG,
+        ...SCOPE,
         limit: 1,
         after: String(first[0]!.address),
       });
@@ -1140,9 +1148,9 @@ describe("tools.schemas (bulk, signature-oriented read)", () => {
         pattern: "demo.org.main.run",
         action: "block",
       });
-      const visible = yield* executor.tools.schemas({ integration: INTEG });
+      const visible = yield* executor.tools.schemas(SCOPE);
       expect(visible.map((entry) => entry.name)).toEqual(["inspect"]);
-      const all = yield* executor.tools.schemas({ integration: INTEG, includeBlocked: true });
+      const all = yield* executor.tools.schemas({ ...SCOPE, includeBlocked: true });
       expect(all.map((entry) => entry.name)).toEqual(["inspect", "run"]);
     }),
   );

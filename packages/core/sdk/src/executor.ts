@@ -251,6 +251,11 @@ import {
   toolSchemaViewCacheKey,
 } from "./tool-schema-view-cache";
 import {
+  TOOL_SCHEMAS_CACHE_VERSION,
+  ToolSchemasCacheEntry,
+  toolSchemasCacheKey,
+} from "./tool-schemas-cache";
+import {
   refreshAccessToken,
   exchangeClientCredentials,
   isPermanentTokenRejection,
@@ -2731,6 +2736,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
       ToolTypeScriptPreviewCacheEntry,
     );
     const toolSchemaViewStore = KeyValueStore.toSchemaStore(cacheStore, ToolSchemaViewCacheEntry);
+    const toolSchemasStore = KeyValueStore.toSchemaStore(cacheStore, ToolSchemasCacheEntry);
     const transaction = <A, E>(effect: Effect.Effect<A, E>) => fuma.transaction(effect);
 
     // Runtime-observed output shapes ("muscle memory"): learned on the
@@ -6704,17 +6710,13 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
     // Together those turn an O(tools × spec) walk into one linear in the tools
     // asked for, which is what makes catalog hydration viable rather than
     // thousands of single-tool compiles.
-    const toolsSchemas = (
-      filter?: ToolSchemaListFilter,
-    ): Effect.Effect<readonly ToolSchemaEntry[], StorageFailure> =>
+    // Builds a connection's schema entries from persisted rows: one tool-row
+    // read, one shared definition read per connection, and a referenced-`$defs`
+    // fold per tool. No stale-sync wait and no TypeScript preview.
+    const buildToolSchemaEntries = (
+      filter: ToolSchemaListFilter | undefined,
+    ): Effect.Effect<ToolSchemaEntry[], StorageFailure> =>
       Effect.gen(function* () {
-        // Deliberately no stale-sync wait. This surface serves persisted
-        // schemas for catalog hydration, and the caller decides freshness from
-        // the manifest fingerprint. Inheriting `toolsList`'s sync grace would
-        // put a fixed multi-second tax on every page of an otherwise simple
-        // scan.
-        // Unlike `toolsList`, this selects the schema columns: they are the
-        // payload. Definitions are read per connection below, once.
         const rows = yield* core.findMany("tool", {
           where: (b: AnyCb) =>
             b.and(
@@ -6775,7 +6777,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               address: tool.address,
               name: tool.name,
               description: tool.description,
-              inputSchema,
+              ...(inputSchema === undefined || inputSchema === null ? {} : { inputSchema }),
               ...(Object.keys(referenced).length > 0
                 ? { definitions: referenced as Record<string, unknown> }
                 : {}),
@@ -6830,7 +6832,67 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           append(tool, tool.inputSchema);
         }
 
-        entries.sort((a, b) => String(a.address).localeCompare(String(b.address)));
+        return entries.sort((a, b) => String(a.address).localeCompare(String(b.address)));
+      });
+
+    // Bulk, signature-oriented schema read. Aggregates a connection once and
+    // serves pages from that aggregate, keyed by a fingerprint over the
+    // connection's manifest rows so it invalidates exactly when a tool, its
+    // schema, or the connection's definition set changes. `toolsList`'s
+    // stale-sync wait is deliberately absent: this surface serves persisted
+    // schemas, and the caller decides freshness from the fingerprint.
+    const toolsSchemas = (
+      filter?: ToolSchemaListFilter,
+    ): Effect.Effect<readonly ToolSchemaEntry[], StorageFailure> =>
+      Effect.gen(function* () {
+        const includeBlocked = filter?.includeBlocked ?? false;
+        const integration = filter?.integration;
+        const owner = filter?.owner;
+        const connection = filter?.connection;
+
+        let entries: readonly ToolSchemaEntry[];
+        if (integration !== undefined && owner !== undefined && connection !== undefined) {
+          const manifests = yield* toolsManifest(filter);
+          const fingerprint = yield* sha256Hex(
+            JSON.stringify(
+              [...manifests]
+                .map((manifest) => [
+                  String(manifest.address),
+                  manifest.inputSchemaHash,
+                  manifest.outputSchemaHash,
+                  manifest.definitionSetHash,
+                  manifest.indexFingerprint,
+                  manifest.fingerprintVersion,
+                ])
+                .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+            ),
+          );
+          const key = toolSchemasCacheKey({
+            integration: String(integration),
+            owner: String(owner),
+            connection: String(connection),
+            includeBlocked,
+            fingerprint,
+          });
+          const cached = yield* toolSchemasStore
+            .get(key)
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) {
+            entries = cached.value.entries;
+          } else {
+            entries = yield* buildToolSchemaEntries(filter);
+            yield* toolSchemasStore
+              .set(key, {
+                version: TOOL_SCHEMAS_CACHE_VERSION,
+                fingerprint,
+                entries: [...entries],
+              })
+              .pipe(Effect.ignore);
+          }
+        } else {
+          entries = yield* buildToolSchemaEntries(filter);
+        }
+
         const after = filter?.after;
         const paged =
           after === undefined ? entries : entries.filter((entry) => String(entry.address) > after);
