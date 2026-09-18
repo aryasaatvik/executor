@@ -251,6 +251,7 @@ import {
   toolSchemaViewCacheKey,
 } from "./tool-schema-view-cache";
 import {
+  CachedToolSchemaEntry,
   TOOL_SCHEMAS_CACHE_VERSION,
   ToolSchemasCacheEntry,
   toolSchemasCacheKey,
@@ -6702,20 +6703,21 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         return visible.sort((a, b) => String(a.address).localeCompare(String(b.address)));
       });
 
-    // Bulk, signature-oriented schema read. Two structural differences from
-    // `toolSchema` below:
-    //   - definition sets load once per connection and are reused across every
-    //     tool of that connection instead of per address;
-    //   - the TypeScript preview and the output schema are skipped entirely.
-    // Together those turn an O(tools × spec) walk into one linear in the tools
-    // asked for, which is what makes catalog hydration viable rather than
-    // thousands of single-tool compiles.
+    // Orders addresses by UTF-16 code unit. Sorting and cursor filtering must
+    // use the *same* relation: `localeCompare` and `>` disagree for uppercase
+    // letters and punctuation, so a page could skip an entry the cursor test
+    // rejects after the sort placed it later.
+    const compareAddress = (left: string, right: string): number =>
+      left < right ? -1 : left > right ? 1 : 0;
+
     // Builds a connection's schema entries from persisted rows: one tool-row
     // read, one shared definition read per connection, and a referenced-`$defs`
-    // fold per tool. No stale-sync wait and no TypeScript preview.
+    // fold per tool. No stale-sync wait, no TypeScript preview, and no policy
+    // filtering — policy is applied after the cache so a mutable provider or a
+    // fresh `tool_policy` row always wins. Entries carry their `policyId`.
     const buildToolSchemaEntries = (
       filter: ToolSchemaListFilter | undefined,
-    ): Effect.Effect<ToolSchemaEntry[], StorageFailure> =>
+    ): Effect.Effect<CachedToolSchemaEntry[], StorageFailure> =>
       Effect.gen(function* () {
         const rows = yield* core.findMany("tool", {
           where: (b: AnyCb) =>
@@ -6729,8 +6731,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                 : b("connection", "=", String(filter.connection)),
             ),
         });
-        const includeBlocked = filter?.includeBlocked ?? false;
-        const policyRules = yield* listActivePolicyRuleSet();
         const catalogSlugs = yield* listCatalogSlugs();
 
         const scoped = rows.filter((row) => catalogSlugs.has(String(row.integration)));
@@ -6765,7 +6765,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
           definitionsByConnection.set(key, defs);
         }
 
-        const entries: ToolSchemaEntry[] = [];
+        const entries: CachedToolSchemaEntry[] = [];
         const append = (tool: Tool, inputSchema: unknown): void => {
           const defs =
             definitionsByConnection.get(
@@ -6773,7 +6773,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
             ) ?? new Map<string, unknown>();
           const referenced = collectReferencedDefinitions([inputSchema], defs);
           entries.push(
-            ToolSchemaEntry.make({
+            CachedToolSchemaEntry.make({
               address: tool.address,
               name: tool.name,
               description: tool.description,
@@ -6781,6 +6781,7 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
               ...(Object.keys(referenced).length > 0
                 ? { definitions: referenced as Record<string, unknown> }
                 : {}),
+              policyId: normalizedPolicyId(tool),
             }),
           );
         };
@@ -6788,14 +6789,6 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         for (const row of scoped) {
           const tool = rowToTool(row);
           if (!matchesToolFilter(tool, filter)) continue;
-          if (!includeBlocked) {
-            const effective = yield* resolvePolicyFromRuleSet(
-              normalizedPolicyId(tool),
-              policyRules,
-              tool.annotations?.requiresApproval,
-            );
-            if (effective.action === "block") continue;
-          }
           const runtime = runtimes.get(row.plugin_id);
           const projected = runtime?.plugin.projectToolSchema
             ? yield* runtime.plugin
@@ -6821,26 +6814,20 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         for (const entry of staticTools.values()) {
           const tool = staticToolToTool(entry);
           if (!matchesToolFilter(tool, filter)) continue;
-          if (!includeBlocked) {
-            const effective = yield* resolvePolicyFromRuleSet(
-              normalizedPolicyId(tool),
-              policyRules,
-              tool.annotations?.requiresApproval,
-            );
-            if (effective.action === "block") continue;
-          }
           append(tool, tool.inputSchema);
         }
 
-        return entries.sort((a, b) => String(a.address).localeCompare(String(b.address)));
+        return entries;
       });
 
     // Bulk, signature-oriented schema read. Aggregates a connection once and
     // serves pages from that aggregate, keyed by a fingerprint over the
     // connection's manifest rows so it invalidates exactly when a tool, its
-    // schema, or the connection's definition set changes. `toolsList`'s
-    // stale-sync wait is deliberately absent: this surface serves persisted
-    // schemas, and the caller decides freshness from the fingerprint.
+    // schema, or the connection's definition set changes. Policy and
+    // `projectToolSchema` are read-time concerns: projections bypass the cache
+    // entirely, and policy is resolved against every cached entry below.
+    // `toolsList`'s stale-sync wait is deliberately absent — this surface
+    // serves persisted schemas.
     const toolsSchemas = (
       filter?: ToolSchemaListFilter,
     ): Effect.Effect<readonly ToolSchemaEntry[], StorageFailure> =>
@@ -6849,9 +6836,17 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
         const integration = filter?.integration;
         const owner = filter?.owner;
         const connection = filter?.connection;
+        const projectionsActive = [...runtimes.values()].some(
+          (runtime) => runtime.plugin.projectToolSchema !== undefined,
+        );
 
-        let entries: readonly ToolSchemaEntry[];
-        if (integration !== undefined && owner !== undefined && connection !== undefined) {
+        let cachedEntries: readonly CachedToolSchemaEntry[];
+        if (
+          !projectionsActive &&
+          integration !== undefined &&
+          owner !== undefined &&
+          connection !== undefined
+        ) {
           const manifests = yield* toolsManifest(filter);
           const fingerprint = yield* sha256Hex(
             JSON.stringify(
@@ -6864,38 +6859,63 @@ export const createExecutor = <const TPlugins extends readonly AnyPlugin[] = rea
                   manifest.indexFingerprint,
                   manifest.fingerprintVersion,
                 ])
-                .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+                .sort((left, right) => compareAddress(String(left[0]), String(right[0]))),
             ),
           );
           const key = toolSchemasCacheKey({
             integration: String(integration),
             owner: String(owner),
             connection: String(connection),
-            includeBlocked,
             fingerprint,
           });
           const cached = yield* toolSchemasStore
             .get(key)
             .pipe(Effect.catch(() => Effect.succeed(Option.none())));
           if (Option.isSome(cached)) {
-            entries = cached.value.entries;
+            cachedEntries = cached.value.entries;
           } else {
-            entries = yield* buildToolSchemaEntries(filter);
+            cachedEntries = yield* buildToolSchemaEntries(filter);
             yield* toolSchemasStore
               .set(key, {
                 version: TOOL_SCHEMAS_CACHE_VERSION,
                 fingerprint,
-                entries: [...entries],
+                entries: [...cachedEntries],
               })
               .pipe(Effect.ignore);
           }
         } else {
-          entries = yield* buildToolSchemaEntries(filter);
+          cachedEntries = yield* buildToolSchemaEntries(filter);
         }
 
+        // Policy resolves at read time: a cached aggregate must never outlive a
+        // policy change, whether it lands in `tool_policy` or in a mutable
+        // plugin policy provider.
+        const policyRules = yield* listActivePolicyRuleSet();
+        const entries: ToolSchemaEntry[] = [];
+        for (const entry of cachedEntries) {
+          if (!includeBlocked) {
+            const effective = yield* resolvePolicyFromRuleSet(entry.policyId, policyRules);
+            if (effective.action === "block") continue;
+          }
+          entries.push(
+            ToolSchemaEntry.make({
+              address: entry.address,
+              ...(entry.name === undefined ? {} : { name: entry.name }),
+              ...(entry.description === undefined ? {} : { description: entry.description }),
+              ...(entry.inputSchema === undefined || entry.inputSchema === null
+                ? {}
+                : { inputSchema: entry.inputSchema }),
+              ...(entry.definitions === undefined ? {} : { definitions: entry.definitions }),
+            }),
+          );
+        }
+
+        entries.sort((a, b) => compareAddress(String(a.address), String(b.address)));
         const after = filter?.after;
         const paged =
-          after === undefined ? entries : entries.filter((entry) => String(entry.address) > after);
+          after === undefined
+            ? entries
+            : entries.filter((entry) => compareAddress(String(entry.address), after) > 0);
         return filter?.limit === undefined ? paged : paged.slice(0, filter.limit);
       });
 

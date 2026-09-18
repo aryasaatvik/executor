@@ -1154,6 +1154,24 @@ describe("tools.schemas (bulk, signature-oriented read)", () => {
       expect(all.map((entry) => entry.name)).toEqual(["inspect", "run"]);
     }),
   );
+
+  it.effect("applies a policy change over a warm cached aggregate", () =>
+    Effect.gen(function* () {
+      const executor = yield* provisioned();
+      // Warm the cache with both tools visible.
+      const before = yield* executor.tools.schemas(SCOPE);
+      expect(before.map((entry) => entry.name)).toEqual(["inspect", "run"]);
+
+      // Policy resolves after the cache, so a new block wins immediately.
+      yield* executor.policies.create({
+        owner: "org",
+        pattern: "demo.org.main.run",
+        action: "block",
+      });
+      const after = yield* executor.tools.schemas(SCOPE);
+      expect(after.map((entry) => entry.name)).toEqual(["inspect"]);
+    }),
+  );
 });
 
 // ---------------------------------------------------------------------------
