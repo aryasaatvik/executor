@@ -994,13 +994,11 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
       ),
     );
     fiber = yield* Effect.forkDetach(
-      codeExecutor
-        .execute(code, invoker)
-        .pipe(
-          Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
-          Effect.withSpan("executor.code.exec"),
-          Effect.onExit(observeFinish(executionId)),
-        ),
+      codeExecutor.execute(code, invoker).pipe(
+        Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
+        Effect.withSpan("executor.code.exec"),
+        Effect.onExit(observeFinish(executionId)),
+      ),
     );
     liveSandboxFibers.add(fiber);
 
@@ -1151,13 +1149,11 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         (path) => toolPaths.push(path),
       ),
     );
-    const result = yield* codeExecutor
-      .execute(code, invoker)
-      .pipe(
-        Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
-        Effect.withSpan("executor.code.exec"),
-        Effect.onExit(observeFinish(executionId)),
-      );
+    const result = yield* codeExecutor.execute(code, invoker).pipe(
+      Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
+      Effect.withSpan("executor.code.exec"),
+      Effect.onExit(observeFinish(executionId)),
+    );
     yield* annotateExecuteOutcome(result);
     return result;
   });
