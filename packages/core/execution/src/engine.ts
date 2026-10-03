@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Predicate, Queue, Ref } from "effect";
+import { Deferred, Effect, Fiber, Option, Predicate, Queue, Ref } from "effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 
@@ -756,53 +756,91 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
           completedAt: new Date(),
         });
 
-  /** Wrap an invoker so each tool call brackets `ToolCallStarted`/`Finished`. */
-  const observeToolCalls = (
-    executionId: ExecutionId,
-    inner: SandboxToolInvoker,
-    toolCalls: NonNullable<ExecuteResult["toolCalls"]>,
-  ): SandboxToolInvoker => ({
-    invoke: (call) =>
-      Effect.gen(function* () {
-        const toolCallId = makeToolCallId();
-        const startedAt = new Date();
-        // Reserve the entry before dispatch so concurrent calls retain invocation order.
-        const trackedCall = {
-          path: call.path.replace(/^tools\./, ""),
-          isError: true,
-          durationMs: 0,
-        };
-        toolCalls.push(trackedCall);
-        yield* emit(
-          new ToolCallStarted({
-            executionId,
-            toolCallId,
-            owner,
-            path: call.path,
-            args: call.args,
-            startedAt,
-          }),
+  /** Wrap an invoker so each tool call brackets `ToolCallStarted`/`Finished`.
+   * Settlement promises reserve invocation order without exposing unfinished records. */
+  const observeToolCalls = (executionId: ExecutionId, inner: SandboxToolInvoker) => {
+    type ToolCall = NonNullable<ExecuteResult["toolCalls"]>[number];
+    const calls: Array<{
+      readonly fiber: Fiber.Fiber<unknown, unknown>;
+      readonly settled: Deferred.Deferred<ToolCall>;
+    }> = [];
+
+    const collect = Effect.gen(function* () {
+      const toolCalls: ToolCall[] = [];
+      for (let index = 0; index < calls.length; index++) {
+        toolCalls.push(yield* Deferred.await(calls[index]!.settled));
+      }
+      return toolCalls;
+    });
+    const interruptPending = Effect.gen(function* () {
+      const pending: Array<Fiber.Fiber<unknown, unknown>> = [];
+      for (const call of calls) {
+        if (!(yield* Deferred.isDone(call.settled))) pending.push(call.fiber);
+      }
+      yield* Fiber.interruptAll(pending);
+    });
+    const settle = (result: ExecuteResult) =>
+      Effect.suspend(() => {
+        // A failed sandbox cannot consume an approval or a tool result anymore.
+        if (result.error) return interruptPending.pipe(Effect.andThen(collect));
+        const timeoutMs = codeExecutor.timeoutMs;
+        if (timeoutMs === undefined) return collect;
+        // Runtime watchdogs suspend during dispatch. Once the script returns,
+        // reuse its timeout budget to bound outstanding calls, then await their interruption.
+        return collect.pipe(
+          Effect.timeoutOption(timeoutMs),
+          Effect.flatMap(
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () => interruptPending.pipe(Effect.andThen(collect)),
+            }),
+          ),
         );
-        return yield* inner.invoke(call).pipe(
-          Effect.onExit((exit) => {
-            const finished = Exit.isSuccess(exit)
-              ? toolCallFinishedFromResult(executionId, toolCallId, call.path, exit.value)
-              : new ToolCallFinished({
-                  executionId,
-                  toolCallId,
-                  owner,
-                  path: call.path,
-                  status: "failed",
-                  error: Cause.pretty(exit.cause),
-                  completedAt: new Date(),
-                });
-            trackedCall.isError = finished.status === "failed";
-            trackedCall.durationMs = finished.completedAt.getTime() - startedAt.getTime();
-            return emit(finished);
-          }),
-        );
-      }),
-  });
+      });
+    const invoker: SandboxToolInvoker = {
+      invoke: (call) =>
+        Effect.gen(function* () {
+          const toolCallId = makeToolCallId();
+          const startedAt = new Date();
+          const started = performance.now();
+          const settled = yield* Deferred.make<ToolCall>();
+          const fiber = yield* Effect.fiber;
+          calls.push({ fiber, settled });
+          return yield* emit(
+            new ToolCallStarted({
+              executionId,
+              toolCallId,
+              owner,
+              path: call.path,
+              args: call.args,
+              startedAt,
+            }),
+          ).pipe(
+            Effect.andThen(inner.invoke(call)),
+            Effect.onExit((exit) => {
+              const durationMs = performance.now() - started;
+              const finished = Exit.isSuccess(exit)
+                ? toolCallFinishedFromResult(executionId, toolCallId, call.path, exit.value)
+                : new ToolCallFinished({
+                    executionId,
+                    toolCallId,
+                    owner,
+                    path: call.path,
+                    status: "failed",
+                    error: Cause.pretty(exit.cause),
+                    completedAt: new Date(),
+                  });
+              return Deferred.succeed(settled, {
+                path: call.path.replace(/^tools\./, ""),
+                isError: finished.status === "failed",
+                durationMs,
+              }).pipe(Effect.andThen(emit(finished)));
+            }),
+          );
+        }),
+    };
+    return { invoker, settle };
+  };
 
   /** Wrap an inline elicitation handler so it brackets `InteractionStarted`/
    *  `Resolved`. The pausable path emits these directly (see below). */
@@ -1001,15 +1039,15 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         );
       });
 
-    const toolCalls: NonNullable<ExecuteResult["toolCalls"]> = [];
-    const invoker = observeToolCalls(
+    const tracked = observeToolCalls(
       executionId,
       makeFullInvoker(executor, { onElicitation: elicitationHandler }, toolDiscoveryProvider),
-      toolCalls,
     );
     fiber = yield* Effect.forkDetach(
-      codeExecutor.execute(code, invoker).pipe(
-        Effect.map((result) => ({ ...result, toolCalls })),
+      codeExecutor.execute(code, tracked.invoker).pipe(
+        Effect.flatMap((result) =>
+          tracked.settle(result).pipe(Effect.map((toolCalls) => ({ ...result, toolCalls }))),
+        ),
         Effect.withSpan("executor.code.exec"),
         Effect.onExit(observeFinish(executionId)),
       ),
@@ -1153,18 +1191,18 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
       ...(options.trigger ? { "executor.execution.trigger": options.trigger.kind } : {}),
     });
 
-    const toolCalls: NonNullable<ExecuteResult["toolCalls"]> = [];
-    const invoker = observeToolCalls(
+    const tracked = observeToolCalls(
       executionId,
       makeFullInvoker(
         executor,
         { onElicitation: observeInlineElicitation(executionId, options.onElicitation) },
         toolDiscoveryProvider,
       ),
-      toolCalls,
     );
-    const result = yield* codeExecutor.execute(code, invoker).pipe(
-      Effect.map((result) => ({ ...result, toolCalls })),
+    const result = yield* codeExecutor.execute(code, tracked.invoker).pipe(
+      Effect.flatMap((result) =>
+        tracked.settle(result).pipe(Effect.map((toolCalls) => ({ ...result, toolCalls }))),
+      ),
       Effect.withSpan("executor.code.exec"),
       Effect.onExit(observeFinish(executionId)),
     );

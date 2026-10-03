@@ -508,6 +508,59 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(result.result).toBe(30);
   });
 
+  it("waits for an unawaited host tool invocation to settle", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader });
+    let started = false;
+    let settled = false;
+    const invoker: SandboxToolInvoker = {
+      invoke: () =>
+        Effect.sync(() => {
+          started = true;
+        }).pipe(
+          Effect.andThen(Effect.sleep(100)),
+          Effect.tap(() => Effect.sync(() => (settled = true))),
+          Effect.as("slow result"),
+        ),
+    };
+
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          tools.slow.wait({});
+          return "returned";
+        }`,
+        invoker,
+      ),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("returned");
+    expect(started).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it("bounds unawaited tool draining by the configured execution timeout", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs: 100 });
+    let settled = false;
+    const result = await Effect.runPromise(
+      executor.execute('tools.slow.wait({}); return "returned";', {
+        invoke: () =>
+          Effect.sleep(200).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                settled = true;
+              }),
+            ),
+            Effect.as("slow result"),
+          ),
+      }),
+    );
+    expect(result.error).toContain("Execution timed out after 100ms");
+    expect(settled).toBe(false);
+    await Effect.runPromise(Effect.sleep(150));
+    expect(settled).toBe(true);
+  });
+
   it("suspends the execution deadline while a tool dispatch is in flight", async () => {
     const timeoutMs = 200;
     const executor = makeDynamicWorkerExecutor({

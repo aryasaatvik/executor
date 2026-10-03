@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, vi } from "@effect/vitest";
 import { Cause, Data, Deferred, Effect, Exit, Fiber, Ref, Schema } from "effect";
 
 import {
@@ -244,6 +244,232 @@ describe("pausedExecutionCount", () => {
       expect(yield* engine.hasPausedExecutions()).toBe(false);
     }),
   );
+});
+
+describe("unawaited tool call audit settlement", () => {
+  for (const autoApprove of [false, true]) {
+    const executionPath = autoApprove ? "inline" : "pausable";
+
+    for (const runtime of ["QuickJS", "detached host invocation"] as const) {
+      it.live(
+        `settles an unawaited ${runtime} call before completing the ${executionPath} path`,
+        () =>
+          Effect.gen(function* () {
+            const started = yield* Deferred.make<void>();
+            const finished = yield* Ref.make(false);
+            const delayedPlugin = definePlugin(() => ({
+              id: "unawaited-audit-test" as const,
+              storage: () => ({}),
+              staticIntegrations: () => [
+                {
+                  id: "unawaitedAudit.calls",
+                  kind: "in-memory" as const,
+                  name: "Unawaited audit calls",
+                  tools: [
+                    tool({
+                      name: "delayed",
+                      description: "Complete after the script has returned.",
+                      inputSchema: Schema.toStandardSchemaV1(
+                        Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                      ),
+                      execute: () =>
+                        Deferred.succeed(started, undefined).pipe(
+                          Effect.andThen(Effect.sleep("30 millis")),
+                          Effect.andThen(Ref.set(finished, true)),
+                          Effect.as("settled"),
+                        ),
+                    }),
+                  ],
+                },
+              ],
+            }));
+            const executor = yield* createExecutor(
+              makeTestConfig({ plugins: [delayedPlugin()] as const }),
+            );
+            const detachedExecutor: CodeExecutor<Cause.YieldableError> = {
+              timeoutMs: 1_000,
+              execute: (_code, invoker) =>
+                Effect.gen(function* () {
+                  yield* invoker
+                    .invoke({ path: "unawaitedAudit.calls.delayed", args: {} })
+                    .pipe(Effect.forkDetach);
+                  yield* Deferred.await(started);
+                  return { result: "returned immediately", logs: [] };
+                }),
+            };
+            const engine = createExecutionEngine({
+              executor,
+              codeExecutor: runtime === "QuickJS" ? makeQuickJsExecutor() : detachedExecutor,
+            });
+            yield* Effect.addFinalizer(() =>
+              engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
+            );
+
+            const outcome = yield* engine.executeWithPause(
+              'tools.unawaitedAudit.calls.delayed({}); return "returned immediately";',
+              { autoApprove },
+            );
+
+            expect(outcome.status).toBe("completed");
+            if (outcome.status !== "completed")
+              return yield* Effect.die("Expected completed execution");
+            expect(outcome.result.result).toBe("returned immediately");
+            expect(yield* Ref.get(finished)).toBe(true);
+            expect(outcome.result.toolCalls).toEqual([
+              {
+                path: "unawaitedAudit.calls.delayed",
+                isError: false,
+                durationMs: expect.any(Number),
+              },
+            ]);
+            expect(outcome.result.toolCalls?.[0]?.durationMs).toBeGreaterThan(0);
+          }).pipe(Effect.scoped),
+      );
+    }
+
+    it.live(
+      `settles an interrupted unawaited call at the runtime timeout on the ${executionPath} path`,
+      () =>
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          const interrupted = yield* Ref.make(false);
+          const hangingPlugin = definePlugin(() => ({
+            id: "unawaited-timeout-test" as const,
+            storage: () => ({}),
+            staticIntegrations: () => [
+              {
+                id: "unawaitedTimeout.calls",
+                kind: "in-memory" as const,
+                name: "Unawaited timeout calls",
+                tools: [
+                  tool({
+                    name: "completed",
+                    description: "Finish on the runtime's execution fiber.",
+                    inputSchema: Schema.toStandardSchemaV1(
+                      Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                    ),
+                    execute: () => Effect.succeed("already settled"),
+                  }),
+                  tool({
+                    name: "hang",
+                    description: "Remain pending until interrupted.",
+                    inputSchema: Schema.toStandardSchemaV1(
+                      Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                    ),
+                    execute: () =>
+                      Deferred.succeed(started, undefined).pipe(
+                        Effect.andThen(Effect.never),
+                        Effect.onInterrupt(() => Ref.set(interrupted, true)),
+                      ),
+                  }),
+                ],
+              },
+            ],
+          }));
+          const executor = yield* createExecutor(
+            makeTestConfig({ plugins: [hangingPlugin()] as const }),
+          );
+          const detachedExecutor: CodeExecutor = {
+            timeoutMs: 50,
+            execute: (_code, invoker) =>
+              Effect.gen(function* () {
+                yield* invoker
+                  .invoke({ path: "unawaitedTimeout.calls.completed", args: {} })
+                  .pipe(Effect.orDie);
+                yield* invoker
+                  .invoke({ path: "unawaitedTimeout.calls.hang", args: {} })
+                  .pipe(Effect.forkDetach);
+                yield* Deferred.await(started);
+                return { result: "returned immediately", logs: [] };
+              }),
+          };
+          const engine = createExecutionEngine({ executor, codeExecutor: detachedExecutor });
+          yield* Effect.addFinalizer(() =>
+            engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
+          );
+
+          const outcome = yield* engine.executeWithPause("return immediately;", { autoApprove });
+
+          expect(outcome.status).toBe("completed");
+          if (outcome.status !== "completed")
+            return yield* Effect.die("Expected completed execution");
+          expect(yield* Ref.get(interrupted)).toBe(true);
+          expect(outcome.result.toolCalls).toEqual([
+            {
+              path: "unawaitedTimeout.calls.completed",
+              isError: false,
+              durationMs: expect.any(Number),
+            },
+            {
+              path: "unawaitedTimeout.calls.hang",
+              isError: true,
+              durationMs: expect.any(Number),
+            },
+          ]);
+          expect(outcome.result.toolCalls?.[1]?.durationMs).toBeGreaterThan(0);
+        }).pipe(Effect.scoped),
+    );
+
+    it.live(
+      `measures call duration monotonically when the wall clock moves backward on the ${executionPath} path`,
+      () =>
+        Effect.gen(function* () {
+          const initialTime = Date.now();
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(initialTime);
+          yield* Effect.addFinalizer(() => Effect.sync(() => vi.useRealTimers()));
+          const clockPlugin = definePlugin(() => ({
+            id: "audit-clock-test" as const,
+            storage: () => ({}),
+            staticIntegrations: () => [
+              {
+                id: "auditClock.calls",
+                kind: "in-memory" as const,
+                name: "Audit clock calls",
+                tools: [
+                  tool({
+                    name: "moveClockBackward",
+                    description: "Finish after the wall clock moves backward.",
+                    inputSchema: Schema.toStandardSchemaV1(
+                      Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                    ),
+                    execute: () =>
+                      Effect.sleep("20 millis").pipe(
+                        Effect.andThen(Effect.sync(() => vi.setSystemTime(initialTime - 60_000))),
+                        Effect.as("settled"),
+                      ),
+                  }),
+                ],
+              },
+            ],
+          }));
+          const executor = yield* createExecutor(
+            makeTestConfig({ plugins: [clockPlugin()] as const }),
+          );
+          const engine = createExecutionEngine({ executor, codeExecutor: makeQuickJsExecutor() });
+          yield* Effect.addFinalizer(() =>
+            engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
+          );
+
+          const outcome = yield* engine.executeWithPause(
+            "return await tools.auditClock.calls.moveClockBackward({});",
+            { autoApprove },
+          );
+
+          expect(outcome.status).toBe("completed");
+          if (outcome.status !== "completed")
+            return yield* Effect.die("Expected completed execution");
+          expect(outcome.result.toolCalls).toEqual([
+            {
+              path: "auditClock.calls.moveClockBackward",
+              isError: false,
+              durationMs: expect.any(Number),
+            },
+          ]);
+          expect(outcome.result.toolCalls?.[0]?.durationMs).toBeGreaterThan(0);
+        }).pipe(Effect.scoped),
+    );
+  }
 });
 
 describe("formatPausedExecution approval terms", () => {

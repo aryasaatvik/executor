@@ -570,4 +570,5 @@ export const makeQuickJsExecutor = (
 ): CodeExecutor<QuickJsExecutionError> => ({
   execute: (code: string, toolInvoker: SandboxToolInvoker) =>
     runInQuickJs(options, code, toolInvoker),
+  timeoutMs: Math.max(100, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 });
