@@ -818,7 +818,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
           ).pipe(
             Effect.andThen(inner.invoke(call)),
             Effect.onExit((exit) => {
-              const durationMs = performance.now() - started;
+              const durationMs = Math.round(performance.now() - started);
               const finished = Exit.isSuccess(exit)
                 ? toolCallFinishedFromResult(executionId, toolCallId, call.path, exit.value)
                 : new ToolCallFinished({
