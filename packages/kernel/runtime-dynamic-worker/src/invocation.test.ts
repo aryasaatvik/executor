@@ -594,6 +594,63 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(performance.now() - startedAt).toBeLessThan(500);
   });
 
+  it("does not dispatch a call whose argument encoding finishes after the script throws", async () => {
+    // Keep the outer RPC alive after evaluation returns so delayed encoding can
+    // finish rather than being dropped when workerd releases the request context.
+    const loaderWithActiveContext: WorkerLoader = {
+      load: (code) => loader.load(code),
+      get: (name, getCode) =>
+        loader.get(name, async () => {
+          const code = await getCode();
+          const source = code.modules["executor.js"];
+          return {
+            ...code,
+            modules: {
+              ...code.modules,
+              "executor.js":
+                typeof source === "string"
+                  ? source.replace(
+                      "async evaluate(__dispatcher) {",
+                      `async evaluate(__dispatcher) {
+                        const result = await this.run(__dispatcher);
+                        await new Promise(resolve => setTimeout(resolve, 400));
+                        return result;
+                      }
+                      async run(__dispatcher) {`,
+                    )
+                  : source,
+            },
+          };
+        }),
+    };
+    const executor = makeDynamicWorkerExecutor({ loader: loaderWithActiveContext });
+    let dispatched = false;
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          let encodingStarted = false;
+          class SlowBlob extends Blob {
+            async arrayBuffer() {
+              encodingStarted = true;
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              return super.arrayBuffer();
+            }
+          }
+          tools.files.upload(new SlowBlob(["delayed payload"]));
+          throw new Error(encodingStarted ? "failed during encoding" : "encoding never started");
+        }`,
+        makeInvoker(() => {
+          dispatched = true;
+          return "uploaded";
+        }),
+      ),
+    );
+
+    expect(result.error).toBe("failed during encoding");
+    expect(result.errorKind).toBe("thrown");
+    expect(dispatched).toBe(false);
+  });
+
   it("suspends the execution deadline while a tool dispatch is in flight", async () => {
     const timeoutMs = 200;
     const executor = makeDynamicWorkerExecutor({

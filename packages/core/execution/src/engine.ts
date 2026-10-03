@@ -760,6 +760,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
    * Settlement promises reserve invocation order without exposing unfinished records. */
   const observeToolCalls = (executionId: ExecutionId, inner: SandboxToolInvoker) => {
     type ToolCall = NonNullable<ExecuteResult["toolCalls"]>[number];
+    let closed = false;
     const calls: Array<{
       readonly fiber: Fiber.Fiber<unknown, unknown>;
       readonly settled: Deferred.Deferred<ToolCall>;
@@ -770,6 +771,7 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
       for (let index = 0; index < calls.length; index++) {
         toolCalls.push(yield* Deferred.await(calls[index]!.settled));
       }
+      closed = true;
       return toolCalls;
     });
     const interruptPending = Effect.gen(function* () {
@@ -782,21 +784,31 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
     const settle = (result: ExecuteResult) =>
       Effect.suspend(() => {
         // A failed sandbox cannot consume an approval or a tool result anymore.
-        if (result.error) return interruptPending.pipe(Effect.andThen(collect));
+        if (result.error) {
+          closed = true;
+          return interruptPending.pipe(Effect.andThen(collect));
+        }
         // Successful runtimes settle their own invocations before returning;
         // rely on that invariant rather than timing out a legitimate approval wait.
         return collect;
       });
     const invoker: SandboxToolInvoker = {
       invoke: (call) =>
-        Effect.gen(function* () {
+        Effect.withFiber((fiber) => {
+          // Rejected calls are never admitted, so no observer events or audit entries are emitted.
+          if (closed) {
+            return Effect.fail(
+              new ExecutionToolError({
+                message: "Execution has completed; tool invocation rejected.",
+              }),
+            );
+          }
           const toolCallId = makeToolCallId();
           const startedAt = new Date();
           const started = performance.now();
-          const settled = yield* Deferred.make<ToolCall>();
-          const fiber = yield* Effect.fiber;
+          const settled = Deferred.makeUnsafe<ToolCall>();
           calls.push({ fiber, settled });
-          return yield* emit(
+          return emit(
             new ToolCallStarted({
               executionId,
               toolCallId,

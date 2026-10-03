@@ -10,7 +10,8 @@ import {
 } from "@executor-js/sdk";
 import { makeTestConfig } from "@executor-js/sdk/testing";
 import { makeQuickJsExecutor } from "@executor-js/runtime-quickjs";
-import type { CodeExecutor, ExecuteResult } from "@executor-js/codemode-core";
+import type { CodeExecutor, ExecuteResult, SandboxToolInvoker } from "@executor-js/codemode-core";
+import type { ExecutionEvent } from "@executor-js/sdk";
 
 import { createExecutionEngine, formatExecuteResult, formatPausedExecution } from "./engine";
 import { FormElicitation } from "@executor-js/sdk/core";
@@ -307,6 +308,83 @@ describe("unawaited tool call audit settlement", () => {
 
   for (const autoApprove of [false, true]) {
     const executionPath = autoApprove ? "inline" : "pausable";
+
+    for (const scriptFails of [false, true]) {
+      const completion = scriptFails ? "script error" : "normal completion";
+      it.effect(
+        `rejects late tool invocations after ${completion} on the ${executionPath} path`,
+        () =>
+          Effect.gen(function* () {
+            const capturedInvoker = yield* Deferred.make<SandboxToolInvoker>();
+            const deferredCall = yield* Deferred.make<Effect.Effect<unknown, unknown>>();
+            const dispatched = yield* Ref.make(0);
+            const events: ExecutionEvent[] = [];
+            const lateCallPlugin = definePlugin(() => ({
+              id: "late-call-test" as const,
+              storage: () => ({}),
+              staticIntegrations: () => [
+                {
+                  id: "lateCall.calls",
+                  kind: "in-memory" as const,
+                  name: "Late calls",
+                  tools: [
+                    tool({
+                      name: "count",
+                      description: "Count calls dispatched after evaluation ends.",
+                      inputSchema: Schema.toStandardSchemaV1(
+                        Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                      ),
+                      execute: () => Ref.update(dispatched, (count) => count + 1),
+                    }),
+                  ],
+                },
+              ],
+            }));
+            const executor = yield* createExecutor(
+              makeTestConfig({ plugins: [lateCallPlugin()] as const }),
+            );
+            const codeExecutor: CodeExecutor = {
+              execute: (_code, invoker) =>
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(capturedInvoker, invoker);
+                  yield* Deferred.succeed(
+                    deferredCall,
+                    invoker.invoke({ path: "lateCall.calls.count", args: {} }),
+                  );
+                  return scriptFails
+                    ? { result: undefined, error: "script failed", logs: [] }
+                    : { result: "completed", logs: [] };
+                }),
+            };
+            const engine = createExecutionEngine({
+              executor,
+              codeExecutor,
+              observer: { handle: (event) => Effect.sync(() => void events.push(event)) },
+            });
+            yield* Effect.addFinalizer(() =>
+              engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
+            );
+
+            const outcome = yield* engine.executeWithPause("noop", { autoApprove });
+            expect(outcome.status).toBe("completed");
+            if (outcome.status !== "completed")
+              return yield* Effect.die("Expected completed execution");
+            expect(outcome.result.toolCalls).toEqual([]);
+            const eventsAtCompletion = [...events];
+            const invoker = yield* Deferred.await(capturedInvoker);
+            const lateExit = yield* Effect.exit(
+              invoker.invoke({ path: "lateCall.calls.count", args: {} }),
+            );
+            const deferredExit = yield* Effect.exit(yield* Deferred.await(deferredCall));
+
+            expect(Exit.isFailure(lateExit)).toBe(true);
+            expect(Exit.isFailure(deferredExit)).toBe(true);
+            expect(yield* Ref.get(dispatched)).toBe(0);
+            expect(outcome.result.toolCalls).toEqual([]);
+            expect(events).toEqual(eventsAtCompletion);
+          }).pipe(Effect.scoped),
+      );
+    }
 
     for (const runtime of ["QuickJS", "detached host invocation"] as const) {
       it.live(
