@@ -102,6 +102,7 @@ const makeExecutor = (
   };
   const executor: Pick<Executor, "tools" | "cache"> = {
     tools: {
+      schemas: () => Effect.succeed([]),
       list: () => Effect.succeed([tool]),
       manifest: () => Effect.succeed([manifestForTool(tool)]),
       schema: (address) => {
@@ -410,6 +411,7 @@ describe("ToolSearchIndex", () => {
       };
       const executor: Pick<Executor, "tools" | "cache"> = {
         tools: {
+          schemas: () => Effect.succeed([]),
           list: () => Effect.succeed([tool]),
           manifest: () => Effect.succeed([manifestForTool(tool, "fp-source", "spec-hash-v1")]),
           schema: () => Effect.succeed(null),
@@ -696,6 +698,7 @@ describe("ToolSearchIndex", () => {
       ];
       const executor: Pick<Executor, "tools" | "cache"> = {
         tools: {
+          schemas: () => Effect.succeed([]),
           list: () => Effect.succeed(tools),
           manifest: () => Effect.succeed(tools.map((tool) => manifestForTool(tool))),
           schema: () => Effect.succeed(null),
@@ -1047,6 +1050,7 @@ describe("ToolSearchIndex manifest snapshot", () => {
     const counters = { manifest: 0 };
     const executor: Pick<Executor, "tools" | "cache"> = {
       tools: {
+        schemas: () => Effect.succeed([]),
         list: () => Effect.succeed(tools),
         manifest: () => {
           counters.manifest++;
@@ -1098,6 +1102,7 @@ describe("ToolSearchIndex manifest snapshot", () => {
       const counters = { manifest: 0 };
       const executor: Pick<Executor, "tools" | "cache"> = {
         tools: {
+          schemas: () => Effect.succeed([]),
           list: () => Effect.succeed([tool]),
           manifest: () => {
             counters.manifest++;
