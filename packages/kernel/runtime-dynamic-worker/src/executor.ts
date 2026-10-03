@@ -871,7 +871,4 @@ export const makeDynamicWorkerExecutor = (
 ): CodeExecutor<DynamicWorkerExecutionError> => ({
   execute: (code: string, toolInvoker: SandboxToolInvoker) =>
     runInDynamicWorker(options, code, toolInvoker),
-  // The effective in-sandbox bound, exposed so hosts can reason about the
-  // execution budget. `evaluate` clamps to a 100ms floor identically.
-  timeoutMs: Math.max(100, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 });

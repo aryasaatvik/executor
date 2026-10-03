@@ -736,5 +736,4 @@ export const makeWorkerdSubprocessExecutor = (
   options: WorkerdCodeExecutorOptions = {},
 ): CodeExecutor<WorkerdSubprocessError> => ({
   execute: (code, toolInvoker) => executeWithWorkerd(code, toolInvoker, options),
-  timeoutMs: Math.max(100, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
 });

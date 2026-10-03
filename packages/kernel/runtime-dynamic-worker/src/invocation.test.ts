@@ -539,13 +539,14 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(settled).toBe(true);
   });
 
-  it("bounds unawaited tool draining by the configured execution timeout", async () => {
-    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs: 100 });
+  it("suspends the drain deadline while an unawaited host dispatch is in flight", async () => {
+    const timeoutMs = 100;
+    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs });
     let settled = false;
     const result = await Effect.runPromise(
       executor.execute('tools.slow.wait({}); return "returned";', {
         invoke: () =>
-          Effect.sleep(200).pipe(
+          Effect.sleep(timeoutMs * 3).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 settled = true;
@@ -555,10 +556,42 @@ describe("makeDynamicWorkerExecutor", () => {
           ),
       }),
     );
-    expect(result.error).toContain("Execution timed out after 100ms");
-    expect(settled).toBe(false);
-    await Effect.runPromise(Effect.sleep(150));
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("returned");
     expect(settled).toBe(true);
+  });
+
+  it("reports a thrown script error without draining an unawaited host dispatch", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs: 100 });
+    let started = false;
+    let settled = false;
+    const startedAt = performance.now();
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          tools.slow.wait({});
+          await tools.slow.started({});
+          throw new Error("script failed immediately");
+        }`,
+        {
+          invoke: ({ path }) =>
+            path === "slow.started"
+              ? Effect.succeed(started)
+              : Effect.sync(() => {
+                  started = true;
+                }).pipe(
+                  Effect.andThen(Effect.sleep(1_000)),
+                  Effect.tap(() => Effect.sync(() => (settled = true))),
+                  Effect.as("slow result"),
+                ),
+        },
+      ),
+    );
+    expect(result.error).toBe("script failed immediately");
+    expect(result.errorKind).toBe("thrown");
+    expect(started).toBe(true);
+    expect(settled).toBe(false);
+    expect(performance.now() - startedAt).toBeLessThan(500);
   });
 
   it("suspends the execution deadline while a tool dispatch is in flight", async () => {

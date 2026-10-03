@@ -247,6 +247,64 @@ describe("pausedExecutionCount", () => {
 });
 
 describe("unawaited tool call audit settlement", () => {
+  it.live("settles an unawaited approval-gated call approved after the runtime timeout", () =>
+    Effect.gen(function* () {
+      const approvalPlugin = definePlugin(() => ({
+        id: "unawaited-approval-test" as const,
+        storage: () => ({}),
+        staticIntegrations: () => [
+          {
+            id: "unawaitedApproval.calls",
+            kind: "in-memory" as const,
+            name: "Unawaited approval calls",
+            tools: [
+              tool({
+                name: "approved",
+                description: "Complete when the user approves the unawaited invocation.",
+                annotations: { requiresApproval: true } as const,
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () => Effect.succeed("approved"),
+              }),
+            ],
+          },
+        ],
+      }));
+      const executor = yield* createExecutor(
+        makeTestConfig({ plugins: [approvalPlugin()] as const }),
+      );
+      const engine = createExecutionEngine({
+        executor,
+        codeExecutor: makeQuickJsExecutor({ timeoutMs: 100 }),
+      });
+      yield* Effect.addFinalizer(() =>
+        engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
+      );
+
+      const started = yield* engine.executeWithPause(
+        'tools.unawaitedApproval.calls.approved({}); return "returned immediately";',
+      );
+      expect(started.status).toBe("paused");
+      if (started.status !== "paused") return yield* Effect.die("Expected paused execution");
+      yield* Effect.sleep("250 millis");
+      const resumed = yield* engine.resume(started.execution.id, { action: "accept", content: {} });
+
+      expect(resumed?.status).toBe("completed");
+      if (resumed?.status !== "completed") return yield* Effect.die("Expected completed execution");
+      expect(resumed.result.error).toBeUndefined();
+      expect(resumed.result.result).toBe("returned immediately");
+      expect(resumed.result.toolCalls).toEqual([
+        {
+          path: "unawaitedApproval.calls.approved",
+          isError: false,
+          durationMs: expect.any(Number),
+        },
+      ]);
+      expect(resumed.result.toolCalls?.[0]?.durationMs).toBeGreaterThanOrEqual(250);
+    }).pipe(Effect.scoped),
+  );
+
   for (const autoApprove of [false, true]) {
     const executionPath = autoApprove ? "inline" : "pausable";
 
@@ -287,7 +345,6 @@ describe("unawaited tool call audit settlement", () => {
               makeTestConfig({ plugins: [delayedPlugin()] as const }),
             );
             const detachedExecutor: CodeExecutor<Cause.YieldableError> = {
-              timeoutMs: 1_000,
               execute: (_code, invoker) =>
                 Effect.gen(function* () {
                   yield* invoker
@@ -328,37 +385,30 @@ describe("unawaited tool call audit settlement", () => {
     }
 
     it.live(
-      `settles an interrupted unawaited call at the runtime timeout on the ${executionPath} path`,
+      `interrupts an unawaited call promptly when the script throws on the ${executionPath} path`,
       () =>
         Effect.gen(function* () {
           const started = yield* Deferred.make<void>();
           const interrupted = yield* Ref.make(false);
-          const hangingPlugin = definePlugin(() => ({
-            id: "unawaited-timeout-test" as const,
+          const slowPlugin = definePlugin(() => ({
+            id: "unawaited-error-test" as const,
             storage: () => ({}),
             staticIntegrations: () => [
               {
-                id: "unawaitedTimeout.calls",
+                id: "unawaitedError.calls",
                 kind: "in-memory" as const,
-                name: "Unawaited timeout calls",
+                name: "Unawaited error calls",
                 tools: [
                   tool({
-                    name: "completed",
-                    description: "Finish on the runtime's execution fiber.",
-                    inputSchema: Schema.toStandardSchemaV1(
-                      Schema.toStandardJSONSchemaV1(Schema.Struct({})),
-                    ),
-                    execute: () => Effect.succeed("already settled"),
-                  }),
-                  tool({
-                    name: "hang",
-                    description: "Remain pending until interrupted.",
+                    name: "slow",
+                    description: "Remain pending until the script fails.",
                     inputSchema: Schema.toStandardSchemaV1(
                       Schema.toStandardJSONSchemaV1(Schema.Struct({})),
                     ),
                     execute: () =>
                       Deferred.succeed(started, undefined).pipe(
-                        Effect.andThen(Effect.never),
+                        Effect.andThen(Effect.sleep("2 seconds")),
+                        Effect.as("too late"),
                         Effect.onInterrupt(() => Ref.set(interrupted, true)),
                       ),
                   }),
@@ -367,20 +417,17 @@ describe("unawaited tool call audit settlement", () => {
             ],
           }));
           const executor = yield* createExecutor(
-            makeTestConfig({ plugins: [hangingPlugin()] as const }),
+            makeTestConfig({ plugins: [slowPlugin()] as const }),
           );
           const detachedExecutor: CodeExecutor = {
-            timeoutMs: 50,
             execute: (_code, invoker) =>
               Effect.gen(function* () {
                 yield* invoker
-                  .invoke({ path: "unawaitedTimeout.calls.completed", args: {} })
-                  .pipe(Effect.orDie);
-                yield* invoker
-                  .invoke({ path: "unawaitedTimeout.calls.hang", args: {} })
+                  .invoke({ path: "unawaitedError.calls.slow", args: {} })
                   .pipe(Effect.forkDetach);
                 yield* Deferred.await(started);
-                return { result: "returned immediately", logs: [] };
+                yield* Effect.sleep("20 millis");
+                return { result: undefined, error: "script failed", logs: [] };
               }),
           };
           const engine = createExecutionEngine({ executor, codeExecutor: detachedExecutor });
@@ -388,25 +435,26 @@ describe("unawaited tool call audit settlement", () => {
             engine.shutdown.pipe(Effect.andThen(executor.close()), Effect.ignore),
           );
 
-          const outcome = yield* engine.executeWithPause("return immediately;", { autoApprove });
+          const beganAt = performance.now();
+          const outcome = yield* engine.executeWithPause(
+            'tools.unawaitedError.calls.slow({}); throw new Error("script failed");',
+            { autoApprove },
+          );
 
+          expect(performance.now() - beganAt).toBeLessThan(500);
           expect(outcome.status).toBe("completed");
           if (outcome.status !== "completed")
             return yield* Effect.die("Expected completed execution");
+          expect(outcome.result.error).toBe("script failed");
           expect(yield* Ref.get(interrupted)).toBe(true);
           expect(outcome.result.toolCalls).toEqual([
             {
-              path: "unawaitedTimeout.calls.completed",
-              isError: false,
-              durationMs: expect.any(Number),
-            },
-            {
-              path: "unawaitedTimeout.calls.hang",
+              path: "unawaitedError.calls.slow",
               isError: true,
               durationMs: expect.any(Number),
             },
           ]);
-          expect(outcome.result.toolCalls?.[1]?.durationMs).toBeGreaterThan(0);
+          expect(outcome.result.toolCalls?.[0]?.durationMs).toBeGreaterThan(0);
         }).pipe(Effect.scoped),
     );
 

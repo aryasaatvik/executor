@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Option, Predicate, Queue, Ref } from "effect";
+import { Deferred, Effect, Fiber, Predicate, Queue, Ref } from "effect";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 
@@ -783,19 +783,9 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
       Effect.suspend(() => {
         // A failed sandbox cannot consume an approval or a tool result anymore.
         if (result.error) return interruptPending.pipe(Effect.andThen(collect));
-        const timeoutMs = codeExecutor.timeoutMs;
-        if (timeoutMs === undefined) return collect;
-        // Runtime watchdogs suspend during dispatch. Once the script returns,
-        // reuse its timeout budget to bound outstanding calls, then await their interruption.
-        return collect.pipe(
-          Effect.timeoutOption(timeoutMs),
-          Effect.flatMap(
-            Option.match({
-              onSome: Effect.succeed,
-              onNone: () => interruptPending.pipe(Effect.andThen(collect)),
-            }),
-          ),
-        );
+        // Successful runtimes settle their own invocations before returning;
+        // rely on that invariant rather than timing out a legitimate approval wait.
+        return collect;
       });
     const invoker: SandboxToolInvoker = {
       invoke: (call) =>
