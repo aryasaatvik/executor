@@ -1048,7 +1048,7 @@ describe("MCP host server — client without elicitation (pause/resume)", () => 
           status: "completed",
           result: {
             result: "done",
-            toolPaths: ["linear.org.work.issues.list"],
+            toolCalls: [{ path: "linear.org.work.issues.list", isError: false, durationMs: 3 }],
           },
         }),
     });

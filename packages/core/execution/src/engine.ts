@@ -25,6 +25,7 @@ import {
   ignoreExecutionObserverErrors,
   isToolResult,
   noopExecutionObserver,
+  parseToolAddress,
 } from "@executor-js/sdk/core";
 import {
   CurrentOrgWriteAccess,
@@ -183,8 +184,14 @@ const truncate = (value: string, max: number): string =>
     ? `${value.slice(0, max)}\n... [truncated ${value.length - max} chars]`
     : value;
 
-const soleConnectedToolName = (toolPaths: readonly string[] | undefined): string | undefined => {
-  const names = [...new Set(toolPaths ?? [])];
+const soleConnectedToolName = (toolCalls: ExecuteResult["toolCalls"]): string | undefined => {
+  const names = [
+    ...new Set(
+      (toolCalls ?? [])
+        .filter((call) => !call.isError && parseToolAddress(`tools.${call.path}`))
+        .map((call) => call.path),
+    ),
+  ];
   return names.length === 1 ? names[0] : undefined;
 };
 
@@ -194,6 +201,7 @@ export const formatExecuteResult = (
   text: string;
   structured: Record<string, unknown>;
   isError: boolean;
+  toolCalls: NonNullable<ExecuteResult["toolCalls"]>;
 } => {
   const resultText =
     result.result != null
@@ -224,6 +232,7 @@ export const formatExecuteResult = (
         logs: result.logs ?? [],
       },
       isError: true,
+      toolCalls: result.toolCalls ?? [],
     };
   }
 
@@ -233,7 +242,7 @@ export const formatExecuteResult = (
       ? `(no return value; ${emittedNote})`
       : "(no result)";
   const parts = [resultPart, ...(logText ? [`\nLogs:\n${logText}`] : [])];
-  const toolName = soleConnectedToolName(result.toolPaths);
+  const toolName = soleConnectedToolName(result.toolCalls);
   return {
     text: parts.join("\n"),
     structured: {
@@ -244,6 +253,7 @@ export const formatExecuteResult = (
       logs: result.logs ?? [],
     },
     isError: false,
+    toolCalls: result.toolCalls ?? [],
   };
 };
 
@@ -380,9 +390,8 @@ const makeFullInvoker = (
   executor: Executor,
   invokeOptions: InvokeOptions,
   toolDiscoveryProvider: ToolDiscoveryProvider,
-  onConnectedToolCall?: (path: string) => void,
 ): SandboxToolInvoker => {
-  const base = makeExecutorToolInvoker(executor, { invokeOptions, onConnectedToolCall });
+  const base = makeExecutorToolInvoker(executor, { invokeOptions });
   return {
     invoke: ({ path, args }) => {
       if (path === "search") {
@@ -751,10 +760,19 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
   const observeToolCalls = (
     executionId: ExecutionId,
     inner: SandboxToolInvoker,
+    toolCalls: NonNullable<ExecuteResult["toolCalls"]>,
   ): SandboxToolInvoker => ({
     invoke: (call) =>
       Effect.gen(function* () {
         const toolCallId = makeToolCallId();
+        const startedAt = new Date();
+        // Reserve the entry before dispatch so concurrent calls retain invocation order.
+        const trackedCall = {
+          path: call.path.replace(/^tools\./, ""),
+          isError: true,
+          durationMs: 0,
+        };
+        toolCalls.push(trackedCall);
         yield* emit(
           new ToolCallStarted({
             executionId,
@@ -762,26 +780,26 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
             owner,
             path: call.path,
             args: call.args,
-            startedAt: new Date(),
+            startedAt,
           }),
         );
         return yield* inner.invoke(call).pipe(
-          Effect.tap((result) =>
-            emit(toolCallFinishedFromResult(executionId, toolCallId, call.path, result)),
-          ),
-          Effect.tapCause((cause) =>
-            emit(
-              new ToolCallFinished({
-                executionId,
-                toolCallId,
-                owner,
-                path: call.path,
-                status: "failed",
-                error: Cause.pretty(cause),
-                completedAt: new Date(),
-              }),
-            ),
-          ),
+          Effect.onExit((exit) => {
+            const finished = Exit.isSuccess(exit)
+              ? toolCallFinishedFromResult(executionId, toolCallId, call.path, exit.value)
+              : new ToolCallFinished({
+                  executionId,
+                  toolCallId,
+                  owner,
+                  path: call.path,
+                  status: "failed",
+                  error: Cause.pretty(exit.cause),
+                  completedAt: new Date(),
+                });
+            trackedCall.isError = finished.status === "failed";
+            trackedCall.durationMs = finished.completedAt.getTime() - startedAt.getTime();
+            return emit(finished);
+          }),
         );
       }),
   });
@@ -983,19 +1001,15 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
         );
       });
 
-    const toolPaths: string[] = [];
+    const toolCalls: NonNullable<ExecuteResult["toolCalls"]> = [];
     const invoker = observeToolCalls(
       executionId,
-      makeFullInvoker(
-        executor,
-        { onElicitation: elicitationHandler },
-        toolDiscoveryProvider,
-        (path) => toolPaths.push(path),
-      ),
+      makeFullInvoker(executor, { onElicitation: elicitationHandler }, toolDiscoveryProvider),
+      toolCalls,
     );
     fiber = yield* Effect.forkDetach(
       codeExecutor.execute(code, invoker).pipe(
-        Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
+        Effect.map((result) => ({ ...result, toolCalls })),
         Effect.withSpan("executor.code.exec"),
         Effect.onExit(observeFinish(executionId)),
       ),
@@ -1139,18 +1153,18 @@ export const createExecutionEngine = <E extends Cause.YieldableError = CodeExecu
       ...(options.trigger ? { "executor.execution.trigger": options.trigger.kind } : {}),
     });
 
-    const toolPaths: string[] = [];
+    const toolCalls: NonNullable<ExecuteResult["toolCalls"]> = [];
     const invoker = observeToolCalls(
       executionId,
       makeFullInvoker(
         executor,
         { onElicitation: observeInlineElicitation(executionId, options.onElicitation) },
         toolDiscoveryProvider,
-        (path) => toolPaths.push(path),
       ),
+      toolCalls,
     );
     const result = yield* codeExecutor.execute(code, invoker).pipe(
-      Effect.map((result) => (toolPaths.length === 0 ? result : { ...result, toolPaths })),
+      Effect.map((result) => ({ ...result, toolCalls })),
       Effect.withSpan("executor.code.exec"),
       Effect.onExit(observeFinish(executionId)),
     );

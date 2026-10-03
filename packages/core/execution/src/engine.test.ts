@@ -334,15 +334,21 @@ describe("formatExecuteResult output identity", () => {
       logs: [],
     });
     expect(formatted.structured["result"]).toBe(value);
+    expect(formatted.toolCalls).toEqual([]);
     expect(formatted.isError).toBe(false);
   });
 
-  it("returns the sole distinct connected tool name without exposing the call trace", () => {
+  it("returns the sole distinct connected tool name without putting the call trace in structured", () => {
     const result = {
       result: { issues: [] },
       logs: [],
-      toolPaths: ["linear.org.work.issues.list", "linear.org.work.issues.list"],
-    } as ExecuteResult & { readonly toolPaths: readonly string[] };
+      toolCalls: [
+        { path: "linear.org.work.issues.list", isError: false, durationMs: 3 },
+        { path: "linear.org.work.issues.list", isError: false, durationMs: 4 },
+        { path: "search", isError: false, durationMs: 1 },
+        { path: "linear.org.work.projects.list", isError: true, durationMs: 2 },
+      ],
+    } satisfies ExecuteResult;
 
     const formatted = formatExecuteResult(result);
 
@@ -352,14 +358,18 @@ describe("formatExecuteResult output identity", () => {
       toolName: "linear.org.work.issues.list",
       logs: [],
     });
+    expect(formatted.toolCalls).toEqual(result.toolCalls);
   });
 
   it("omits a tool name when distinct connected tools were used", () => {
     const result = {
       result: { issues: [], projects: [] },
       logs: [],
-      toolPaths: ["linear.org.work.issues.list", "linear.org.work.projects.list"],
-    } as ExecuteResult & { readonly toolPaths: readonly string[] };
+      toolCalls: [
+        { path: "linear.org.work.issues.list", isError: false, durationMs: 3 },
+        { path: "linear.org.work.projects.list", isError: false, durationMs: 4 },
+      ],
+    } satisfies ExecuteResult;
 
     const formatted = formatExecuteResult(result);
 

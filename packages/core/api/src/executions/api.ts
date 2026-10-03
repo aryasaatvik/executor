@@ -31,6 +31,17 @@ const CompletedResult = Schema.Struct({
   text: Schema.String,
   structured: Schema.Unknown,
   isError: Schema.Boolean,
+  /** Sandbox tool invocations in call order, including failed calls. */
+  toolCalls: Schema.Array(
+    Schema.Struct({
+      /** Tool path without the sandbox proxy's `tools.` prefix. */
+      path: Schema.String,
+      /** Whether the invoker failed or returned an error result. */
+      isError: Schema.Boolean,
+      /** Wall-clock duration of this invocation in milliseconds. */
+      durationMs: Schema.Number,
+    }),
+  ),
 });
 
 const PausedResult = Schema.Struct({

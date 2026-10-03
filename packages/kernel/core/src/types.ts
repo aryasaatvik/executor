@@ -46,8 +46,15 @@ export type ExecuteResult = {
   /** Enumerable failure class for telemetry; never carries message content. */
   errorKind?: ExecuteErrorKind;
   logs?: string[];
-  /** Successful connected-tool paths observed during this execution. */
-  toolPaths?: readonly string[];
+  /** Sandbox tool invocations in call order, including failed calls. */
+  toolCalls?: Array<{
+    /** Tool path without the sandbox proxy's `tools.` prefix. */
+    path: string;
+    /** Whether the invoker failed or returned an error result. */
+    isError: boolean;
+    /** Wall-clock duration of this invocation in milliseconds. */
+    durationMs: number;
+  }>;
 };
 
 /**
