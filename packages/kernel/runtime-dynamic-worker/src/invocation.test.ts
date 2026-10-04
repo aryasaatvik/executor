@@ -508,6 +508,149 @@ describe("makeDynamicWorkerExecutor", () => {
     expect(result.result).toBe(30);
   });
 
+  it("waits for an unawaited host tool invocation to settle", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader });
+    let started = false;
+    let settled = false;
+    const invoker: SandboxToolInvoker = {
+      invoke: () =>
+        Effect.sync(() => {
+          started = true;
+        }).pipe(
+          Effect.andThen(Effect.sleep(100)),
+          Effect.tap(() => Effect.sync(() => (settled = true))),
+          Effect.as("slow result"),
+        ),
+    };
+
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          tools.slow.wait({});
+          return "returned";
+        }`,
+        invoker,
+      ),
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("returned");
+    expect(started).toBe(true);
+    expect(settled).toBe(true);
+  });
+
+  it("suspends the drain deadline while an unawaited host dispatch is in flight", async () => {
+    const timeoutMs = 100;
+    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs });
+    let settled = false;
+    const result = await Effect.runPromise(
+      executor.execute('tools.slow.wait({}); return "returned";', {
+        invoke: () =>
+          Effect.sleep(timeoutMs * 3).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                settled = true;
+              }),
+            ),
+            Effect.as("slow result"),
+          ),
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.result).toBe("returned");
+    expect(settled).toBe(true);
+  });
+
+  it("reports a thrown script error without draining an unawaited host dispatch", async () => {
+    const executor = makeDynamicWorkerExecutor({ loader, timeoutMs: 100 });
+    let started = false;
+    let settled = false;
+    const startedAt = performance.now();
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          tools.slow.wait({});
+          await tools.slow.started({});
+          throw new Error("script failed immediately");
+        }`,
+        {
+          invoke: ({ path }) =>
+            path === "slow.started"
+              ? Effect.succeed(started)
+              : Effect.sync(() => {
+                  started = true;
+                }).pipe(
+                  Effect.andThen(Effect.sleep(1_000)),
+                  Effect.tap(() => Effect.sync(() => (settled = true))),
+                  Effect.as("slow result"),
+                ),
+        },
+      ),
+    );
+    expect(result.error).toBe("script failed immediately");
+    expect(result.errorKind).toBe("thrown");
+    expect(started).toBe(true);
+    expect(settled).toBe(false);
+    expect(performance.now() - startedAt).toBeLessThan(500);
+  });
+
+  it("does not dispatch a call whose argument encoding finishes after the script throws", async () => {
+    // Keep the outer RPC alive after evaluation returns so delayed encoding can
+    // finish rather than being dropped when workerd releases the request context.
+    const loaderWithActiveContext: WorkerLoader = {
+      load: (code) => loader.load(code),
+      get: (name, getCode) =>
+        loader.get(name, async () => {
+          const code = await getCode();
+          const source = code.modules["executor.js"];
+          return {
+            ...code,
+            modules: {
+              ...code.modules,
+              "executor.js":
+                typeof source === "string"
+                  ? source.replace(
+                      "async evaluate(__dispatcher) {",
+                      `async evaluate(__dispatcher) {
+                        const result = await this.run(__dispatcher);
+                        await new Promise(resolve => setTimeout(resolve, 400));
+                        return result;
+                      }
+                      async run(__dispatcher) {`,
+                    )
+                  : source,
+            },
+          };
+        }),
+    };
+    const executor = makeDynamicWorkerExecutor({ loader: loaderWithActiveContext });
+    let dispatched = false;
+    const result = await Effect.runPromise(
+      executor.execute(
+        `async () => {
+          let encodingStarted = false;
+          class SlowBlob extends Blob {
+            async arrayBuffer() {
+              encodingStarted = true;
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              return super.arrayBuffer();
+            }
+          }
+          tools.files.upload(new SlowBlob(["delayed payload"]));
+          throw new Error(encodingStarted ? "failed during encoding" : "encoding never started");
+        }`,
+        makeInvoker(() => {
+          dispatched = true;
+          return "uploaded";
+        }),
+      ),
+    );
+
+    expect(result.error).toBe("failed during encoding");
+    expect(result.errorKind).toBe("thrown");
+    expect(dispatched).toBe(false);
+  });
+
   it("suspends the execution deadline while a tool dispatch is in flight", async () => {
     const timeoutMs = 200;
     const executor = makeDynamicWorkerExecutor({

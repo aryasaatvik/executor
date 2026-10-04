@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Data, Effect, Fiber, Schema } from "effect";
+import { Data, Deferred, Effect, Fiber, Predicate, Schema } from "effect";
 
 import {
   AuthTemplateSlug,
@@ -29,7 +29,7 @@ import {
 } from "@executor-js/sdk/testing";
 import { makeQuickJsExecutor } from "@executor-js/runtime-quickjs";
 import type { CodeExecutor, ExecuteResult } from "@executor-js/codemode-core";
-import { createExecutionEngine } from "./engine";
+import { createExecutionEngine, formatExecuteResult } from "./engine";
 import { ExecutionToolError } from "./errors";
 import {
   describeTool,
@@ -692,7 +692,7 @@ describe("tool discovery", () => {
     }),
   );
 
-  it.effect("records only the connected tool resolved after discovery", () =>
+  it.effect("records discovery and the connected tool in invocation order", () =>
     Effect.gen(function* () {
       const executor = yield* makeSearchExecutor();
       const engine = createExecutionEngine({ executor, codeExecutor });
@@ -707,7 +707,17 @@ describe("tool discovery", () => {
       );
 
       expect(execution.error).toBeUndefined();
-      expect(execution.toolPaths).toEqual(["github.org.main.getRepositoryDetails"]);
+      expect(execution.toolCalls).toEqual([
+        { path: "search", isError: false, durationMs: expect.any(Number) },
+        {
+          path: "github.org.main.getRepositoryDetails",
+          isError: false,
+          durationMs: expect.any(Number),
+        },
+      ]);
+      expect(formatExecuteResult(execution).structured["toolName"]).toBe(
+        "github.org.main.getRepositoryDetails",
+      );
     }),
   );
 
@@ -2061,6 +2071,130 @@ describe("pause/resume with multiple elicitations", () => {
       yield* engine.shutdown;
       yield* engine.shutdown;
       expect(yield* engine.pausedExecutionCount()).toBe(0);
+    }),
+  );
+});
+
+describe("execution tool call audit", () => {
+  for (const autoApprove of [false, true]) {
+    const executionPath = autoApprove ? "inline" : "pausable";
+
+    it.effect(`records success and error results in call order on the ${executionPath} path`, () =>
+      Effect.gen(function* () {
+        const executor = yield* makeExecutorWith([githubPlugin, errorPlugin] as const);
+        yield* provision(executor as never, [
+          { pluginId: "github-test", integration: "github" },
+          { pluginId: "error-test", integration: "records" },
+        ]);
+        const engine = createExecutionEngine({ executor, codeExecutor });
+        const outcome = yield* engine.executeWithPause(
+          'await tools.github.org.main.getRepositoryDetails({ owner: "example", repo: "example" }); return await tools.records.org.main.queryRows({});',
+          { autoApprove },
+        );
+        expect(outcome.status).toBe("completed");
+        if (outcome.status !== "completed")
+          return yield* Effect.die("Expected completed execution");
+        const formatted = formatExecuteResult(outcome.result);
+        expect(formatted.toolCalls).toEqual([
+          {
+            path: "github.org.main.getRepositoryDetails",
+            isError: false,
+            durationMs: expect.any(Number),
+          },
+          { path: "records.org.main.queryRows", isError: true, durationMs: expect.any(Number) },
+        ]);
+        expect(
+          formatted.toolCalls.every(
+            (call) => Number.isFinite(call.durationMs) && call.durationMs >= 0,
+          ),
+        ).toBe(true);
+      }),
+    );
+
+    it.effect(`returns an empty tool call audit on the ${executionPath} path`, () =>
+      Effect.gen(function* () {
+        const executor = yield* makeSearchExecutor();
+        const engine = createExecutionEngine({ executor, codeExecutor });
+        const outcome = yield* engine.executeWithPause("return 42;", { autoApprove });
+        expect(outcome.status).toBe("completed");
+        if (outcome.status !== "completed")
+          return yield* Effect.die("Expected completed execution");
+        expect(outcome.result.toolCalls).toEqual([]);
+        expect(formatExecuteResult(outcome.result).toolCalls).toEqual([]);
+      }),
+    );
+  }
+
+  it.effect("keeps concurrent calls in invocation order when they finish in reverse order", () =>
+    Effect.gen(function* () {
+      const releaseFirst = yield* Deferred.make<void>();
+      const concurrentPlugin = makeTestPlugin({
+        pluginId: "concurrent-test",
+        integration: "concurrent",
+        tools: [
+          {
+            name: "first",
+            description: "Wait for the second invocation to finish.",
+            inputJsonSchema: EmptyInputJson,
+            validator: EmptyValidator,
+            handler: () => Deferred.await(releaseFirst).pipe(Effect.as("first")),
+          },
+          {
+            name: "second",
+            description: "Finish before the first invocation.",
+            inputJsonSchema: EmptyInputJson,
+            validator: EmptyValidator,
+            handler: () => Effect.succeed("second"),
+          },
+        ],
+      });
+      const executor = yield* makeExecutorWith([concurrentPlugin] as const);
+      yield* provision(executor as never, [
+        { pluginId: "concurrent-test", integration: "concurrent" },
+      ]);
+      const finishedPaths: string[] = [];
+      const engine = createExecutionEngine({
+        executor,
+        codeExecutor,
+        observer: {
+          handle: (event) => {
+            if (!Predicate.isTagged(event, "ToolCallFinished")) return Effect.void;
+            finishedPaths.push(event.path);
+            return event.path === "concurrent.org.main.second"
+              ? Deferred.succeed(releaseFirst, undefined).pipe(Effect.asVoid)
+              : Effect.void;
+          },
+        },
+      });
+      const result = yield* engine.execute(
+        "return await Promise.all([tools.concurrent.org.main.first({}), tools.concurrent.org.main.second({})]);",
+        { onElicitation: acceptAll },
+      );
+      expect(result.error).toBeUndefined();
+      expect(finishedPaths).toEqual(["concurrent.org.main.second", "concurrent.org.main.first"]);
+      expect(result.toolCalls).toEqual([
+        { path: "concurrent.org.main.first", isError: false, durationMs: expect.any(Number) },
+        { path: "concurrent.org.main.second", isError: false, durationMs: expect.any(Number) },
+      ]);
+    }),
+  );
+
+  it.effect("records Effect failures even when the sandbox catches them", () =>
+    Effect.gen(function* () {
+      const executor = yield* makeExecutorWith([unmarkedErrorPlugin] as const);
+      yield* provision(executor as never, [
+        { pluginId: "unmarked-error-test", integration: "unmarked" },
+      ]);
+      const engine = createExecutionEngine({ executor, codeExecutor });
+      const outcome = yield* engine.executeWithPause(
+        'try { await tools.unmarked.org.main.explode({}); } catch (_) {} return "handled";',
+      );
+      expect(outcome.status).toBe("completed");
+      if (outcome.status !== "completed") return yield* Effect.die("Expected completed execution");
+      expect(outcome.result.error).toBeUndefined();
+      expect(formatExecuteResult(outcome.result).toolCalls).toEqual([
+        { path: "unmarked.org.main.explode", isError: true, durationMs: expect.any(Number) },
+      ]);
     }),
   );
 });

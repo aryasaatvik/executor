@@ -146,6 +146,7 @@ const resumeFromPendingApproval = (executionId: string, action: "accept" | "decl
         text: `Approval ${action === "decline" ? "declined" : "cancelled"}. Nothing ran.`,
         structured: { status: "declined", executionId, address: approval.address },
         isError: false,
+        toolCalls: [],
       };
     }
 
@@ -163,6 +164,7 @@ const resumeFromPendingApproval = (executionId: string, action: "accept" | "decl
         text: formatted.text,
         structured: formatted.structured,
         isError: formatted.isError,
+        toolCalls: formatted.toolCalls,
       };
     }
 
@@ -228,6 +230,7 @@ export const ExecutionsHandlers = HttpApiBuilder.group(ExecutorApi, "executions"
               text: formatted.text,
               structured: formatted.structured,
               isError: formatted.isError,
+              toolCalls: formatted.toolCalls,
             };
           }
 
@@ -283,6 +286,7 @@ export const ExecutionsHandlers = HttpApiBuilder.group(ExecutorApi, "executions"
               text: formatted.text,
               structured: formatted.structured,
               isError: formatted.isError,
+              toolCalls: formatted.toolCalls,
             };
           }
 

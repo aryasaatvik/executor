@@ -17,7 +17,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { env } from "cloudflare:workers";
 import { drizzle } from "drizzle-orm/postgres-js";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/unstable/http";
@@ -32,6 +34,9 @@ import postgres from "postgres";
 import {
   collectTables,
   createExecutor,
+  definePlugin,
+  tool,
+  type AnyPlugin,
   AuthTemplateSlug,
   ConnectionName,
   IntegrationSlug,
@@ -45,7 +50,7 @@ import {
   type FumaDb,
   type FumaTables,
 } from "@executor-js/sdk";
-import { makeExecutorToolInvoker } from "@executor-js/execution";
+import { createExecutionEngine, makeExecutorToolInvoker } from "@executor-js/execution";
 import { openApiPlugin, variable, type AuthenticationInput } from "@executor-js/plugin-openapi";
 
 import { makeDynamicWorkerExecutor } from "./executor";
@@ -202,11 +207,19 @@ const createPostgresFumaDb = <const TTables extends FumaTables>(
   return fuma.orm(version);
 };
 
-const buildSandboxBridge = (spec: string, slug: string, baseUrl = "https://upstream.test") =>
+const buildSandboxBridge = (
+  spec: string,
+  slug: string,
+  baseUrl = "https://upstream.test",
+  extraPlugins: readonly AnyPlugin[] = [],
+) =>
   Effect.acquireRelease(
     Effect.gen(function* () {
       const recording = makeRecordingHttpClient();
-      const plugins = [openApiPlugin({ httpClientLayer: recording.layer })] as const;
+      const plugins = [
+        openApiPlugin({ httpClientLayer: recording.layer }),
+        ...extraPlugins,
+      ] as const;
       const tables = collectTables();
       const sql = postgres(DATABASE_URL, {
         max: 1,
@@ -370,6 +383,134 @@ describe("sandbox → openApiPlugin integration", () => {
 
       expect(result.error).toBeUndefined();
       expect(Array.from(captured[0]!.body)).toEqual([1, 2, 3, 4, 5, 0xff, 0x00, 0x7f]);
+    }).pipe(Effect.scoped),
+  );
+});
+
+describe("dynamic Worker execution audit settlement", () => {
+  it.live("resumes an unawaited approval-gated call after the runtime timeout", () =>
+    Effect.gen(function* () {
+      const approvalPlugin = definePlugin(() => ({
+        id: "worker-approval-test" as const,
+        storage: () => ({}),
+        staticIntegrations: () => [
+          {
+            id: "workerApproval.calls",
+            kind: "in-memory" as const,
+            name: "Worker approval calls",
+            tools: [
+              tool({
+                name: "approved",
+                description: "Complete when the user approves the unawaited invocation.",
+                annotations: { requiresApproval: true } as const,
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () => Effect.succeed("approved"),
+              }),
+            ],
+          },
+        ],
+      }));
+      const { executor } = yield* buildSandboxBridge(
+        makeSpec("application/json"),
+        "approval",
+        undefined,
+        [approvalPlugin()],
+      );
+      const engine = createExecutionEngine({
+        executor,
+        codeExecutor: makeDynamicWorkerExecutor({ loader, timeoutMs: 100 }),
+      });
+      yield* Effect.addFinalizer(() => engine.shutdown);
+
+      const started = yield* engine.executeWithPause(
+        'tools.workerApproval.calls.approved({}); return "returned immediately";',
+      );
+      expect(started.status).toBe("paused");
+      if (started.status !== "paused") return yield* Effect.die("Expected paused execution");
+      yield* Effect.sleep(300);
+      const resumed = yield* engine.resume(started.execution.id, { action: "accept", content: {} });
+      expect(resumed?.status).toBe("completed");
+      if (resumed?.status !== "completed") return yield* Effect.die("Expected completed execution");
+      expect(resumed.result.error).toBeUndefined();
+      expect(resumed.result.result).toBe("returned immediately");
+      expect(resumed.result.toolCalls).toEqual([
+        {
+          path: "workerApproval.calls.approved",
+          isError: false,
+          durationMs: expect.any(Number),
+        },
+      ]);
+      expect(resumed.result.toolCalls?.[0]?.durationMs).toBeGreaterThanOrEqual(300);
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("reports a thrown script error promptly with its abandoned call marked as failed", () =>
+    Effect.gen(function* () {
+      const callStarted = yield* Deferred.make<void>();
+      let settled = false;
+      const slowPlugin = definePlugin(() => ({
+        id: "worker-abandoned-test" as const,
+        storage: () => ({}),
+        staticIntegrations: () => [
+          {
+            id: "workerAbandoned.calls",
+            kind: "in-memory" as const,
+            name: "Worker abandoned calls",
+            tools: [
+              tool({
+                name: "slow",
+                description: "Wait longer than the script error should take to return.",
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () =>
+                  Deferred.succeed(callStarted, undefined).pipe(
+                    Effect.andThen(Effect.sleep(1_000)),
+                    Effect.tap(() => Effect.sync(() => (settled = true))),
+                    Effect.as("slow result"),
+                  ),
+              }),
+              tool({
+                name: "started",
+                description: "Confirm the unawaited call has started on the host.",
+                inputSchema: Schema.toStandardSchemaV1(
+                  Schema.toStandardJSONSchemaV1(Schema.Struct({})),
+                ),
+                execute: () => Deferred.await(callStarted).pipe(Effect.as(true)),
+              }),
+            ],
+          },
+        ],
+      }));
+      const { executor } = yield* buildSandboxBridge(
+        makeSpec("application/json"),
+        "abandoned",
+        undefined,
+        [slowPlugin()],
+      );
+      const engine = createExecutionEngine({
+        executor,
+        codeExecutor: makeDynamicWorkerExecutor({ loader, timeoutMs: 100 }),
+      });
+      yield* Effect.addFinalizer(() => engine.shutdown);
+      const startedAt = performance.now();
+      const completed = yield* engine.executeWithPause(`
+        tools.workerAbandoned.calls.slow({});
+        await tools.workerAbandoned.calls.started({});
+        throw new Error("script failed immediately");
+      `);
+      expect(completed.status).toBe("completed");
+      if (completed.status !== "completed")
+        return yield* Effect.die("Expected completed execution");
+      expect(completed.result.error).toBe("script failed immediately");
+      expect(performance.now() - startedAt).toBeLessThan(500);
+      expect(settled).toBe(false);
+      expect(completed.result.toolCalls).toEqual([
+        { path: "workerAbandoned.calls.slow", isError: true, durationMs: expect.any(Number) },
+        { path: "workerAbandoned.calls.started", isError: false, durationMs: expect.any(Number) },
+      ]);
     }).pipe(Effect.scoped),
   );
 });

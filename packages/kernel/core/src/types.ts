@@ -46,8 +46,15 @@ export type ExecuteResult = {
   /** Enumerable failure class for telemetry; never carries message content. */
   errorKind?: ExecuteErrorKind;
   logs?: string[];
-  /** Successful connected-tool paths observed during this execution. */
-  toolPaths?: readonly string[];
+  /** Sandbox tool invocations in call order, including failed calls. */
+  toolCalls?: Array<{
+    /** Tool path without the sandbox proxy's `tools.` prefix. */
+    path: string;
+    /** Whether the invoker failed or returned an error result. */
+    isError: boolean;
+    /** Wall-clock duration of this invocation in milliseconds. */
+    durationMs: number;
+  }>;
 };
 
 /**
@@ -61,14 +68,6 @@ export type ExecuteResult = {
  */
 export interface CodeExecutor<E extends Cause.YieldableError = CodeExecutionError> {
   execute(code: string, toolInvoker: SandboxToolInvoker): Effect.Effect<ExecuteResult, E>;
-  /**
-   * The effective in-sandbox execution timeout, in milliseconds, that this
-   * runtime enforces on the code it runs. Exposed so a host can derive its own
-   * outer backstop (e.g. this bound plus a grace margin) for the case where the
-   * in-sandbox timer itself is defeated by a wedged isolate. Optional: runtimes
-   * that do not bound execution leave it undefined and hosts skip the backstop.
-   */
-  readonly timeoutMs?: number;
 }
 
 /** Accept-anything schema for tools with no input validation */
