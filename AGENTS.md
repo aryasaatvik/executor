@@ -38,6 +38,8 @@ executor.
   imports.
 - Extract shared logic only for genuinely shared behavior. Avoid generic
   abstractions for one-off duplication.
+- Never compromise or limit the MCP client/server implementation to fit
+  another tool or host. Adapt the other side instead.
 - Public PRs, commits, generated files, and documentation contain no private
   names, internal context, customer-derived data, or AI attribution.
 
